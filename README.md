@@ -1,4 +1,11 @@
-# ATLAS — AI Voice Agent & CRM Platform
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/atlas-wordmark-white.png">
+    <img src="docs/brand/atlas-wordmark-black.png" alt="ATLAS" width="340">
+  </picture>
+</p>
+
+# AI Voice Agent & CRM Platform
 
 Multi-tenant platform for managing leads, configuring AI voice agents, running controlled
 calling campaigns, and measuring outcomes. *ATLAS is a working codename; branding is
@@ -69,6 +76,8 @@ uv run alembic check     # models and migrations in sync
 ```
 
 ## Documentation
+
+Brand assets (wordmark and mark as SVG and PNG, light and dark) live in `docs/brand/`. The web app renders the same geometry inline from `apps/web/src/components/brand.tsx`, filled with the current text colour.
 
 * [Architecture](docs/architecture.md)
 * [Implementation plan](docs/implementation-plan.md)

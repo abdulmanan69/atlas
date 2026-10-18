@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 
+import { Mark, PRODUCT_NAME, Wordmark } from "@/components/brand";
 import { CommandMenu } from "@/components/command-menu";
 import { Logo } from "@/components/common";
 import { NAV, type NavItem } from "@/components/nav";
@@ -110,7 +111,12 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle?: () =>
 
   return (
     <>
-      <div className={cn("flex h-14 items-center border-b border-line", collapsed ? "justify-center px-2" : "px-3")}>
+      <div className={cn("flex h-12 items-center border-b border-line", collapsed ? "justify-center" : "px-4")}>
+        <NavLink to="/" className="flex items-center rounded-md text-ink" aria-label={`${PRODUCT_NAME} home`}>
+          {collapsed ? <Mark className="h-[18px]" title={null} /> : <Wordmark className="h-[14px]" title={null} />}
+        </NavLink>
+      </div>
+      <div className={cn("flex h-12 items-center border-b border-line", collapsed ? "justify-center px-2" : "px-3")}>
         <OrgSwitcher collapsed={collapsed} />
       </div>
       <nav className="flex-1 overflow-y-auto px-2 py-3" aria-label="Main">

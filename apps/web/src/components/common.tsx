@@ -1,6 +1,7 @@
 import { AlertTriangle, Loader2 } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { Wordmark } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -93,15 +94,5 @@ export function Phone({ value, className }: { value: string | null | undefined; 
 }
 
 export function Logo({ className }: { className?: string }) {
-  // Mark: three ascending bars — a signal meter, the product's visual root.
-  return (
-    <span className={cn("inline-flex items-center gap-2", className)}>
-      <svg viewBox="0 0 20 20" className="size-5" aria-hidden>
-        <rect x="2" y="11" width="4" height="7" rx="1" className="fill-accent/45" />
-        <rect x="8" y="6" width="4" height="12" rx="1" className="fill-accent/75" />
-        <rect x="14" y="2" width="4" height="16" rx="1" className="fill-accent" />
-      </svg>
-      <span className="title-display text-[16px] tracking-[-0.01em]">ATLAS</span>
-    </span>
-  );
+  return <Wordmark className={cn("h-[17px] text-ink", className)} />;
 }
