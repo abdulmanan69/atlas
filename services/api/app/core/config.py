@@ -1,0 +1,136 @@
+"""Application settings loaded from environment variables.
+
+All secrets come from the environment (or a secret manager that populates it).
+Nothing in this module should contain a real credential.
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+from functools import lru_cache
+from typing import Annotated
+
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+class Environment(StrEnum):
+    LOCAL = "local"
+    TEST = "test"
+    STAGING = "staging"
+    PRODUCTION = "production"
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=(".env", "../../.env"),
+        env_prefix="ATLAS_",
+        extra="ignore",
+    )
+
+    # Product branding is configurable so the commercial name can change later.
+    product_name: str = "ATLAS"
+    environment: Environment = Environment.LOCAL
+    log_level: str = "INFO"
+    service_name: str = "atlas-api"
+
+    database_url: str = "postgresql+asyncpg://atlas:atlas@127.0.0.1:5433/atlas"
+    database_pool_size: int = 10
+    database_max_overflow: int = 10
+    database_statement_timeout_ms: int = 15_000
+
+    redis_url: str = "redis://127.0.0.1:6380/0"
+
+    # Auth
+    jwt_secret: SecretStr = SecretStr("change-me-local-only-not-for-production-use-0000")
+    jwt_issuer: str = "atlas"
+    access_token_ttl_seconds: int = 900
+    refresh_token_ttl_seconds: int = 60 * 60 * 24 * 14
+    refresh_cookie_name: str = "atlas_refresh"
+    cookie_secure: bool = False
+    allow_signup: bool = True
+
+    # Fernet key (urlsafe base64, 32 bytes) used to encrypt integration secrets at rest.
+    secrets_encryption_key: SecretStr = SecretStr("")
+
+    cors_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["http://localhost:5173"]
+    )
+    max_request_bytes: int = 10 * 1024 * 1024
+    docs_enabled: bool = True
+
+    # Calling safety: real calls are impossible unless explicitly enabled.
+    live_calls_enabled: bool = False
+
+    # Voice runtime (internal infrastructure, never exposed to tenants).
+    # Server-to-server address ATLAS uses for the runtime API.
+    voice_runtime_base_url: str = "http://127.0.0.1:8000"
+    # Address browsers use for call audio signaling (behind a reverse proxy in production).
+    voice_runtime_public_url: str = "http://localhost:8000"
+    # Address the runtime uses to reach ATLAS for call events.
+    voice_runtime_callback_url: str = "http://host.docker.internal:8080"
+    voice_runtime_timeout_seconds: float = 20.0
+    voice_runtime_tenant_email_domain: str = "tenants.atlas.internal"
+    # Keep the runtime's vendor-hosted trial models. Off: call data only goes to
+    # providers a tenant configures explicitly.
+    voice_allow_hosted_trial_models: bool = False
+    # Origin of the ATLAS web app (browser test calls are restricted to it).
+    web_app_origin: str = "http://localhost:5173"
+
+    # Knowledge base: documents agents consult during calls. Parsing and chunking run in
+    # the voice service's external document-processing service (see docs/knowledge.md).
+    knowledge_enabled: bool = True
+    # The voice service refuses larger files at processing time, so the limit is enforced
+    # here before anything is uploaded.
+    knowledge_max_upload_bytes: int = 5 * 1024 * 1024
+    knowledge_upload_timeout_seconds: float = 60.0
+
+    rate_limit_auth_per_minute: int = 10
+    # Requests per minute allowed for one tenant API key (X-API-Key).
+    rate_limit_api_key_per_minute: int = 600
+
+    # Outbound webhooks. Endpoint URLs must be https and resolve to public addresses;
+    # private/loopback/link-local/metadata ranges are refused unless this is true
+    # (local development against services on the same machine).
+    allow_private_webhook_urls: bool = False
+    webhook_timeout_seconds: float = 10.0
+    webhook_max_attempts: int = 8
+    webhook_auto_disable_after_failures: int = 50
+
+    # Actions (HTTP calls an agent makes during a conversation) are executed by the
+    # voice runtime, so their URLs go through the same destination policy as webhooks
+    # before anything is stored: https only (http in local), public addresses only.
+    # Set to true only for local development against services on the same machine.
+    allow_private_action_urls: bool = False
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_origins(cls, value: object) -> object:
+        if isinstance(value, str) and not value.startswith("["):
+            return [v.strip() for v in value.split(",") if v.strip()]
+        return value
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment in (Environment.PRODUCTION, Environment.STAGING)
+
+    def validate_for_runtime(self) -> None:
+        """Refuse to boot a non-local deployment with insecure defaults."""
+        if not self.is_production:
+            return
+        problems: list[str] = []
+        if self.jwt_secret.get_secret_value().startswith("change-me"):
+            problems.append("ATLAS_JWT_SECRET must be set")
+        if len(self.jwt_secret.get_secret_value()) < 32:
+            problems.append("ATLAS_JWT_SECRET must be at least 32 characters")
+        if not self.secrets_encryption_key.get_secret_value():
+            problems.append("ATLAS_SECRETS_ENCRYPTION_KEY must be set")
+        if not self.cookie_secure:
+            problems.append("ATLAS_COOKIE_SECURE must be true")
+        if problems:
+            raise RuntimeError("Insecure configuration: " + "; ".join(problems))
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
