@@ -213,10 +213,22 @@ const SELECTION_COL: SelectionColumnDef = {
 const DEFAULT_COL: ColDef<Lead> = { sortable: false, resizable: true, suppressHeaderMenuButton: true, minWidth: 90 };
 const getRowId = ({ data }: GetRowIdParams<Lead>) => data.id;
 
+/**
+ * Only widths are persisted. Whether a column flexes is decided by its definition: a
+ * stale persisted `flex` on a pinned column makes the grid ignore its width and order.
+ */
+function widthsOnly(state: GridState): GridState {
+  const sizing = state.columnSizing?.columnSizingModel;
+  return {
+    columnVisibility: state.columnVisibility,
+    columnOrder: state.columnOrder,
+    columnSizing: sizing ? { columnSizingModel: sizing.map(({ colId, width }) => ({ colId, width })) } : undefined,
+  };
+}
 function loadState(): GridState | undefined {
   try {
     const raw = localStorage.getItem(STATE_KEY);
-    return raw ? (JSON.parse(raw) as GridState) : undefined;
+    return raw ? widthsOnly(JSON.parse(raw) as GridState) : undefined;
   } catch {
     return undefined;
   }
@@ -224,7 +236,7 @@ function loadState(): GridState | undefined {
 function saveState(state: GridState | null): void {
   try {
     if (!state) localStorage.removeItem(STATE_KEY);
-    else localStorage.setItem(STATE_KEY, JSON.stringify({ columnVisibility: state.columnVisibility, columnOrder: state.columnOrder, columnSizing: state.columnSizing }));
+    else localStorage.setItem(STATE_KEY, JSON.stringify(widthsOnly(state)));
   } catch {
     /* not persisted */
   }
@@ -370,22 +382,22 @@ export const LeadsGrid = forwardRef<LeadsGridHandle, LeadsGridProps>(function Le
         pinned: "left",
         lockPinned: true,
         lockVisible: true,
-        width: 260,
+        width: 240,
         minWidth: 200,
         sortable: true,
         sortingOrder: ["asc", null],
         initialSort: sortOf("lead"),
         cellRenderer: LeadCell,
       },
-      { colId: "phone", field: "phone_display", headerName: "Phone", width: 190, cellRenderer: PhoneCell },
-      { colId: "stage", field: "stage_id", headerName: "Stage", width: 200, cellRenderer: StageCell, cellRendererParams: { stages } },
-      { colId: "owner", field: "owner_user_id", headerName: "Owner", width: 170, cellRenderer: OwnerCell, cellRendererParams: { names } },
-      { colId: "source", field: "source", headerName: "Source", width: 130, cellRenderer: SourceCell },
+      { colId: "phone", field: "phone_display", headerName: "Phone", width: 160, cellRenderer: PhoneCell },
+      { colId: "stage", field: "stage_id", headerName: "Stage", width: 170, cellRenderer: StageCell, cellRendererParams: { stages } },
+      { colId: "owner", field: "owner_user_id", headerName: "Owner", width: 150, cellRenderer: OwnerCell, cellRendererParams: { names } },
+      { colId: "source", field: "source", headerName: "Source", width: 120, cellRenderer: SourceCell },
       {
         colId: "next_follow_up_at",
         field: "next_follow_up_at",
         headerName: "Follow-up",
-        width: 140,
+        width: 130,
         sortable: true,
         sortingOrder: ["asc", null],
         initialSort: sortOf("next_follow_up_at"),
@@ -395,8 +407,8 @@ export const LeadsGrid = forwardRef<LeadsGridHandle, LeadsGridProps>(function Le
         colId: "created_at",
         field: "created_at",
         headerName: "Added",
-        width: 130,
         flex: 1,
+        minWidth: 110,
         sortable: true,
         sortingOrder: ["desc", "asc", null],
         initialSort: sortOf("created_at"),
