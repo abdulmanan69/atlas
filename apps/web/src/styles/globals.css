@@ -1,0 +1,220 @@
+@import "tailwindcss";
+@import "@fontsource-variable/public-sans";
+@import "@fontsource-variable/bricolage-grotesque";
+@import "@fontsource-variable/jetbrains-mono";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * ATLAS tokens. Cool neutral canvas, white surfaces, one indigo accent.
+ * Status colours are used only to encode state, never decoration.
+ */
+:root {
+  --canvas: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f1f3f6;
+  --ink: #0b1020;
+  --ink-2: #353d4f;
+  --muted: #5b6475;
+  --faint: #8a93a3;
+  --line: #e3e6eb;
+  --line-strong: #cbd1da;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-ink: #ffffff;
+  --accent-soft: #eef0ff;
+  --accent-soft-ink: #3730a3;
+  --success: #0f8a62;
+  --success-soft: #e5f5ee;
+  --warn: #a8690f;
+  --warn-soft: #fbf2e2;
+  --danger: #c93a3a;
+  --danger-soft: #fcebeb;
+  --lost: #9aa3b2;
+  --shadow: 0 1px 2px rgb(11 16 32 / 0.05), 0 1px 1px rgb(11 16 32 / 0.03);
+  --shadow-pop: 0 12px 32px -8px rgb(11 16 32 / 0.18), 0 2px 6px rgb(11 16 32 / 0.06);
+}
+
+.dark {
+  --canvas: #0b0e14;
+  --surface: #11151d;
+  --surface-2: #171c26;
+  --ink: #e7eaf0;
+  --ink-2: #c3c9d4;
+  --muted: #8d96a7;
+  --faint: #667085;
+  --line: #222836;
+  --line-strong: #2f3747;
+  --accent: #818cf8;
+  --accent-hover: #a5b4fc;
+  --accent-ink: #0b0e14;
+  --accent-soft: #1d2140;
+  --accent-soft-ink: #c7cdfd;
+  --success: #34c38f;
+  --success-soft: #0f2a21;
+  --warn: #e0a447;
+  --warn-soft: #2d2212;
+  --danger: #f07171;
+  --danger-soft: #331a1d;
+  --lost: #5b6475;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-pop: 0 16px 40px -12px rgb(0 0 0 / 0.7), 0 0 0 1px var(--line);
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-ink: var(--accent-soft-ink);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-lost: var(--lost);
+
+  --font-sans: "Public Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Bricolage Grotesque Variable", "Public Sans Variable", ui-sans-serif, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SFMono-Regular", Consolas, monospace;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  --shadow-card: var(--shadow);
+  --shadow-pop: var(--shadow-pop);
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply bg-canvas text-ink font-sans;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  *,
+  ::before,
+  ::after {
+    border-color: var(--line);
+  }
+  ::selection {
+    background: var(--accent-soft);
+    color: var(--accent-soft-ink);
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "zero" 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* Floating surfaces (menus, selects, popovers) ease in; reduced motion collapses this to ~0ms. */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@utility pop-in {
+  animation: pop-in 120ms ease-out;
+}
+
+@utility title-display {
+  font-family: var(--font-display);
+  font-weight: 640;
+  letter-spacing: -0.022em;
+  line-height: 1.15;
+}
+
+@utility eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Command menu (cmdk renders these attributes) */
+[cmdk-group-heading] {
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.cmdk-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: default;
+}
+.cmdk-item[data-selected="true"] {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+/*
+ * AG Grid (leads). Colours come from the Theming API mapped to our tokens; these rules cover
+ * what params can't express: eyebrow headers and a focus ring only for keyboard navigation.
+ */
+.atlas-grid .ag-header-cell-text {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.atlas-grid .ag-cell-focus:not(:focus-visible):not(:has(:focus-visible)) {
+  border-color: transparent !important;
+}
+.atlas-grid .ag-row {
+  cursor: pointer;
+}
+.atlas-grid .ag-cell {
+  line-height: 1.35;
+}
+.atlas-grid .ag-cell-value {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  min-width: 0;
+}
+.atlas-grid .ag-row-selected .ag-cell,
+.atlas-grid .ag-row-hover .ag-cell {
+  color: var(--ink);
+}
