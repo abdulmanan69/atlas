@@ -1,0 +1,244 @@
+# ATLAS local development stack.
+#
+#   make infra      -> postgres + redis only (run api/web on the host for fast reloads)
+#   make up         -> full stack in containers (profile "app")
+#
+# Ports bind to 127.0.0.1 only. Named volumes live inside Docker's data disk.
+
+name: atlas
+
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: atlas
+      POSTGRES_PASSWORD: ${ATLAS_POSTGRES_PASSWORD:-atlas}
+      POSTGRES_DB: atlas
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./infra/docker/postgres-init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlas -d atlas"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          memory: 320m
+    restart: unless-stopped
+
+  api:
+    profiles: ["app"]
+    build:
+      context: ./services/api
+    env_file: .env
+    environment:
+      ATLAS_DATABASE_URL: postgresql+asyncpg://atlas:${ATLAS_POSTGRES_PASSWORD:-atlas}@postgres:5432/atlas
+      ATLAS_REDIS_URL: redis://redis:6379/0
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8080 --proxy-headers --forwarded-allow-ips='*'"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/v1/health/live')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  worker:
+    profiles: ["app"]
+    build:
+      context: ./services/api
+    env_file: .env
+    environment:
+      ATLAS_DATABASE_URL: postgresql+asyncpg://atlas:${ATLAS_POSTGRES_PASSWORD:-atlas}@postgres:5432/atlas
+      ATLAS_REDIS_URL: redis://redis:6379/0
+    command: ["arq", "app.workers.main.WorkerSettings"]
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- voice runtime
+  # Internal real-time voice engine (see THIRD_PARTY_NOTICES.md). Headless: its own
+  # UI is not deployed; ATLAS drives it over HTTP. Start with: make voice-up
+  voice-db:
+    profiles: ["voice"]
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: voice
+      POSTGRES_PASSWORD: ${ATLAS_VOICE_DB_PASSWORD:-voice}
+      POSTGRES_DB: voice
+    volumes:
+      - voice_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voice -d voice"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    restart: unless-stopped
+
+  voice-redis:
+    profiles: ["voice"]
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - voice_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          memory: 160m
+    restart: unless-stopped
+
+  voice-storage:
+    profiles: ["voice"]
+    image: dograhai/minio:2026.09.22
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${ATLAS_VOICE_STORAGE_USER:-voiceadmin}
+      MINIO_ROOT_PASSWORD: ${ATLAS_VOICE_STORAGE_PASSWORD:-voiceadmin-change-me}
+      MINIO_API_CORS_ALLOW_ORIGIN: "http://localhost:5173"
+    ports:
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - voice_storage_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+    restart: unless-stopped
+
+  voice-runtime:
+    profiles: ["voice"]
+    # Pinned to the version whose source is in vendor/voice-runtime (contract-checked).
+    image: dograhai/dograh-api:1.49.0
+    environment:
+      ENVIRONMENT: local
+      LOG_LEVEL: INFO
+      ENABLE_SIGNUP: "true"
+      DATABASE_URL: postgresql+asyncpg://voice:${ATLAS_VOICE_DB_PASSWORD:-voice}@voice-db:5432/voice
+      # Dedicated Redis: the runtime's job queue uses fixed key names, so sharing an
+      # instance (even on another logical DB) lets its workers consume ATLAS jobs.
+      REDIS_URL: redis://voice-redis:6379/0
+      ENABLE_AWS_S3: "false"
+      MINIO_ENDPOINT: voice-storage:9000
+      MINIO_PUBLIC_ENDPOINT: http://localhost:9000
+      MINIO_ACCESS_KEY: ${ATLAS_VOICE_STORAGE_USER:-voiceadmin}
+      MINIO_SECRET_KEY: ${ATLAS_VOICE_STORAGE_PASSWORD:-voiceadmin-change-me}
+      MINIO_BUCKET: voice-audio
+      MINIO_SECURE: "false"
+      BACKEND_API_ENDPOINT: http://localhost:8000
+      FASTAPI_WORKERS: "1"
+      # ATLAS owns campaigns; the Asterisk bridge is only needed for SIP via ARI.
+      ENABLE_ARI_MANAGER: "false"
+      ENABLE_CAMPAIGN_ORCHESTRATOR: "false"
+      ENABLE_PROMETHEUS_METRICS: "false"
+      FORWARDED_ALLOW_IPS: "*"
+      OSS_JWT_SECRET: ${ATLAS_VOICE_RUNTIME_JWT_SECRET:?set ATLAS_VOICE_RUNTIME_JWT_SECRET in .env}
+      # Enterprise default: no third-party product analytics leave the deployment.
+      ENABLE_TELEMETRY: "false"
+      POSTHOG_API_KEY: ""
+      POSTHOG_HOST: ""
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      voice-db: { condition: service_healthy }
+      voice-storage: { condition: service_healthy }
+      voice-redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health').read()\""]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+    restart: unless-stopped
+
+  # ------------------------------------------------------------- local AI models
+  # Optional self-hosted models (CPU). Start with: make local-ai-up
+  # In ATLAS add a "Self-hosted models" connection with base URL
+  #   http://local-llm:11434/v1     (language model)
+  #   http://local-speech:8000/v1   (speech-to-text and voice)
+  local-llm:
+    profiles: ["local-ai"]
+    image: ollama/ollama:0.40.6
+    environment:
+      OLLAMA_KEEP_ALIVE: "30m"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - local_llm_models:/root/.ollama
+    deploy:
+      resources:
+        limits:
+          memory: 2560m
+    restart: unless-stopped
+
+  local-speech:
+    profiles: ["local-ai"]
+    image: ghcr.io/speaches-ai/speaches:0.8.3-cpu
+    environment:
+      # Faster on CPU; small accuracy cost.
+      WHISPER__COMPUTE_TYPE: int8
+      STT_MODEL_TTL: "-1"
+      TTS_MODEL_TTL: "-1"
+    ports:
+      - "127.0.0.1:8001:8000"
+    volumes:
+      - local_speech_models:/home/ubuntu/.cache/huggingface/hub
+    deploy:
+      resources:
+        limits:
+          memory: 1792m
+    restart: unless-stopped
+
+volumes:
+  local_llm_models:
+  local_speech_models:
+  pg_data:
+  redis_data:
+  voice_db_data:
+  voice_redis_data:
+  voice_storage_data:

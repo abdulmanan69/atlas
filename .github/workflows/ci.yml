@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: services/api
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_USER: atlas
+          POSTGRES_PASSWORD: atlas
+          POSTGRES_DB: atlas_test
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U atlas" --health-interval 3s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6380:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check app tests
+      - run: uv run ruff format --check app tests
+      - run: uv run mypy app
+      - run: uv run pytest -q --cov=app --cov-report=term-missing:skip-covered
+      - name: Migrations have no drift
+        env:
+          ATLAS_DATABASE_URL: postgresql+asyncpg://atlas:atlas@127.0.0.1:5433/atlas_test
+        run: uv run alembic check
+
+  web:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test --run
+      - run: pnpm build

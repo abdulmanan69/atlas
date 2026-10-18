@@ -1,0 +1,42 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.vite/
+
+# Upstream voice runtime is a pinned checkout, tracked separately
+/vendor/voice-runtime/
+
+# Local data never committed
+recordings/
+*.wav
+*.mp3
+/models/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+
+# Browser automation scratch output
+.playwright-mcp/
+apps/web/src/types/openapi.json
