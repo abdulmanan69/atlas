@@ -1,0 +1,104 @@
+/*
+ * Flow canvas theme: React Flow's variables mapped to ATLAS tokens so the canvas follows
+ * light and dark mode like every other surface. No gradients, no decoration.
+ */
+.atlas-flow .react-flow {
+  --xy-background-color: var(--canvas);
+  --xy-background-pattern-dots-color: var(--line-strong);
+  --xy-edge-stroke: var(--line-strong);
+  --xy-edge-stroke-width: 1.5;
+  --xy-edge-stroke-selected: var(--accent);
+  --xy-connectionline-stroke: var(--accent);
+  --xy-connectionline-stroke-width: 1.5;
+  --xy-handle-background-color: var(--surface);
+  --xy-handle-border-color: var(--faint);
+  --xy-minimap-background-color: var(--surface);
+  --xy-minimap-mask-background-color: color-mix(in srgb, var(--canvas) 72%, transparent);
+  --xy-minimap-mask-stroke-color: var(--line-strong);
+  --xy-minimap-mask-stroke-width: 1;
+  --xy-minimap-node-background-color: var(--line-strong);
+  --xy-minimap-node-stroke-color: transparent;
+  --xy-attribution-background-color: transparent;
+  --xy-selection-background-color: color-mix(in srgb, var(--accent) 8%, transparent);
+  --xy-selection-border: 1px dashed var(--accent);
+  --xy-node-boxshadow-selected: none;
+  font-family: var(--font-sans);
+}
+
+.atlas-flow .react-flow__handle {
+  width: 10px;
+  height: 10px;
+  border-width: 1.5px;
+  transition: background-color 120ms, border-color 120ms, transform 120ms;
+}
+.atlas-flow .react-flow__handle:hover,
+.atlas-flow .react-flow__handle.connectingfrom,
+.atlas-flow .react-flow__handle.connectingto,
+.atlas-flow .react-flow__handle.valid {
+  background: var(--accent);
+  border-color: var(--accent);
+  transform: translate(-50%, -50%) scale(1.25);
+}
+.atlas-flow .react-flow__handle-right:hover,
+.atlas-flow .react-flow__handle-right.connectingfrom,
+.atlas-flow .react-flow__handle-right.connectingto,
+.atlas-flow .react-flow__handle-right.valid {
+  transform: translate(50%, -50%) scale(1.25);
+}
+.atlas-flow .react-flow__handle-left {
+  transform: translate(-50%, -50%);
+  left: 0;
+}
+.atlas-flow .react-flow__handle-right {
+  transform: translate(50%, -50%);
+  right: 0;
+}
+
+.atlas-flow .react-flow__node {
+  border-radius: 10px;
+}
+.atlas-flow .react-flow__node:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.atlas-flow .react-flow__edge-path {
+  transition: stroke 120ms;
+}
+.atlas-flow .react-flow__edge:hover .react-flow__edge-path,
+.atlas-flow .react-flow__edge.selected .react-flow__edge-path,
+.atlas-flow .react-flow__edge:focus-visible .react-flow__edge-path {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.atlas-flow .react-flow__edge.has-error .react-flow__edge-path {
+  stroke: var(--danger);
+}
+.atlas-flow .react-flow__minimap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.atlas-flow .react-flow__minimap-node.kind-start {
+  fill: var(--accent);
+}
+.atlas-flow .react-flow__minimap-node.kind-end {
+  fill: var(--success);
+}
+.atlas-flow .react-flow__attribution {
+  font-size: 9px;
+  color: var(--faint);
+}
+.atlas-flow .react-flow__attribution a {
+  color: var(--faint);
+}
+.atlas-flow .react-flow__pane.draggable {
+  cursor: grab;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .atlas-flow .react-flow__handle,
+  .atlas-flow .react-flow__edge-path {
+    transition: none;
+  }
+}
