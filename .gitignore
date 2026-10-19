@@ -28,6 +28,9 @@ coverage/
 
 # Local data never committed
 recordings/
+# setup_local_demo pid files and unpacked offline-bundle dependencies
+/.atlas-run/
+/.cache/
 *.wav
 *.mp3
 /models/

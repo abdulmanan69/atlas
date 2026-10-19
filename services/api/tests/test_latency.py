@@ -504,6 +504,8 @@ async def test_latency_guide_is_honest(client: httpx.AsyncClient, owner: Account
     )
     assert speaches["streaming"] is False and speaches["typical_ms"] is None
     assert "interrupt" in speaches["note"] and "streaming server" in speaches["note"]
+    # Snappy/Balanced wait 0.6 s more after Whisper's transcript (measured, ai_speed.GUIDE).
+    assert "0.6 s" in speaches["note"] and "On any speech" in speaches["note"]
     # Only ATLAS's own self-hosted streaming server carries a measured figure.
     measured = [p for p in guide["providers"] if p["measured"]]
     assert [p["model_hint"] for p in measured] == [ai_speed.STREAMING_STT_MODEL]
@@ -736,3 +738,60 @@ async def test_pipeline_health_endpoint(
 
     manager = await invite_and_join(client, owner, "manager@example.com", "manager")
     assert (await client.get(url, headers=manager.headers)).status_code == 403
+
+
+def test_reply_text_follows_save_order_when_runtime_mislabels_turns() -> None:
+    """Regression from a real run: replies saved in order, but stamped with another
+    reply's turn and speech window (voice service v1.49). Each reply must land on the
+    caller turn just before it."""
+    from app.services.latency import from_run_logs
+
+    def user(turn: int, start: str, end: str, text: str) -> dict:
+        return {
+            "type": "rtf-user-transcription",
+            "timestamp": end,
+            "turn": turn,
+            "payload": {"text": text, "final": True, "timestamp": start, "end_timestamp": end},
+        }
+
+    def bot(turn: int, saved: str, start: str | None, end: str | None, text: str) -> dict:
+        payload: dict = {"text": text}
+        if start:
+            payload |= {"timestamp": start, "end_timestamp": end}
+        return {"type": "rtf-bot-text", "timestamp": saved, "turn": turn, "payload": payload}
+
+    def lat(turn: int, at: str, seconds: float) -> dict:
+        return {
+            "type": "rtf-latency-measured",
+            "timestamp": at,
+            "turn": turn,
+            "payload": {"latency_seconds": seconds},
+        }
+
+    d = "2026-10-19T06:04:"
+    events = [
+        bot(1, d + "00.025Z", None, None, "Hi Alex, this is Sarah."),
+        user(2, d + "10.394Z", d + "13.692Z", "Yes, now is fine."),
+        lat(2, d + "15.841Z", 3.568),
+        bot(2, d + "20.721Z", d + "15.839Z", d + "20.719Z", "That's exciting!"),
+        user(3, d + "22.512Z", d + "24.965Z", "In the next three months."),
+        lat(3, d + "29.121Z", 5.367),
+        # Mislabelled: the reply to turn 3, stamped turn 4 with turn 4's reply window.
+        bot(4, d + "34.340Z", d + "39.799Z", d + "44.880Z", "I'd prefer at least a month."),
+        user(4, d + "34.333Z", d + "36.770Z", "Our budget is 400k."),
+        lat(4, d + "39.800Z", 4.227),
+        # Mislabelled: the reply to turn 4, stamped turn 1 with the greeting's window.
+        bot(1, d + "44.882Z", d + "00.519Z", d + "08.599Z", "Great to know your budget."),
+    ]
+    result = from_run_logs({"realtime_feedback_events": events})
+    assert result is not None
+    by_turn = {t["turn"]: t for t in result["turns"]}
+    assert by_turn[1]["agent_text"] == "Hi Alex, this is Sarah."
+    assert by_turn[2]["agent_text"] == "That's exciting!"
+    assert by_turn[3]["agent_text"] == "I'd prefer at least a month."
+    assert by_turn[4]["agent_text"] == "Great to know your budget."
+    # The reply window is rebuilt from caller end + measured response, ending at save time.
+    assert by_turn[3]["agent_started_at"].startswith("2026-10-19T06:04:30.33")
+    assert by_turn[3]["agent_ended_at"].startswith("2026-10-19T06:04:34.34")
+    assert by_turn[4]["response_ms"] == 4227
+    assert result["summary"]["interruptions"] == 0

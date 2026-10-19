@@ -27,6 +27,7 @@ from app.schemas.latency import SLOW_MS
 # Event types (pipecat.utils.enums.RealtimeFeedbackType, read from the running image).
 USER_TRANSCRIPTION = "rtf-user-transcription"
 BOT_TEXT = "rtf-bot-text"
+INTERRUPT_MARGIN_MS = 300
 FUNCTION_CALL_START = "rtf-function-call-start"
 FUNCTION_CALL_END = "rtf-function-call-end"
 TTFB_METRIC = "rtf-ttfb-metric"
@@ -246,6 +247,7 @@ def _parse(events: Any) -> dict[str, Any] | None:
     agent_spans: list[tuple[datetime, datetime]] = []
     user_starts: list[datetime] = []
     last_turn = 0
+    last_user_turn: int | None = None
 
     def turn_for(raw: Any) -> _Turn | None:
         nonlocal last_turn
@@ -280,24 +282,40 @@ def _parse(events: Any) -> dict[str, Any] | None:
             start = _ts(payload.get("timestamp"))
             end = _ts(payload.get("end_timestamp"))
             turn.user_text.append(text)
+            last_user_turn = turn.number
             turn.user_start = _min(turn.user_start, start)
             turn.user_end = _max(turn.user_end, end)
             if start is not None:
                 user_starts.append(start)
             turn.node_name = turn.node_name or _text(event.get("node_name"))
         elif kind == BOT_TEXT:
+            # The voice service (v1.49) can stamp a reply's text with another reply's
+            # ``turn`` and speech timestamps; the text itself is saved in the right order
+            # when the reply finishes (event ``timestamp``). Observed on a real run: the
+            # reply to turn 3 carried turn=4 and the window of turn 4's reply. So a reply
+            # belongs to the latest caller turn before it, and its window is rebuilt from
+            # the measured response and the save time, not from the stamped payload.
             text = _text(payload.get("text"))
-            turn = turn_for(event.get("turn"))
+            turn = turn_for(last_user_turn if last_user_turn is not None else event.get("turn"))
             if turn is None:
                 continue
-            start = _ts(payload.get("timestamp"))
-            end = _ts(payload.get("end_timestamp"))
             if text:
                 turn.agent_text.append(text)
-            turn.agent_start = _min(turn.agent_start, start)
-            turn.agent_end = _max(turn.agent_end, end)
-            if start is not None and end is not None and end > start:
-                agent_spans.append((start, end))
+            start = _ts(payload.get("timestamp"))
+            end = _ts(payload.get("end_timestamp"))
+            # A stamped window is believable only if it starts after the caller finished
+            # and no later than the moment the reply was saved.
+            plausible = (
+                start is not None
+                and (turn.user_end is None or start >= turn.user_end)
+                and (at is None or start <= at)
+                and (end is None or end >= start)
+            )
+            if plausible:
+                turn.agent_start = _min(turn.agent_start, start)
+                turn.agent_end = _max(turn.agent_end, end or at)
+            else:
+                turn.agent_end = _max(turn.agent_end, at)
             turn.node_name = _text(event.get("node_name")) or turn.node_name
         elif kind == LATENCY_MEASURED:
             value = _seconds_to_ms(payload.get("latency_seconds"))
@@ -337,10 +355,21 @@ def _parse(events: Any) -> dict[str, Any] | None:
     ordered = [turns[n] for n in sorted(turns)]
     if not any(t.user_text or t.agent_text for t in ordered):
         return None
+    for t in ordered:
+        # Reply start = caller's speech end + measured response, when the stamped one was unusable.
+        if t.agent_start is None and t.user_end is not None and t.measured_ms is not None:
+            t.agent_start = t.user_end + timedelta(milliseconds=t.measured_ms)
+        if t.agent_start is not None and t.agent_end is not None and t.agent_end > t.agent_start:
+            agent_spans.append((t.agent_start, t.agent_end))
     turn_dicts = [t.to_dict() for t in ordered]
     responses = [t["response_ms"] for t in turn_dicts if t["response_ms"] is not None]
+    # The caller interrupted if they started talking clearly inside an agent reply; the
+    # margin absorbs the few ms between the reply ending and the moment it is logged.
+    margin = timedelta(milliseconds=INTERRUPT_MARGIN_MS)
     interruptions = sum(
-        1 for s in user_starts if any(a_start < s < a_end for a_start, a_end in agent_spans)
+        1
+        for s in user_starts
+        if any(a_start < s < a_end - margin for a_start, a_end in agent_spans)
     )
     summary = {
         "source": "runtime",
