@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FormError } from "@/components/ui/form";
 import { Input } from "@/components/ui/primitives";
 import { AuthLayout } from "@/features/auth/auth-layout";
+import { useAuthOptions } from "@/features/auth/auth-options";
 import { api, ApiError, errorMessage, unwrap } from "@/lib/api";
 import { session } from "@/lib/session";
 
@@ -40,6 +41,20 @@ export default function SignUpPage() {
     },
   });
   const e = form.formState.errors;
+  const options = useAuthOptions();
+
+  if (options.data?.signup_enabled === false) {
+    return (
+      <AuthLayout
+        title="Sign-up is closed"
+        subtitle="New organizations are created by the administrator of this deployment. Ask your organization's owner for an invitation."
+      >
+        <Button asChild variant="primary" size="lg" className="w-full">
+          <Link to="/sign-in">Go to sign in</Link>
+        </Button>
+      </AuthLayout>
+    );
+  }
 
   return (
     <AuthLayout

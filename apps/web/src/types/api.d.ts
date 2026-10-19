@@ -829,6 +829,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Sign-in options of this deployment */
+        get: operations["options_api_v1_auth_options_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/refresh": {
         parameters: {
             query?: never;
@@ -2731,6 +2748,14 @@ export interface components {
             resource_id: string | null;
             /** Resource Type */
             resource_type: string | null;
+        };
+        /** AuthOptions */
+        AuthOptions: {
+            /**
+             * Signup Enabled
+             * @description Whether anyone can create a new organization from the sign-up page
+             */
+            signup_enabled: boolean;
         };
         /** Body_clone_voice_api_v1_ai_connections__connection_id__voices_post */
         Body_clone_voice_api_v1_ai_connections__connection_id__voices_post: {
@@ -9675,6 +9700,62 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MeResponse"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    options_api_v1_auth_options_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthOptions"];
                 };
             };
             /** @description Missing or invalid credentials */

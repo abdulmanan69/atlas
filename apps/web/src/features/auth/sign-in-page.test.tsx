@@ -22,29 +22,50 @@ function renderPage() {
   );
 }
 
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+/** Answers the sign-in options query; `login` answers everything else. */
+function stubFetch(login: () => Response, signupEnabled = true) {
+  const fetchMock = vi.fn(async (input: Request | string) => {
+    const url = typeof input === "string" ? input : input.url;
+    return url.endsWith("/api/v1/auth/options") ? json({ signup_enabled: signupEnabled }) : login();
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+const loginCalls = (m: ReturnType<typeof stubFetch>) =>
+  m.mock.calls.filter(([input]) => (typeof input === "string" ? input : input.url).endsWith("/auth/login"));
+
 describe("SignInPage", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it("offers sign-up only when the deployment allows it", async () => {
+    stubFetch(() => json({}), true);
+    renderPage();
+    expect(await screen.findByRole("link", { name: "Create an organization" })).toBeInTheDocument();
+  });
+
+  it("hides sign-up when the deployment has it closed", async () => {
+    const m = stubFetch(() => json({}), false);
+    renderPage();
+    await vi.waitFor(() => expect(m).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByRole("link", { name: "Create an organization" })).not.toBeInTheDocument();
+  });
+
   it("validates before calling the API", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubFetch(() => json({}));
     renderPage();
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(await screen.findByText("Enter a valid email address")).toBeInTheDocument();
     expect(screen.getByText("Enter your password")).toBeInTheDocument();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(loginCalls(fetchMock)).toHaveLength(0);
   });
 
   it("shows the server's message when sign-in fails", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        new Response(JSON.stringify({ error: { code: "unauthenticated", message: "Invalid email or password" } }), {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    );
+    stubFetch(() => json({ error: { code: "unauthenticated", message: "Invalid email or password" } }, 401));
     renderPage();
     await userEvent.type(screen.getByLabelText("Email"), "a@example.com");
     await userEvent.type(screen.getByLabelText("Password"), "wrong-password");
@@ -53,20 +74,14 @@ describe("SignInPage", () => {
   });
 
   it("signs in and continues to the requested page", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        new Response(
-          JSON.stringify({
-            access_token: "t",
-            token_type: "bearer",
-            expires_in: 900,
-            user: { id: "u1", email: "a@example.com", full_name: "A", created_at: "2026-01-01T00:00:00Z" },
-            memberships: [],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-      ),
+    stubFetch(() =>
+      json({
+        access_token: "t",
+        token_type: "bearer",
+        expires_in: 900,
+        user: { id: "u1", email: "a@example.com", full_name: "A", created_at: "2026-01-01T00:00:00Z" },
+        memberships: [],
+      }),
     );
     renderPage();
     await userEvent.type(screen.getByLabelText("Email"), "a@example.com");

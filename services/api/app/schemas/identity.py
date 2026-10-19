@@ -43,6 +43,12 @@ class SignupRequest(Password):
     }
 
 
+class AuthOptions(APIModel):
+    signup_enabled: bool = Field(
+        description="Whether anyone can create a new organization from the sign-up page"
+    )
+
+
 class LoginRequest(APIModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=128)

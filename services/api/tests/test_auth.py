@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
+from app.core.config import get_settings
 from tests.conftest import PASSWORD, Account, signup
 
 CSRF = {"X-Requested-With": "atlas-web"}
@@ -39,6 +41,24 @@ async def test_duplicate_signup_conflicts_case_insensitively(client: httpx.Async
     )
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "conflict"
+
+
+async def test_auth_options_follow_signup_setting(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert (await client.get("/api/v1/auth/options")).json() == {"signup_enabled": True}
+    monkeypatch.setattr(get_settings(), "allow_signup", False)
+    assert (await client.get("/api/v1/auth/options")).json() == {"signup_enabled": False}
+    r = await client.post(
+        "/api/v1/auth/signup",
+        json={
+            "email": "closed@example.com",
+            "password": PASSWORD,
+            "full_name": "X",
+            "organization_name": "Closed",
+        },
+    )
+    assert r.status_code == 403
 
 
 async def test_weak_password_rejected(client: httpx.AsyncClient) -> None:

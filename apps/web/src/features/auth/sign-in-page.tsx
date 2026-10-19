@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FormError } from "@/components/ui/form";
 import { Input } from "@/components/ui/primitives";
 import { AuthLayout } from "@/features/auth/auth-layout";
+import { useAuthOptions } from "@/features/auth/auth-options";
 import { api, errorMessage, unwrap } from "@/lib/api";
 import { session } from "@/lib/session";
 import { safeNext } from "@/lib/utils";
@@ -22,6 +23,8 @@ export default function SignInPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const form = useForm<Values>({ resolver: zodResolver(schema), defaultValues: { email: "", password: "" } });
+  // Offer sign-up only once the deployment confirms it is open.
+  const signupOpen = useAuthOptions().data?.signup_enabled === true;
   const login = useMutation({
     mutationFn: (body: Values) => unwrap(api.POST("/api/v1/auth/login", { body })),
     onSuccess: (tokens) => {
@@ -35,12 +38,14 @@ export default function SignInPage() {
       title="Sign in"
       subtitle="Use the email your organization invited."
       footer={
-        <>
-          New here?{" "}
-          <Link to="/sign-up" className="font-medium text-accent hover:underline">
-            Create an organization
-          </Link>
-        </>
+        signupOpen ? (
+          <>
+            New here?{" "}
+            <Link to="/sign-up" className="font-medium text-accent hover:underline">
+              Create an organization
+            </Link>
+          </>
+        ) : null
       }
     >
       <form className="flex flex-col gap-4" noValidate onSubmit={form.handleSubmit((v) => login.mutate(v))}>

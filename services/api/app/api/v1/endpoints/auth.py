@@ -15,6 +15,7 @@ from app.core.redis import enforce_rate_limit
 from app.schemas.common import ERROR_RESPONSES
 from app.schemas.identity import (
     AcceptInvitationRequest,
+    AuthOptions,
     LoginRequest,
     MembershipOut,
     MeResponse,
@@ -58,6 +59,11 @@ async def _token_response(db: DB, issued: auth_service.IssuedTokens) -> TokenRes
         user=UserOut.model_validate(issued.user),
         memberships=[MembershipOut.model_validate(m) for m in memberships],
     )
+
+
+@router.get("/options", response_model=AuthOptions, summary="Sign-in options of this deployment")
+async def options() -> AuthOptions:
+    return AuthOptions(signup_enabled=get_settings().allow_signup)
 
 
 @router.post(
