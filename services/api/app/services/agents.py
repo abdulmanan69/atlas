@@ -26,6 +26,7 @@ from app.integrations.voice_runtime.workflow_builder import (
     compile_workflow,
     effective_flow,
     guided_to_flow,
+    variable_values,
 )
 from app.models.voice import Agent, AgentDirection, AgentStatus, AgentVersion, SyncStatus
 from app.schemas.voice import (
@@ -45,7 +46,7 @@ from app.schemas.voice import (
     TestSession,
 )
 from app.services import actions as action_service
-from app.services import audit, llm_warmup
+from app.services import agent_settings, audit, llm_warmup
 from app.services import calls as call_service
 from app.services import knowledge as knowledge_service
 from app.services import leads as lead_service
@@ -437,6 +438,7 @@ async def save_config(
     current = await config_of(db, agent)
     if current == config:
         return agent
+    await agent_settings.check_audio_references(db, ctx.org_id, agent.id, config)
     agent.latest_version += 1
     db.add(
         AgentVersion(
@@ -639,11 +641,16 @@ async def publish(
                 "Set up AI providers before publishing: choose speech-to-text, a "
                 "language model and a voice under Voice AI → AI providers."
             )
-        connection_ids = {c.uuid for c in await client.list_connections()}
+        connections = await client.list_connections()
+        connection_ids = {c.uuid for c in connections}
         try:
-            configurations = build_configurations(config, connection_ids=connection_ids)
+            build_configurations(config, connection_ids=connection_ids)
         except ValueError as exc:
             raise ValidationFailedError(f"Model override: {exc}") from exc
+        # Sound files and a separate voicemail-detection model are checked before anything
+        # is written to the voice service.
+        await agent_settings.check_audio_references(db, ctx.org_id, agent.id, config)
+        classifier = await agent_settings.classifier_for_publish(db, agent, config, connections)
         webhook = (
             WebhookTarget(
                 url=f"{settings.voice_runtime_callback_url.rstrip('/')}/api/v1/webhooks/voice-runtime",
@@ -661,11 +668,22 @@ async def publish(
                 created = await client.create_workflow(runtime_name, compiled.definition)
                 agent.runtime_workflow_id = str(created.id)
                 agent.runtime_workflow_uuid = created.workflow_uuid
+                # Keep the mapping even if handing over sound files fails below.
+                await db.commit()
+            # Files go to storage scoped to the workflow, so they follow its creation.
+            assets = await agent_settings.publish_assets(db, client, agent, config, classifier)
+            try:
+                configurations = build_configurations(
+                    config, connection_ids=connection_ids, assets=assets
+                )
+            except ValueError as exc:
+                raise ValidationFailedError(str(exc)) from exc
             await client.update_workflow(
                 agent.runtime_workflow_id,
                 name=runtime_name,
                 definition=compiled.definition,
                 configurations=configurations,
+                template_context_variables=variable_values(config),
             )
             await client.publish_workflow(
                 agent.runtime_workflow_id, note=note or f"Version {target}"

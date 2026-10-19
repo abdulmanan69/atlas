@@ -313,21 +313,112 @@ class CompiledPrompt(APIModel):
 # ------------------------------------------------------------------ call settings
 
 
+MessageFormat = Literal["text", "recording"]
+# Providers whose language model the voice service can run for answer classification
+# with an API key alone (its classifier is built from provider, model and key, without
+# a base URL or cloud credentials; services/pipecat/run_pipeline.py `_create_answer_supervisor`).
+CLASSIFIER_PROVIDERS = ("openai", "groq", "google", "openrouter")
+
+
+def _blank_to_none(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+class VoicemailClassifier(APIModel):
+    """The model that decides who answered: a person, voicemail, a call screener or a menu."""
+
+    model: Literal["agent", "connection"] = Field(
+        default="agent",
+        description=(
+            "'agent': the agent's own language model. 'connection': a separate model from an "
+            "AI provider connection (its API key is stored with "
+            "PUT /agents/{id}/voicemail-classifier-key)"
+        ),
+    )
+    connection_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Language model connection when model is 'connection'",
+    )
+    model_name: str | None = Field(
+        default=None, max_length=120, description="Model on that connection, e.g. gpt-4.1-mini"
+    )
+    instructions: str | None = Field(
+        default=None,
+        max_length=8000,
+        description=(
+            "Replaces the built-in classifier instructions; empty keeps them. The reply must "
+            "be one label: CONVERSATION, VOICEMAIL, NO_MESSAGE, SCREENER, SCREENING_WAIT, IVR "
+            "or UNKNOWN"
+        ),
+    )
+
+    _clean = field_validator("connection_id", "model_name", "instructions")(_blank_to_none)
+
+
 class VoicemailSettings(APIModel):
+    """Answer handling: voicemail, call screeners and phone menus (outbound and inbound)."""
+
     enabled: bool = Field(default=True, description="Detect answering machines on calls")
     action: Literal["hangup", "leave_message"] = "hangup"
-    message: str | None = Field(default=None, max_length=1000)
+    message_format: MessageFormat = Field(
+        default="text", description="Leave the message as text (spoken by the voice) or a recording"
+    )
+    message: str | None = Field(
+        default=None,
+        max_length=1000,
+        description="Text to speak; with a recording, what the recording says (optional)",
+    )
+    message_audio_id: uuid.UUID | None = Field(
+        default=None, description="Recording to play (POST /agents/{id}/audio, purpose message)"
+    )
+    screening_format: MessageFormat = "text"
+    screening_message: str | None = Field(
+        default=None,
+        max_length=1000,
+        description=(
+            "Said to a call screener (who is calling and why) before waiting for the person; "
+            "empty hangs up on screened calls"
+        ),
+    )
+    screening_audio_id: uuid.UUID | None = None
+    screening_wait_seconds: int = Field(
+        default=30, ge=1, le=60, description="How long to wait for the person after screening"
+    )
+    classifier: VoicemailClassifier = Field(default_factory=VoicemailClassifier)
 
     @model_validator(mode="after")
     def _message_when_leaving(self) -> VoicemailSettings:
-        if self.enabled and self.action == "leave_message" and not (self.message or "").strip():
-            raise ValueError("Write the message to leave on voicemail")
+        if not self.enabled:
+            return self
+        if self.action == "leave_message":
+            if self.message_format == "text" and not (self.message or "").strip():
+                raise ValueError("Write the message to leave on voicemail")
+            if self.message_format == "recording" and self.message_audio_id is None:
+                raise ValueError("Upload the recording to leave on voicemail")
+        if self.screening_format == "recording" and self.screening_audio_id is None:
+            raise ValueError("Upload the recording to play to call screeners")
+        c = self.classifier
+        if c.model == "connection" and not (c.connection_id and c.model_name):
+            raise ValueError("Choose the connection and model that detect voicemail")
         return self
 
 
 class AmbientSettings(APIModel):
+    """Background noise mixed under the agent's voice."""
+
     enabled: bool = False
     volume: float = Field(default=0.3, ge=0, le=1)
+    audio_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "Custom background sound (POST /agents/{id}/audio, purpose ambient); empty uses "
+            "the default office ambience"
+        ),
+    )
 
 
 ResponseSpeed = Literal["snappy", "balanced", "patient", "custom"]
@@ -430,6 +521,59 @@ class CallSettings(APIModel):
         return seen
 
 
+# Variables ATLAS fills from the lead on every call; agent variables cannot reuse them.
+LEAD_VARIABLES = ("first_name", "last_name", "full_name", "company", "job_title", "email")
+VARIABLE_NAME_PATTERN = r"^[a-z][a-z0-9_]{0,39}$"
+MAX_AGENT_VARIABLES = 30
+# Names the voice service or ATLAS already put in a call's context.
+RESERVED_VARIABLES = frozenset(
+    {
+        *LEAD_VARIABLES,
+        "opted_out",
+        "phone_number",
+        "caller_number",
+        "called_number",
+        "direction",
+        "provider",
+        "source",
+        "initial_context",
+        "gathered_context",
+        "workflow_run_id",
+        "workflow_id",
+        "telephony_configuration_id",
+        "current_time",
+        "current_weekday",
+    }
+)
+_RESERVED_PREFIXES = ("atlas_", "current_time_", "current_weekday_")
+
+
+class AgentVariable(APIModel):
+    """A fixed value prompts can use as `{{name}}`, e.g. an office address or a promo code."""
+
+    name: str = Field(pattern=VARIABLE_NAME_PATTERN, description="Used in prompts as {{name}}")
+    value: str = Field(min_length=1, max_length=500)
+
+    @field_validator("name")
+    @classmethod
+    def _not_reserved(cls, v: str) -> str:
+        if v in LEAD_VARIABLES:
+            raise ValueError(f"'{v}' is filled from the lead; choose another name")
+        if v in RESERVED_VARIABLES or v.startswith(_RESERVED_PREFIXES):
+            raise ValueError(f"'{v}' is reserved; choose another name")
+        return v
+
+    @field_validator("value")
+    @classmethod
+    def _plain(cls, v: str) -> str:
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("Enter a value")
+        if "{" in cleaned or "}" in cleaned:
+            raise ValueError("Values cannot contain { or }")
+        return cleaned
+
+
 class AgentConfig(APIModel):
     """Everything about how an agent runs a call.
 
@@ -477,6 +621,14 @@ class AgentConfig(APIModel):
         default=True, description="Agent confirms it is an AI assistant when asked"
     )
     model_override: AgentModelOverride | None = None
+    variables: list[AgentVariable] = Field(
+        default_factory=list,
+        max_length=MAX_AGENT_VARIABLES,
+        description=(
+            "Agent variables, usable in every prompt, greeting and message as {{name}}. A lead "
+            "field with the same name and a value (custom lead fields) wins on that call"
+        ),
+    )
 
     @field_validator("qualification_questions")
     @classmethod
@@ -496,6 +648,9 @@ class AgentConfig(APIModel):
             raise ValueError("Capture field names must be unique and cannot be 'opted_out'")
         if self.mode == "flow" and self.flow is None:
             raise ValueError("A flow is required in flow mode")
+        variable_names = [v.name for v in self.variables]
+        if len(variable_names) != len(set(variable_names)):
+            raise ValueError("Variable names must be unique")
         return self
 
 

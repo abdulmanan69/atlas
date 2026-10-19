@@ -13,7 +13,7 @@ import { Field } from "@/components/ui/form";
 import { Input, Kbd, Textarea } from "@/components/ui/primitives";
 import { FormSelect, SelectItem } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { VARIABLES } from "@/features/voice/agent-form";
+import { useAgentVariables } from "@/features/voice/agent-variables";
 import { nodeFormSchema, pathFormSchema, type NodeForm, type PathForm } from "@/features/voice/flow/inspector-schema";
 import type { EditorAction, EditorState } from "@/features/voice/flow/model";
 import { ActionsPicker, KnowledgePicker } from "@/features/voice/flow/pickers";
@@ -112,19 +112,24 @@ function useVariableInsert<TForm extends Record<string, unknown>>(form: UseFormR
 }
 
 function VariableChips({ onInsert, disabled }: { onInsert: (v: string) => void; disabled?: boolean }) {
+  const variables = useAgentVariables();
   return (
     <div className="flex flex-wrap items-center gap-1 text-[11.5px] text-muted">
       <span className="mr-0.5">Insert:</span>
-      {VARIABLES.map((v) => (
+      {variables.map((v) => (
         <button
-          key={v}
+          key={v.name}
           type="button"
           disabled={disabled}
+          title={v.source === "agent" ? `Agent variable: ${v.value ?? ""}` : "Filled from the lead"}
           onMouseDown={(e) => e.preventDefault()}
-          onClick={() => onInsert(v)}
-          className="rounded border border-line bg-surface px-1.5 py-px font-mono text-[11px] text-ink-2 hover:border-accent hover:text-accent disabled:opacity-50"
+          onClick={() => onInsert(v.name)}
+          className={cn(
+            "rounded border bg-surface px-1.5 py-px font-mono text-[11px] text-ink-2 hover:border-accent hover:text-accent disabled:opacity-50",
+            v.source === "agent" ? "border-accent/40" : "border-line",
+          )}
         >
-          {v}
+          {v.name}
         </button>
       ))}
     </div>

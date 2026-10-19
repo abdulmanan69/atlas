@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -15,6 +16,7 @@ from app.core.exceptions import install_exception_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import (
     BodySizeLimitMiddleware,
+    EmbedCorsMiddleware,
     RequestContextMiddleware,
     SkipCompressedMediaMiddleware,
 )
@@ -89,7 +91,14 @@ def create_app() -> FastAPI:
         expose_headers=["X-Request-ID", "Server-Timing"],
         max_age=600,
     )
-    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_request_bytes)
+    # Outside CORSMiddleware: the website widget is called from tenants' own sites.
+    app.add_middleware(EmbedCorsMiddleware, prefix="/api/v1/public/embed/")
+    app.add_middleware(
+        BodySizeLimitMiddleware,
+        max_bytes=settings.max_request_bytes,
+        # Agent sound files: up to 10 MB plus the multipart envelope.
+        path_limits=((re.compile(r"/api/v1/agents/[^/]+/audio"), 11 * 1024 * 1024),),
+    )
     app.add_middleware(RequestContextMiddleware, hsts=settings.is_production)
     app.include_router(api_router)
     return app

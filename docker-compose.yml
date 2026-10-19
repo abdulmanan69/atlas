@@ -289,6 +289,11 @@ services:
       # library's own choice, measured best while the language model runs: with 2 the
       # voice stuttered 26 times in 10 turns, with 1 never (docs/perf/local-turn-contention.json).
       POCKET_TTS_THREADS: "${LOCAL_TTS_THREADS:-1}"
+      # Optional voice cloning: a Hugging Face token of an account that accepted the terms
+      # of the gated kyutai/pocket-tts weights (docs/local-models.md, "Voice cloning").
+      # Empty = no cloning; built-in voices work either way. Cloned voices are kept in the
+      # volume below (voices/).
+      HF_TOKEN: "${POCKET_TTS_HF_TOKEN:-}"
     ports:
       - "127.0.0.1:8002:8000"
     volumes:

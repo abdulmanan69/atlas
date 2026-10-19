@@ -1,27 +1,45 @@
 /**
- * Call settings: how quickly the agent replies, how long a call may run, which words speech
- * recognition should know, what to do on voicemail, and background ambience. Agent-level,
- * for guided and flow agents alike.
+ * Call settings: how quickly the agent replies, how long a call may run, words speech
+ * recognition should know, background noise, voicemail and screening, agent variables, the
+ * website widget and the agent's ID. Agent-level, for guided and flow agents alike.
+ *
+ * Grouped into sections with a small navigation list (a row of chips on narrow screens),
+ * so nothing is buried at the bottom of a long page.
  */
-import { Plus, X } from "lucide-react";
-import { useState } from "react";
+import { AudioLines, BookA, Fingerprint, Gauge, Globe, PhoneOff, Plus, Timer, Variable, X, type LucideIcon } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
+import { PRODUCT_NAME } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/form";
-import { Input, Label, Textarea } from "@/components/ui/primitives";
+import { Input, Label } from "@/components/ui/primitives";
 import { Segmented } from "@/components/ui/segmented";
-import { Select, SelectItem } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import type { ResponseSpeed } from "@/features/calls/latency-types";
+import { CopyField } from "@/features/developer/copy-button";
 import { RESPONSE_SPEEDS, speedFields, type AgentForm } from "@/features/voice/agent-form";
 import { useConnections, useLatencyGuide, useModelSelection } from "@/features/voice/queries";
+import { AudioFileField } from "@/features/voice/settings/audio-file-field";
+import { NOISE_LEVELS } from "@/features/voice/settings/settings-model";
+import { VariablesSection } from "@/features/voice/settings/variables-section";
+import { VoicemailSection } from "@/features/voice/settings/voicemail-section";
+import { WebsiteSection } from "@/features/voice/settings/website-section";
+import { cn } from "@/lib/utils";
 
-const AMBIENCE_LEVELS: { value: string; label: string; volume: number }[] = [
-  { value: "quiet", label: "Quiet", volume: 0.15 },
-  { value: "medium", label: "Medium", volume: 0.3 },
-  { value: "loud", label: "Noticeable", volume: 0.5 },
+type SectionId = "speed" | "limits" | "recognition" | "noise" | "voicemail" | "variables" | "website" | "identity";
+const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
+  { id: "speed", label: "Response speed", icon: Gauge },
+  { id: "limits", label: "Length & turn-taking", icon: Timer },
+  { id: "recognition", label: "Words to recognise", icon: BookA },
+  { id: "noise", label: "Background noise", icon: AudioLines },
+  { id: "voicemail", label: "Voicemail & screening", icon: PhoneOff },
+  { id: "variables", label: "Variables", icon: Variable },
+  { id: "website", label: "Add to website", icon: Globe },
+  { id: "identity", label: "Agent ID", icon: Fingerprint },
 ];
+const anchor = (id: SectionId) => `call-settings-${id}`;
 
 /** `true`/`false` once the voice in use is known; `null` while loading or when no voice is chosen. */
 function useTtsCacheSupported(form: UseFormReturn<AgentForm>): boolean | null {
@@ -36,12 +54,77 @@ function useTtsCacheSupported(form: UseFormReturn<AgentForm>): boolean | null {
   return provider ? guide.data.tts_cache_providers.includes(provider) : null;
 }
 
-function Row({ title, description, control, children }: { title: string; description: string; control?: React.ReactNode; children?: React.ReactNode }) {
+/** Highlights the section in view; clicking scrolls to it. */
+function useActiveSection(): [SectionId, (id: SectionId) => void] {
+  const [active, setActive] = useState<SectionId>("speed");
+  const pinned = useRef<number>(0);
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const visible = new Map<SectionId, number>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const id = entry.target.getAttribute("data-section") as SectionId;
+          if (entry.isIntersecting) visible.set(id, entry.boundingClientRect.top);
+          else visible.delete(id);
+        }
+        if (Date.now() < pinned.current) return;
+        const first = SECTIONS.find((s) => visible.has(s.id));
+        if (first) setActive(first.id);
+      },
+      { rootMargin: "-80px 0px -45% 0px" },
+    );
+    for (const s of SECTIONS) {
+      const el = document.getElementById(anchor(s.id));
+      if (el) observer.observe(el);
+    }
+    return () => observer.disconnect();
+  }, []);
+  const go = (id: SectionId) => {
+    setActive(id);
+    pinned.current = Date.now() + 800; // keep the clicked item highlighted while scrolling
+    const el = document.getElementById(anchor(id));
+    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+    el?.focus({ preventScroll: true });
+  };
+  return [active, go];
+}
+
+function SectionNav({ active, onGo, errors }: { active: SectionId; onGo: (id: SectionId) => void; errors: Partial<Record<SectionId, boolean>> }) {
   return (
-    <section className="rounded-lg border border-line">
+    <nav aria-label="Call settings sections" className="md:sticky md:top-[72px] md:self-start">
+      <ul className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1 md:mx-0 md:flex-col md:overflow-visible md:px-0 md:pb-0">
+        {SECTIONS.map(({ id, label, icon: Icon }) => (
+          <li key={id} className="shrink-0">
+            <button
+              type="button"
+              onClick={() => onGo(id)}
+              aria-current={active === id ? "true" : undefined}
+              className={cn(
+                "flex w-full items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-left text-[12.5px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-ink",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+                active === id && "bg-surface-2 text-ink",
+              )}
+            >
+              <Icon className={cn("size-3.5 shrink-0", active === id ? "text-accent" : "text-faint")} aria-hidden />
+              <span className="flex-1">{label}</span>
+              {errors[id] ? <span className="size-1.5 rounded-full bg-danger" aria-label="has errors" /> : null}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
+function Row({ id, title, description, control, children }: { id: SectionId; title: string; description: string; control?: ReactNode; children?: ReactNode }) {
+  return (
+    <section id={anchor(id)} data-section={id} tabIndex={-1} aria-labelledby={`${anchor(id)}-title`} className="scroll-mt-20 rounded-lg border border-line focus:outline-none">
       <div className="flex items-start justify-between gap-4 px-4 py-3">
         <div className="min-w-0">
-          <h3 className="text-[13.5px] font-semibold">{title}</h3>
+          <h3 id={`${anchor(id)}-title`} className="text-[13.5px] font-semibold">
+            {title}
+          </h3>
           <p className="mt-0.5 text-[12.5px] text-muted">{description}</p>
         </div>
         {control}
@@ -112,9 +195,62 @@ function KeyTerms({ form }: { form: UseFormReturn<AgentForm> }) {
   );
 }
 
+function BackgroundNoise({ form, agentId }: { form: UseFormReturn<AgentForm>; agentId: string }) {
+  const ambient = form.watch("call_settings.ambient");
+  const percent = Math.round(ambient.volume * 100);
+  const setVolume = (v: number) => form.setValue("call_settings.ambient.volume", Math.min(1, Math.max(0, Math.round(v) / 100)), { shouldDirty: true });
+  if (!ambient.enabled) return <p className="text-[12.5px] text-muted">Off: calls are silent between replies.</p>;
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-2.5">
+        <div className="flex items-center justify-between">
+          <Label id="noise-volume-label">Volume</Label>
+          <span className="font-mono text-[12px] text-ink-2" aria-hidden>
+            {percent}%
+          </span>
+        </div>
+        <Slider value={percent} min={0} max={100} step={1} onValueChange={setVolume} label="Background noise volume" valueText={`${percent}%`} aria-labelledby="noise-volume-label" />
+        <div className="flex flex-wrap items-center gap-1.5 text-[12px] text-muted">
+          Quick pick:
+          {NOISE_LEVELS.map((l) => {
+            const on = percent === Math.round(l.volume * 100);
+            return (
+              <button
+                key={l.label}
+                type="button"
+                aria-pressed={on}
+                onClick={() => setVolume(l.volume * 100)}
+                className={cn(
+                  "rounded border px-2 py-0.5 text-[12px] transition-colors hover:border-accent hover:text-accent",
+                  on ? "border-accent bg-accent/10 text-accent" : "border-line bg-surface text-ink-2",
+                )}
+              >
+                {l.label} <span className="font-mono text-[11px] opacity-70">{Math.round(l.volume * 100)}%</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="flex flex-col gap-2 border-t border-line pt-4">
+        <Label>Sound</Label>
+        <AudioFileField
+          agentId={agentId}
+          purpose="ambient"
+          label="Custom background sound"
+          value={ambient.audio_id}
+          onChange={(v) => form.setValue("call_settings.ambient.audio_id", v, { shouldDirty: true })}
+          emptyText="Using the default office ambience. Upload your own sound to replace it:"
+          uploadLabel="Upload custom sound"
+          resetLabel="Use default office ambience"
+        />
+      </div>
+    </div>
+  );
+}
+
 const SPEECH_REUSE_HINT = "Plays back lines it has said before, such as the greeting, instead of generating them again.";
 
-export function CallSettingsTab({ form }: { form: UseFormReturn<AgentForm> }) {
+export function CallSettingsTab({ form, agentId, canEdit }: { form: UseFormReturn<AgentForm>; agentId: string; canEdit: boolean }) {
   const e = form.formState.errors.call_settings;
   const speed = form.watch("call_settings.response_speed");
   const custom = speed === "custom";
@@ -125,9 +261,9 @@ export function CallSettingsTab({ form }: { form: UseFormReturn<AgentForm> }) {
   const cacheUnavailable = cacheSupported === false && !ttsCache;
   const turnStart = form.watch("call_settings.turn_start");
   const turnStop = form.watch("call_settings.turn_stop");
-  const voicemail = form.watch("call_settings.voicemail");
-  const ambient = form.watch("call_settings.ambient");
-  const ambienceLevel = [...AMBIENCE_LEVELS].sort((a, b) => Math.abs(a.volume - ambient.volume) - Math.abs(b.volume - ambient.volume))[0]?.value ?? "medium";
+  const voicemailOn = form.watch("call_settings.voicemail.enabled");
+  const ambientOn = form.watch("call_settings.ambient.enabled");
+  const [active, go] = useActiveSection();
 
   const chooseSpeed = (next: ResponseSpeed) => {
     const opts = { shouldDirty: true, shouldValidate: true } as const;
@@ -142,148 +278,138 @@ export function CallSettingsTab({ form }: { form: UseFormReturn<AgentForm> }) {
     form.setValue("call_settings.idle_timeout_seconds", fields.idle_timeout_seconds, opts);
   };
 
+  const errors: Partial<Record<SectionId, boolean>> = {
+    limits: Boolean(e?.max_call_seconds || e?.idle_timeout_seconds || e?.turn_start_min_words || e?.smart_turn_stop_seconds),
+    recognition: Boolean(e?.key_terms),
+    noise: Boolean(e?.ambient),
+    voicemail: Boolean(e?.voicemail),
+    variables: Boolean(form.formState.errors.variables),
+  };
+
   return (
-    <div className="flex flex-col gap-4">
-      <Row title="Response speed" description="How quickly the agent answers once the person stops talking.">
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-2">
-            <Segmented<ResponseSpeed> label="Response speed" value={speed} options={RESPONSE_SPEEDS.map((s) => ({ value: s.value, label: s.label }))} onChange={chooseSpeed} className="self-start" />
-            <p className="text-[12.5px] text-ink-2" aria-live="polite">
-              {RESPONSE_SPEEDS.find((s) => s.value === speed)?.description}
-            </p>
-            {preset ? (
-              <p className="text-[12px] text-muted">
-                Hangs up after <span className="font-mono text-ink-2">{preset.idle_timeout_seconds} s</span> of silence. Choose Custom to set turn-taking and the silence limit yourself.
-              </p>
-            ) : null}
-          </div>
-          <div className="flex flex-col gap-3 border-t border-line pt-4">
-            <Toggle
-              label="Shorter memory on long calls"
-              description="Condenses the early part of a long conversation so replies stay quick. The agent keeps the gist, not every word."
-              checked={compaction}
-              onChange={(v) => form.setValue("call_settings.context_compaction", v, { shouldDirty: true })}
-            />
-            <Toggle
-              label="Reuse generated speech"
-              description={`${SPEECH_REUSE_HINT} ${cacheUnavailable ? "Not available with the voice provider in use." : "Only some voice providers support this."}`}
-              checked={ttsCache}
-              disabled={cacheUnavailable}
-              onChange={(v) => form.setValue("call_settings.tts_cache", v, { shouldDirty: true })}
-            />
-          </div>
-        </div>
-      </Row>
-
-      <Row title="Length and silence" description="Calls end when the limit is reached or the person stops responding.">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Longest call" hint="Seconds. 30 to 1200." error={e?.max_call_seconds?.message}>
-            <Input type="number" inputMode="numeric" min={30} max={1200} step={30} className="font-mono" {...form.register("call_settings.max_call_seconds", { valueAsNumber: true })} />
-          </Field>
-          {custom ? (
-            <Field label="Hang up after silence" hint="Seconds without the person speaking. 3 to 60." error={e?.idle_timeout_seconds?.message}>
-              <Input type="number" inputMode="numeric" min={3} max={60} className="font-mono" {...form.register("call_settings.idle_timeout_seconds", { valueAsNumber: true })} />
-            </Field>
-          ) : null}
-        </div>
-      </Row>
-
-      {custom ? (
-        <Row title="Turn-taking" description="When the agent treats the person as having started and finished speaking.">
-          <div className="grid gap-5 sm:grid-cols-2">
+    <div className="grid gap-4 md:grid-cols-[190px_minmax(0,1fr)]">
+      <SectionNav active={active} onGo={go} errors={errors} />
+      <div className="flex min-w-0 flex-col gap-4">
+        <Row id="speed" title="Response speed" description="How quickly the agent answers once the person stops talking.">
+          <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
-              <Label>The person starts talking</Label>
-              <Segmented
-                label="When the person starts talking"
-                value={turnStart}
-                options={[
-                  { value: "default", label: "On any speech" },
-                  { value: "min_words", label: "After a few words" },
-                ]}
-                onChange={(v) => form.setValue("call_settings.turn_start", v, { shouldDirty: true })}
-              />
-              {turnStart === "min_words" ? (
-                <Field label="Words before it counts" hint="1 to 10. Filters out 'mm-hm' while the agent talks." error={e?.turn_start_min_words?.message}>
-                  <Input type="number" inputMode="numeric" min={1} max={10} className="w-28 font-mono" {...form.register("call_settings.turn_start_min_words", { valueAsNumber: true })} />
-                </Field>
+              <Segmented<ResponseSpeed> label="Response speed" value={speed} options={RESPONSE_SPEEDS.map((s) => ({ value: s.value, label: s.label }))} onChange={chooseSpeed} className="self-start" />
+              <p className="text-[12.5px] text-ink-2" aria-live="polite">
+                {RESPONSE_SPEEDS.find((s) => s.value === speed)?.description}
+              </p>
+              {preset ? (
+                <p className="text-[12px] text-muted">
+                  Hangs up after <span className="font-mono text-ink-2">{preset.idle_timeout_seconds} s</span> of silence. Choose Custom to set turn-taking and the silence limit yourself.
+                </p>
               ) : null}
             </div>
-            <div className="flex flex-col gap-2">
-              <Label>The person has finished</Label>
-              <Segmented
-                label="When the person has finished"
-                value={turnStop}
-                options={[
-                  { value: "transcription", label: "When they pause" },
-                  { value: "turn_analyzer", label: "Smart detection" },
-                ]}
-                onChange={(v) => form.setValue("call_settings.turn_stop", v, { shouldDirty: true })}
+            <div className="flex flex-col gap-3 border-t border-line pt-4">
+              <Toggle
+                label="Shorter memory on long calls"
+                description="Condenses the early part of a long conversation so replies stay quick. The agent keeps the gist, not every word."
+                checked={compaction}
+                onChange={(v) => form.setValue("call_settings.context_compaction", v, { shouldDirty: true })}
               />
-              {turnStop === "turn_analyzer" ? (
-                <Field label="Longest pause to wait" hint="Seconds, 0.5 to 5. Smart detection waits up to this long for the sentence to end." error={e?.smart_turn_stop_seconds?.message}>
-                  <Input type="number" inputMode="decimal" min={0.5} max={5} step={0.5} className="w-28 font-mono" {...form.register("call_settings.smart_turn_stop_seconds", { valueAsNumber: true })} />
-                </Field>
-              ) : null}
+              <Toggle
+                label="Reuse generated speech"
+                description={`${SPEECH_REUSE_HINT} ${cacheUnavailable ? "Not available with the voice provider in use." : "Only some voice providers support this."}`}
+                checked={ttsCache}
+                disabled={cacheUnavailable}
+                onChange={(v) => form.setValue("call_settings.tts_cache", v, { shouldDirty: true })}
+              />
             </div>
           </div>
         </Row>
-      ) : null}
 
-      <Row title="Words to recognise" description="Names and terms speech recognition would otherwise mishear.">
-        <KeyTerms form={form} />
-      </Row>
-
-      <Row
-        title="Voicemail"
-        description="Spot answering machines so the agent doesn't pitch to a beep."
-        control={<Switch aria-label="Detect voicemail" checked={voicemail.enabled} onCheckedChange={(v) => form.setValue("call_settings.voicemail.enabled", v, { shouldDirty: true, shouldValidate: true })} />}
-      >
-        {voicemail.enabled ? (
-          <div className="flex flex-col gap-3">
-            <Segmented
-              label="On voicemail"
-              value={voicemail.action}
-              options={[
-                { value: "hangup", label: "Hang up" },
-                { value: "leave_message", label: "Leave a message" },
-              ]}
-              onChange={(v) => form.setValue("call_settings.voicemail.action", v, { shouldDirty: true, shouldValidate: true })}
-            />
-            {voicemail.action === "leave_message" ? (
-              <Field label="Message" hint="Spoken after the beep. Variables such as {{first_name}} work here." error={e?.voicemail?.message?.message} required>
-                <Textarea rows={3} {...form.register("call_settings.voicemail.message")} />
+        <Row id="limits" title="Length and turn-taking" description="Calls end when the limit is reached or the person stops responding.">
+          <div className="flex flex-col gap-5">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Longest call" hint="Seconds. 30 to 1200." error={e?.max_call_seconds?.message}>
+                <Input type="number" inputMode="numeric" min={30} max={1200} step={30} className="font-mono" {...form.register("call_settings.max_call_seconds", { valueAsNumber: true })} />
               </Field>
-            ) : null}
+              {custom ? (
+                <Field label="Hang up after silence" hint="Seconds without the person speaking. 3 to 60." error={e?.idle_timeout_seconds?.message}>
+                  <Input type="number" inputMode="numeric" min={3} max={60} className="font-mono" {...form.register("call_settings.idle_timeout_seconds", { valueAsNumber: true })} />
+                </Field>
+              ) : null}
+            </div>
+            {custom ? (
+              <div className="grid gap-5 border-t border-line pt-4 sm:grid-cols-2">
+                <div className="flex flex-col gap-2">
+                  <Label>The person starts talking</Label>
+                  <Segmented
+                    label="When the person starts talking"
+                    value={turnStart}
+                    options={[
+                      { value: "default", label: "On any speech" },
+                      { value: "min_words", label: "After a few words" },
+                    ]}
+                    onChange={(v) => form.setValue("call_settings.turn_start", v, { shouldDirty: true })}
+                  />
+                  {turnStart === "min_words" ? (
+                    <Field label="Words before it counts" hint="1 to 10. Filters out 'mm-hm' while the agent talks." error={e?.turn_start_min_words?.message}>
+                      <Input type="number" inputMode="numeric" min={1} max={10} className="w-28 font-mono" {...form.register("call_settings.turn_start_min_words", { valueAsNumber: true })} />
+                    </Field>
+                  ) : null}
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>The person has finished</Label>
+                  <Segmented
+                    label="When the person has finished"
+                    value={turnStop}
+                    options={[
+                      { value: "transcription", label: "When they pause" },
+                      { value: "turn_analyzer", label: "Smart detection" },
+                    ]}
+                    onChange={(v) => form.setValue("call_settings.turn_stop", v, { shouldDirty: true })}
+                  />
+                  {turnStop === "turn_analyzer" ? (
+                    <Field label="Longest pause to wait" hint="Seconds, 0.5 to 5. Smart detection waits up to this long for the sentence to end." error={e?.smart_turn_stop_seconds?.message}>
+                      <Input type="number" inputMode="decimal" min={0.5} max={5} step={0.5} className="w-28 font-mono" {...form.register("call_settings.smart_turn_stop_seconds", { valueAsNumber: true })} />
+                    </Field>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <p className="border-t border-line pt-3 text-[12px] text-muted">Turn-taking follows the response speed. Choose Custom under Response speed to set it yourself.</p>
+            )}
           </div>
-        ) : (
-          <p className="text-[12.5px] text-muted">Off: the agent treats whatever answers as a person.</p>
-        )}
-      </Row>
+        </Row>
 
-      <Row
-        title="Background ambience"
-        description="A faint office sound bed so silences feel less synthetic."
-        control={<Switch aria-label="Background ambience" checked={ambient.enabled} onCheckedChange={(v) => form.setValue("call_settings.ambient.enabled", v, { shouldDirty: true })} />}
-      >
-        {ambient.enabled ? (
-          <Field label="Level">
-            <Select
-              aria-label="Ambience level"
-              className="w-48"
-              value={ambienceLevel}
-              onValueChange={(v) => form.setValue("call_settings.ambient.volume", AMBIENCE_LEVELS.find((l) => l.value === v)?.volume ?? 0.3, { shouldDirty: true })}
-            >
-              {AMBIENCE_LEVELS.map((l) => (
-                <SelectItem key={l.value} value={l.value}>
-                  {l.label}
-                </SelectItem>
-              ))}
-            </Select>
-          </Field>
-        ) : (
-          <p className="text-[12.5px] text-muted">Off: calls are silent between replies.</p>
-        )}
-      </Row>
+        <Row id="recognition" title="Words to recognise" description="Names and terms speech recognition would otherwise mishear.">
+          <KeyTerms form={form} />
+        </Row>
+
+        <Row
+          id="noise"
+          title="Background noise"
+          description="A soft sound bed under the agent's voice so pauses feel natural."
+          control={<Switch aria-label="Background noise" checked={ambientOn} onCheckedChange={(v) => form.setValue("call_settings.ambient.enabled", v, { shouldDirty: true })} />}
+        >
+          <BackgroundNoise form={form} agentId={agentId} />
+        </Row>
+
+        <Row
+          id="voicemail"
+          title="Voicemail & screening"
+          description="Spot answering machines, call screeners and phone menus so the agent doesn't pitch to a beep."
+          control={<Switch aria-label="Detect voicemail and screening" checked={voicemailOn} onCheckedChange={(v) => form.setValue("call_settings.voicemail.enabled", v, { shouldDirty: true, shouldValidate: true })} />}
+        >
+          <VoicemailSection form={form} agentId={agentId} />
+        </Row>
+
+        <Row id="variables" title="Variables" description="Fixed values any prompt, greeting or message can use as {{name}}. Saved with the agent; publish to use them on calls.">
+          <VariablesSection form={form} />
+        </Row>
+
+        <Row id="website" title="Add to website" description="A talk-to-us button for your own site that connects visitors to this agent.">
+          <WebsiteSection agentId={agentId} canEdit={canEdit} />
+        </Row>
+
+        <Row id="identity" title="Agent ID" description={`Identifies this agent in the ${PRODUCT_NAME} API, for example to start calls from your own systems.`}>
+          <CopyField value={agentId} label="Agent ID" className="max-w-md" />
+        </Row>
+      </div>
     </div>
   );
 }

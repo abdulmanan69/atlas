@@ -66,14 +66,79 @@ export const callSettingsSchema = z
     voicemail: z.object({
       enabled: z.boolean(),
       action: z.enum(["hangup", "leave_message"]),
+      message_format: z.enum(["text", "recording"]),
       message: z.string().max(1000, "Keep the message under 1000 characters"),
+      message_audio_id: z.string().nullable(),
+      screening_format: z.enum(["text", "recording"]),
+      screening_message: z.string().max(1000, "Keep the message under 1000 characters"),
+      screening_audio_id: z.string().nullable(),
+      screening_wait_seconds: z.number({ error: "Enter seconds" }).int("Whole seconds").min(1, "At least 1 second").max(60, "At most 60 seconds"),
+      classifier: z.object({
+        model: z.enum(["agent", "connection"]),
+        connection_id: z.string(),
+        model_name: z.string().max(120),
+        instructions: z.string().max(8000, "Keep the instructions under 8000 characters"),
+      }),
     }),
-    ambient: z.object({ enabled: z.boolean(), volume: z.number().min(0).max(1) }),
+    ambient: z.object({ enabled: z.boolean(), volume: z.number().min(0).max(1), audio_id: z.string().nullable() }),
   })
   .superRefine((v, ctx) => {
-    if (v.voicemail.enabled && v.voicemail.action === "leave_message" && !v.voicemail.message.trim())
+    const vm = v.voicemail;
+    if (!vm.enabled) return;
+    if (vm.action === "leave_message" && vm.message_format === "text" && !vm.message.trim())
       ctx.addIssue({ code: "custom", path: ["voicemail", "message"], message: "Write the message to leave" });
+    if (vm.action === "leave_message" && vm.message_format === "recording" && !vm.message_audio_id)
+      ctx.addIssue({ code: "custom", path: ["voicemail", "message_audio_id"], message: "Upload the recording to leave" });
+    if (vm.screening_format === "recording" && !vm.screening_audio_id)
+      ctx.addIssue({ code: "custom", path: ["voicemail", "screening_audio_id"], message: "Upload the recording for call screeners" });
+    if (vm.classifier.model === "connection") {
+      if (!vm.classifier.connection_id) ctx.addIssue({ code: "custom", path: ["voicemail", "classifier", "connection_id"], message: "Choose a connection" });
+      if (!vm.classifier.model_name.trim()) ctx.addIssue({ code: "custom", path: ["voicemail", "classifier", "model_name"], message: "Enter the model" });
+    }
   });
+
+/** Lead fields every call fills. Agent variables cannot reuse these or other reserved names (mirrors the API). */
+export const VARIABLES = ["first_name", "last_name", "full_name", "company", "job_title", "email"];
+const RESERVED_VARIABLES = new Set([
+  ...VARIABLES,
+  "opted_out",
+  "phone_number",
+  "caller_number",
+  "called_number",
+  "direction",
+  "provider",
+  "source",
+  "initial_context",
+  "gathered_context",
+  "workflow_run_id",
+  "workflow_id",
+  "telephony_configuration_id",
+  "current_time",
+  "current_weekday",
+]);
+export const VARIABLE_NAME = /^[a-z][a-z0-9_]{0,39}$/;
+export const MAX_VARIABLES = 30;
+
+/** Why `name` cannot be an agent variable, or null when it can. */
+export function variableNameProblem(name: string): string | null {
+  if (!VARIABLE_NAME.test(name)) return "Lowercase letters, numbers and underscores; start with a letter (max 40)";
+  if (VARIABLES.includes(name)) return "Filled from the lead; choose another name";
+  if (RESERVED_VARIABLES.has(name) || /^(atlas_|current_time_|current_weekday_)/.test(name)) return "Reserved; choose another name";
+  return null;
+}
+
+const variableSchema = z.object({
+  name: z.string().superRefine((n, ctx) => {
+    const problem = variableNameProblem(n);
+    if (problem) ctx.addIssue({ code: "custom", message: problem });
+  }),
+  value: z
+    .string()
+    .trim()
+    .min(1, "Enter a value")
+    .max(500, "Keep values under 500 characters")
+    .refine((v) => !/[{}]/.test(v), "Values cannot contain { or }"),
+});
 
 export const agentFormSchema = z
   .object({
@@ -111,8 +176,13 @@ export const agentFormSchema = z
     ai_disclosure: z.boolean(),
     override_llm: choice.nullable(),
     override_tts: choice.nullable(),
+    variables: z.array(variableSchema).max(MAX_VARIABLES, `At most ${MAX_VARIABLES} variables`),
   })
   .superRefine((v, ctx) => {
+    const vars = v.variables.map((x) => x.name);
+    vars.forEach((n, i) => {
+      if (vars.indexOf(n) !== i) ctx.addIssue({ code: "custom", path: ["variables", i, "name"], message: "Duplicate name" });
+    });
     const codes = v.outcomes.map((o) => o.code);
     codes.forEach((c, i) => {
       if (codes.indexOf(c) !== i) ctx.addIssue({ code: "custom", path: ["outcomes", i, "code"], message: "Duplicate code" });
@@ -155,8 +225,24 @@ export function toForm(c: AgentConfig): AgentForm {
       turn_stop: cs?.turn_stop ?? "transcription",
       smart_turn_stop_seconds: cs?.smart_turn_stop_seconds ?? 2,
       key_terms: [...(cs?.key_terms ?? [])],
-      voicemail: { enabled: cs?.voicemail?.enabled ?? true, action: cs?.voicemail?.action ?? "hangup", message: cs?.voicemail?.message ?? "" },
-      ambient: { enabled: cs?.ambient?.enabled ?? false, volume: cs?.ambient?.volume ?? 0.3 },
+      voicemail: {
+        enabled: cs?.voicemail?.enabled ?? true,
+        action: cs?.voicemail?.action ?? "hangup",
+        message_format: cs?.voicemail?.message_format ?? "text",
+        message: cs?.voicemail?.message ?? "",
+        message_audio_id: cs?.voicemail?.message_audio_id ?? null,
+        screening_format: cs?.voicemail?.screening_format ?? "text",
+        screening_message: cs?.voicemail?.screening_message ?? "",
+        screening_audio_id: cs?.voicemail?.screening_audio_id ?? null,
+        screening_wait_seconds: cs?.voicemail?.screening_wait_seconds ?? 30,
+        classifier: {
+          model: cs?.voicemail?.classifier?.model ?? "agent",
+          connection_id: cs?.voicemail?.classifier?.connection_id ?? "",
+          model_name: cs?.voicemail?.classifier?.model_name ?? "",
+          instructions: cs?.voicemail?.classifier?.instructions ?? "",
+        },
+      },
+      ambient: { enabled: cs?.ambient?.enabled ?? false, volume: cs?.ambient?.volume ?? 0.3, audio_id: cs?.ambient?.audio_id ?? null },
     },
     persona_name: c.persona_name ?? "Alex",
     company_name: c.company_name,
@@ -172,19 +258,33 @@ export function toForm(c: AgentConfig): AgentForm {
     ai_disclosure: c.ai_disclosure ?? true,
     override_llm: normalizeChoice(c.model_override?.llm),
     override_tts: normalizeChoice(c.model_override?.tts),
+    variables: (c.variables ?? []).map((v) => ({ name: v.name, value: v.value })),
   };
 }
+
+const orNull = (v: string) => v.trim() || null;
 
 export function fromForm(f: AgentForm): AgentConfig {
   const override = f.override_llm || f.override_tts ? { llm: f.override_llm, tts: f.override_tts } : null;
   const flow = f.mode === "flow" && f.flow ? { nodes: f.flow.nodes, paths: f.flow.paths, viewport: null } : null;
+  const vm = f.call_settings.voicemail;
   return {
     mode: f.mode,
     flow,
     global_rules: f.global_rules.trim() || null,
     call_settings: {
       ...f.call_settings,
-      voicemail: { ...f.call_settings.voicemail, message: f.call_settings.voicemail.message.trim() || null },
+      voicemail: {
+        ...vm,
+        message: orNull(vm.message),
+        screening_message: orNull(vm.screening_message),
+        classifier: {
+          model: vm.classifier.model,
+          connection_id: vm.classifier.model === "connection" ? orNull(vm.classifier.connection_id) : null,
+          model_name: vm.classifier.model === "connection" ? orNull(vm.classifier.model_name) : null,
+          instructions: orNull(vm.classifier.instructions),
+        },
+      },
     },
     persona_name: f.persona_name,
     company_name: f.company_name,
@@ -199,6 +299,7 @@ export function fromForm(f: AgentForm): AgentConfig {
     allow_interrupt: f.allow_interrupt,
     ai_disclosure: f.ai_disclosure,
     model_override: override,
+    variables: f.variables.map((v) => ({ name: v.name, value: v.value.trim() })),
   };
 }
 
@@ -213,5 +314,3 @@ export const LANGUAGES: [string, string][] = [
   ["pt", "Portuguese"],
   ["tr", "Turkish"],
 ];
-
-export const VARIABLES = ["first_name", "last_name", "full_name", "company", "job_title", "email"];

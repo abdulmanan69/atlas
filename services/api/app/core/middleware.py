@@ -80,18 +80,36 @@ class RequestContextMiddleware:
 
 
 class BodySizeLimitMiddleware:
-    """Reject request bodies above a configured byte limit (413)."""
+    """Reject request bodies above a configured byte limit (413).
 
-    def __init__(self, app: ASGIApp, *, max_bytes: int) -> None:
+    `path_limits` raises the limit for specific routes (pattern on the path), e.g. sound
+    file uploads, which carry a 10 MB file plus the multipart envelope.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        max_bytes: int,
+        path_limits: tuple[tuple[re.Pattern[str], int], ...] = (),
+    ) -> None:
         self.app = app
         self.max_bytes = max_bytes
+        self.path_limits = path_limits
+
+    def _limit(self, path: str) -> int:
+        for pattern, limit in self.path_limits:
+            if pattern.fullmatch(path):
+                return limit
+        return self.max_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        max_bytes = self._limit(scope.get("path", ""))
         declared = dict(scope["headers"]).get(b"content-length")
-        if declared is not None and declared.isdigit() and int(declared) > self.max_bytes:
+        if declared is not None and declared.isdigit() and int(declared) > max_bytes:
             await _reject_413(send)
             return
 
@@ -102,7 +120,7 @@ class BodySizeLimitMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > self.max_bytes:
+                if received > max_bytes:
                     raise _PayloadTooLargeError
             return message
 
@@ -154,6 +172,71 @@ class SkipCompressedMediaMiddleware:
                 ):
                     headers.append((b"content-encoding", b"identity"))
                     message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+
+class EmbedCorsMiddleware:
+    """Cross-origin access for the public website-widget routes.
+
+    Widgets run on tenants' own sites, so these routes cannot use the API's fixed CORS
+    allow-list. Preflights are answered here (before `CORSMiddleware` would refuse an
+    unknown origin) and responses echo the caller's origin without credentials. Whether a
+    site may actually start a session is decided by the route, per widget, from its
+    allowed sites; nothing here grants access to anything else.
+    """
+
+    def __init__(self, app: ASGIApp, *, prefix: str) -> None:
+        self.app = app
+        self.prefix = prefix
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not scope.get("path", "").startswith(self.prefix):
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope["headers"])
+        origin = headers.get(b"origin")
+        if origin is None:
+            await self.app(scope, receive, send)
+            return
+        if scope["method"] == "OPTIONS" and b"access-control-request-method" in headers:
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 204,
+                    "headers": [
+                        (b"access-control-allow-origin", origin),
+                        (b"vary", b"Origin"),
+                        (b"access-control-allow-methods", b"GET, POST, OPTIONS"),
+                        (b"access-control-allow-headers", b"Content-Type"),
+                        (b"access-control-max-age", b"600"),
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": b""})
+            return
+
+        async def send_wrapper(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                kept: list[tuple[bytes, bytes]] = []
+                vary: list[bytes] = []
+                for k, v in message.get("headers", []):
+                    name = k.lower()
+                    if name == b"vary":
+                        vary.extend(p.strip() for p in v.split(b",") if p.strip())
+                    elif name not in (
+                        b"access-control-allow-origin",
+                        b"access-control-allow-credentials",
+                    ):
+                        kept.append((k, v))
+                if b"origin" not in {p.lower() for p in vary}:
+                    vary.append(b"Origin")
+                message["headers"] = [
+                    *kept,
+                    (b"access-control-allow-origin", origin),
+                    (b"vary", b", ".join(vary)),
+                ]
             await send(message)
 
         await self.app(scope, receive, send_wrapper)

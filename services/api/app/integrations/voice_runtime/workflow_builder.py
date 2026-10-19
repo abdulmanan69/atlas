@@ -14,6 +14,7 @@ ATLAS node/path ids and field names.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -41,8 +42,6 @@ LANGUAGE_NAMES = {
     "tr": "Turkish",
 }
 
-# Variables ATLAS fills from the CRM for every call.
-LEAD_VARIABLES = ("first_name", "last_name", "full_name", "company", "job_title", "email")
 OPT_OUT_FIELD = "opted_out"
 WEBHOOK_SECRET_HEADER = "X-Atlas-Webhook-Secret"  # noqa: S105 - a header name
 EXTRACTION_PROMPT = (
@@ -87,6 +86,63 @@ _PATH_FIELDS = {
 class WebhookTarget:
     url: str
     credential_uuid: str
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeAudio:
+    """A sound file in the voice service's storage (ambient_noise_configuration keys)."""
+
+    storage_key: str
+    storage_backend: str
+    filename: str
+
+
+@dataclass(frozen=True, slots=True)
+class ClassifierModel:
+    """A separate answer-classification model: voicemail_detection provider/model/api_key."""
+
+    provider: str
+    model: str
+    api_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class PublishAssets:
+    """What only exists once files and secrets have been handed to the voice service."""
+
+    ambient: RuntimeAudio | None = None
+    # ATLAS audio id → the voice service's recording id (AnswerMessage.recording_id).
+    recordings: Mapping[str, str] = field(default_factory=dict)
+    classifier: ClassifierModel | None = None
+
+
+# ------------------------------------------------------------------ agent variables
+
+# The voice service renders `{{name}}` and `{{name | fallback:text}}` from the call's
+# context (utils/template_renderer.py, TEMPLATE_VAR_PATTERN): a missing or empty value
+# takes the fallback. Agent variables compile to exactly that, so the value set on the
+# agent applies on every call, including inbound calls ATLAS does not start, while a
+# lead field of the same name with a value still wins.
+_PLACEHOLDER = re.compile(r"\{\{\s*([^|\s}]+)\s*(?:\|[^}]*)?\}\}")
+
+
+def variable_values(cfg: AgentConfig) -> dict[str, str]:
+    """The agent's variables as the template context the voice service keeps."""
+    return {v.name: v.value for v in cfg.variables}
+
+
+def apply_variables(text: str, values: Mapping[str, str]) -> str:
+    """Give every `{{name}}` of an agent variable the agent's value as its fallback."""
+    if not values or "{{" not in text:
+        return text
+
+    def fill(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in values:
+            return match.group(0)
+        return f"{{{{{name} | fallback:{values[name]}}}}}"
+
+    return _PLACEHOLDER.sub(fill, text)
 
 
 # ------------------------------------------------------------------ guided mode
@@ -210,13 +266,15 @@ def _node_data(
     node: FlowNode,
     tool_uuids: Mapping[str, str] | None,
     document_uuids: Mapping[str, str] | None,
+    values: Mapping[str, str],
 ) -> tuple[str, dict[str, Any]]:
+    prompt = apply_variables(node.prompt, values)
     if node.kind == "start":
         return "startCall", {
             "name": node.name,
-            "prompt": node.prompt,
+            "prompt": prompt,
             "greeting_type": "text",
-            "greeting": node.greeting or "",
+            "greeting": apply_variables(node.greeting or "", values),
             "allow_interrupt": node.allow_interrupt,
             "allow_greeting_interrupt": node.allow_interrupt,
             "add_global_prompt": node.use_global_rules,
@@ -226,7 +284,7 @@ def _node_data(
     if node.kind == "step":
         return "agentNode", {
             "name": node.name,
-            "prompt": node.prompt,
+            "prompt": prompt,
             "allow_interrupt": node.allow_interrupt,
             "add_global_prompt": node.use_global_rules,
             **_extraction(node.capture_fields, with_opt_out=False),
@@ -236,18 +294,18 @@ def _node_data(
     # opt-out flag is extracted on every End so do-not-call requests are always honoured.
     return "endCall", {
         "name": node.name,
-        "prompt": node.prompt,
+        "prompt": prompt,
         "allow_interrupt": node.allow_interrupt,
         "add_global_prompt": False,
         **_extraction(node.capture_fields, with_opt_out=True),
     }
 
 
-def _edge_data(path: FlowPath) -> dict[str, Any]:
+def _edge_data(path: FlowPath, values: Mapping[str, str]) -> dict[str, Any]:
     data: dict[str, Any] = {"label": path.name, "condition": path.when}
     speech = (path.say_while_moving or "").strip()
     if speech:
-        data["transition_speech"] = speech
+        data["transition_speech"] = apply_variables(speech, values)
         data["transition_speech_type"] = "text"
     return data
 
@@ -325,6 +383,7 @@ def compile_workflow(
     uuids; when None, references are not emitted at all.
     """
     flow = effective_flow(cfg)
+    values = variable_values(cfg)
     node_ids = {n.id: f"n{i}" for i, n in enumerate(sorted(flow.nodes, key=lambda n: n.id), 1)}
     path_ids = {p.id: f"p{i}" for i, p in enumerate(sorted(flow.paths, key=lambda p: p.id), 1)}
 
@@ -347,11 +406,11 @@ def compile_workflow(
                 "id": GLOBAL_ID,
                 "type": "globalNode",
                 "position": {"x": origin.x - 420, "y": origin.y + 200},
-                "data": {"name": "Global rules", "prompt": rules},
+                "data": {"name": "Global rules", "prompt": apply_variables(rules, values)},
             }
         )
     for node in flow.nodes:
-        node_type, data = _node_data(node, tool_uuids, document_uuids)
+        node_type, data = _node_data(node, tool_uuids, document_uuids, values)
         nodes.append(
             {
                 "id": node_ids[node.id],
@@ -368,7 +427,7 @@ def compile_workflow(
             "id": path_ids[path.id],
             "source": node_ids.get(path.from_node, path.from_node),
             "target": node_ids.get(path.to_node, path.to_node),
-            "data": _edge_data(path),
+            "data": _edge_data(path, values),
         }
         for path in flow.paths
     ]
@@ -385,12 +444,74 @@ def build_definition(cfg: AgentConfig, *, webhook: WebhookTarget | None) -> dict
 # ------------------------------------------------------------------ configurations
 
 
+def _spoken(
+    fmt: str,
+    text: str | None,
+    audio_id: Any,
+    assets: PublishAssets | None,
+    values: Mapping[str, str],
+) -> dict[str, Any]:
+    """An AnswerMessage (schemas/answer_supervisor.py): a recording wins over text."""
+    if fmt == "recording" and audio_id is not None and assets is not None:
+        recording_id = assets.recordings.get(str(audio_id))
+        if recording_id is None:
+            raise ValueError("A recording used by the voicemail settings is not available")
+        return {"recording_id": recording_id}
+    return {"text": apply_variables((text or "").strip(), values)}
+
+
+def _voicemail(cfg: AgentConfig, assets: PublishAssets | None) -> dict[str, Any]:
+    """`voicemail_detection`: the answer supervisor's policy plus its classifier model."""
+    vm = cfg.call_settings.voicemail
+    values = variable_values(cfg)
+    classifier = vm.classifier
+    separate = vm.enabled and classifier.model == "connection"
+    out: dict[str, Any] = {
+        "enabled": vm.enabled,
+        "use_workflow_llm": not separate,
+        "voicemail_action": vm.action,
+        "voicemail_message": _spoken(
+            vm.message_format, vm.message, vm.message_audio_id, assets, values
+        ),
+        "screening_message": _spoken(
+            vm.screening_format, vm.screening_message, vm.screening_audio_id, assets, values
+        ),
+        "screening_wait_ms": vm.screening_wait_seconds * 1000,
+    }
+    if classifier.instructions:
+        out["system_prompt"] = classifier.instructions
+    if separate and assets is not None:
+        if assets.classifier is None:
+            raise ValueError("The voicemail detection model has no API key")
+        out["provider"] = assets.classifier.provider
+        out["model"] = assets.classifier.model
+        out["api_key"] = assets.classifier.api_key
+    return out
+
+
+def _ambient(cfg: AgentConfig, assets: PublishAssets | None) -> dict[str, Any]:
+    """`ambient_noise_configuration`; a custom file is read from the voice service's storage."""
+    ambient = cfg.call_settings.ambient
+    out: dict[str, Any] = {"enabled": ambient.enabled, "volume": ambient.volume}
+    if ambient.audio_id is not None and assets is not None and assets.ambient is not None:
+        out["storage_key"] = assets.ambient.storage_key
+        out["storage_backend"] = assets.ambient.storage_backend
+        out["original_filename"] = assets.ambient.filename
+    return out
+
+
 def build_configurations(
-    cfg: AgentConfig, *, connection_ids: set[str] | None = None
+    cfg: AgentConfig,
+    *,
+    connection_ids: set[str] | None = None,
+    assets: PublishAssets | None = None,
 ) -> dict[str, Any]:
     """Workflow-level settings: outcomes, call settings and the optional model override.
 
     Field names follow the runtime's `workflow_configurations` schema (ADR 0005 table).
+    `assets` carries what publishing handed to the voice service (custom background
+    sound, recordings, a separate classifier's key); without it, a custom background
+    sound falls back to the default ambience and recordings to their text.
     """
     cs = cfg.call_settings
     configurations: dict[str, Any] = {
@@ -408,16 +529,8 @@ def build_configurations(
         "tts_cache_enabled": cs.tts_cache,
         # Always on: transcripts carry start-end times per line (run_pipeline.py:701-704).
         "transcript_configuration": {"include_end_timestamps": True},
-        "ambient_noise_configuration": {
-            "enabled": cs.ambient.enabled,
-            "volume": cs.ambient.volume,
-        },
-        "voicemail_detection": {
-            "enabled": cs.voicemail.enabled,
-            "use_workflow_llm": True,
-            "voicemail_action": cs.voicemail.action,
-            "voicemail_message": {"text": (cs.voicemail.message or "").strip()},
-        },
+        "ambient_noise_configuration": _ambient(cfg, assets),
+        "voicemail_detection": _voicemail(cfg, assets),
     }
     override = cfg.model_override
     if override and (override.llm or override.tts):

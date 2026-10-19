@@ -8,9 +8,13 @@ follow the runtime's API as verified against its source (v1.49), see ADR 0003.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import logging
 import random
 import time
+import uuid
+from collections.abc import AsyncIterator
 from typing import Any, Literal
 
 import httpx
@@ -113,10 +117,66 @@ class EmbedSession(_Payload):
     workflow_run_id: int
 
 
+class StorageUpload(_Payload):
+    """AmbientNoiseUploadResponse (routes/workflow.py)."""
+
+    upload_url: str
+    storage_key: str
+    storage_backend: str
+
+
+class RecordingUpload(_Payload):
+    """RecordingUploadResponseSchema (schemas/workflow_recording.py)."""
+
+    upload_url: str
+    recording_id: str
+    storage_key: str
+
+
 class TriggeredCall(_Payload):
     status: str
     workflow_run_id: int
     workflow_run_name: str | None = None
+
+
+# A streamed text-chat turn: the runtime sends a ": keep-alive" comment every 15 s while the
+# model works (services/workflow/text_chat_stream.py), so a 45 s read timeout means "gone".
+_CHAT_TIMEOUT = httpx.Timeout(15.0, connect=5.0, read=45.0)
+
+
+class TextChatStream:
+    """One streamed text-chat turn from the runtime, decoded from server-sent events.
+
+    Verified in routes/workflow_text_chat.py (`_stream_pending_turn_response`): every event
+    is one `data: <json>` line followed by a blank line, one of
+    `{"type": "session"|"complete", "session": {...}}`,
+    `{"type": "turn_event", "turn_id", "event": {"type", "created_at", "payload"}}` and
+    `{"type": "error", "message"}`. The run id is also in the `X-Workflow-Run-Id` header,
+    sent before the first byte so a lost stream can still be found.
+    """
+
+    def __init__(self, response: httpx.Response) -> None:
+        self._response = response
+        raw = response.headers.get("X-Workflow-Run-Id", "")
+        self.run_id: int | None = int(raw) if raw.isdigit() else None
+
+    async def events(self) -> AsyncIterator[dict[str, Any]]:
+        """Each decoded event; a keep-alive comment comes through as `{"type": "ping"}`."""
+        data: list[str] = []
+        async for line in self._response.aiter_lines():
+            if line.startswith(":"):
+                yield {"type": "ping"}
+            elif line.startswith("data:"):
+                value = line[5:]
+                data.append(value[1:] if value.startswith(" ") else value)
+            elif not line.strip() and data:
+                try:
+                    event = json.loads("\n".join(data))
+                except ValueError:
+                    event = None
+                data = []
+                if isinstance(event, dict):
+                    yield event
 
 
 # ------------------------------------------------------------------ client
@@ -409,17 +469,81 @@ class VoiceRuntimeClient:
         name: str,
         definition: dict[str, Any],
         configurations: dict[str, Any],
+        template_context_variables: dict[str, str] | None = None,
     ) -> Workflow:
+        payload: dict[str, Any] = {
+            "name": name,
+            "workflow_definition": definition,
+            "workflow_configurations": configurations,
+        }
+        if template_context_variables is not None:
+            # UpdateWorkflowRequest.template_context_variables (routes/workflow.py).
+            payload["template_context_variables"] = template_context_variables
+        body = await self._call("PUT", f"/workflow/{workflow_id}", json=payload)
+        return Workflow.model_validate(body)
+
+    async def get_workflow(self, workflow_id: str) -> dict[str, Any]:
+        """The workflow's definition, configurations and template variables.
+
+        GET /workflow/fetch/{id} returns the draft when one exists, else the published
+        version; ATLAS publishes every draft it writes, so this is what calls use.
+        """
+        body: dict[str, Any] = await self._call("GET", f"/workflow/fetch/{workflow_id}")
+        return body
+
+    # ---------------------------------------------------------------- agent audio
+    # Verified in routes/workflow.py (ambient noise) and routes/workflow_recording.py.
+
+    async def ambient_upload_url(
+        self, workflow_id: str, *, filename: str, mime_type: str, size: int
+    ) -> StorageUpload:
+        """Signed PUT URL for a custom background-noise file (at most 10 MB).
+
+        The workflow's `ambient_noise_configuration` then points at it with `storage_key`
+        and `storage_backend` (services/pipecat/audio_mixer.py `build_audio_out_mixer`).
+        """
         body = await self._call(
-            "PUT",
-            f"/workflow/{workflow_id}",
+            "POST",
+            "/workflow/ambient-noise/upload-url",
             json={
-                "name": name,
-                "workflow_definition": definition,
-                "workflow_configurations": configurations,
+                "workflow_id": int(workflow_id),
+                "filename": filename,
+                "mime_type": mime_type,
+                "file_size": size,
             },
         )
-        return Workflow.model_validate(body)
+        return StorageUpload.model_validate(body)
+
+    async def recording_upload_url(
+        self, *, filename: str, mime_type: str, size: int
+    ) -> RecordingUpload:
+        """Signed PUT URL for one recording (at most 5 MB), plus its short recording id."""
+        body = await self._call(
+            "POST",
+            "/workflow-recordings/upload-url",
+            json={"files": [{"filename": filename, "mime_type": mime_type, "file_size": size}]},
+        )
+        return RecordingUpload.model_validate(body["items"][0])
+
+    async def create_recording(
+        self, *, recording_id: str, storage_key: str, transcript: str, metadata: dict[str, Any]
+    ) -> str:
+        """Register an uploaded recording; returns the recording id messages refer to."""
+        body = await self._call(
+            "POST",
+            "/workflow-recordings/",
+            json={
+                "recordings": [
+                    {
+                        "recording_id": recording_id,
+                        "storage_key": storage_key,
+                        "transcript": transcript,
+                        "metadata": metadata,
+                    }
+                ]
+            },
+        )
+        return str(body["recordings"][0]["recording_id"])
 
     async def publish_workflow(self, workflow_id: str, *, note: str | None) -> int:
         body = await self._call(
@@ -484,12 +608,31 @@ class VoiceRuntimeClient:
 
     # ---------------------------------------------------------------- browser sessions
 
-    async def ensure_embed_token(self, workflow_id: str, allowed_domains: list[str]) -> str:
+    async def ensure_embed_token(
+        self, workflow_id: str, allowed_domains: list[str], *, replace: bool = False
+    ) -> str:
+        """The workflow's one embed token, allowing at least `allowed_domains`.
+
+        The voice service keeps one token per workflow and checks the browser's Origin
+        against its domains when the call audio connects. Browser test calls and the
+        website widget share it, so by default the domains already allowed are kept
+        (one caller never locks the other out); `replace=True` sets them exactly, used
+        when the widget's allowed sites change.
+        """
+        domains = list(dict.fromkeys(allowed_domains))
+        if not replace:
+            current = await self._call("GET", f"/workflow/{workflow_id}/embed-token")
+            existing = current.get("allowed_domains") if isinstance(current, dict) else None
+            if isinstance(existing, list) and existing:
+                merged = [str(d) for d in existing] + domains
+                if set(merged) == {str(d) for d in existing}:
+                    return str(current["token"])
+                domains = list(dict.fromkeys(merged))
         body = await self._call(
             "POST",
             f"/workflow/{workflow_id}/embed-token",
             json={
-                "allowed_domains": allowed_domains,
+                "allowed_domains": domains,
                 "settings": {"widgetType": "voice", "autoStart": False},
                 "usage_limit": None,
                 "expires_in_days": None,
@@ -515,6 +658,64 @@ class VoiceRuntimeClient:
             return []
         servers = body.get("ice_servers") if isinstance(body, dict) else None
         return list(servers) if isinstance(servers, list) else []
+
+    # ---------------------------------------------------------------- typed test chats
+    # The authenticated text-chat routes (routes/workflow_text_chat.py). A chat is a run in
+    # mode "textchat" that runs the workflow's draft when one exists, else the published
+    # version; ATLAS only writes the workflow when publishing, so that is the published
+    # version. Creating it already runs the greeting turn, so both calls below stream.
+    # Never retried: a resent message would run its actions twice.
+
+    def open_text_chat(
+        self, workflow_id: str, *, context: dict[str, Any], name: str
+    ) -> contextlib.AbstractAsyncContextManager[TextChatStream]:
+        """Start a chat; the stream carries the agent's greeting turn."""
+        return self._text_chat_stream(
+            f"/workflow/{workflow_id}/text-chat/sessions/stream",
+            {
+                "request_id": str(uuid.uuid4()),
+                "name": name,
+                "initial_context": context,
+                "annotations": {"tester": {"source": "atlas_test_panel", "modality": "text"}},
+            },
+        )
+
+    def send_text_chat(
+        self, workflow_id: str, run_id: str, text: str
+    ) -> contextlib.AbstractAsyncContextManager[TextChatStream]:
+        """Send the tester's message; the stream carries the agent's reply turn."""
+        return self._text_chat_stream(
+            f"/workflow/{workflow_id}/text-chat/sessions/{run_id}/messages/stream",
+            {"text": text},
+        )
+
+    async def end_text_chat(self, workflow_id: str, run_id: str) -> bool:
+        """End a chat (idempotent). Completing the run sends the completion webhook."""
+        body = await self._call(
+            "POST", f"/workflow/{workflow_id}/text-chat/sessions/{run_id}/end", json={}
+        )
+        return bool(isinstance(body, dict) and body.get("is_completed"))
+
+    @contextlib.asynccontextmanager
+    async def _text_chat_stream(
+        self, path: str, body: dict[str, Any]
+    ) -> AsyncIterator[TextChatStream]:
+        request = self._http.build_request("POST", path, json=body, timeout=_CHAT_TIMEOUT)
+        try:
+            response = await self._http.send(request, stream=True)
+        except httpx.TransportError as exc:
+            log.warning(
+                "voice_runtime_unreachable",
+                extra={"method": "POST", "path": path, "error_type": type(exc).__name__},
+            )
+            raise RuntimeUnavailableError from exc
+        try:
+            if not response.is_success:
+                await response.aread()
+                self._parse("POST", path, response)  # raises the mapped error
+            yield TextChatStream(response)
+        finally:
+            await response.aclose()
 
 
 # ------------------------------------------------------------------ health (cached)

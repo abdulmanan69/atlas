@@ -381,6 +381,8 @@ def test_configurations_map_call_settings() -> None:
         "use_workflow_llm": True,
         "voicemail_action": "leave_message",
         "voicemail_message": {"text": "Sorry we missed you."},
+        "screening_message": {"text": ""},
+        "screening_wait_ms": 30000,
     }
     assert next(d["code"] for d in c["call_dispositions"]) == "qualified"
     defaults = build_configurations(guided())

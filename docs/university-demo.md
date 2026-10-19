@@ -194,6 +194,20 @@ then either take that PC, or move it with `-WithData` (above).
 Live transcription is English only and less accurate than Whisper on accents, names and
 numbers (see [local-models.md](local-models.md#live-transcription-streaming)).
 
+## Optional: clone a voice (needs a Hugging Face token once)
+
+Agents can speak in a voice cloned from 5 to 30 seconds of a real person's speech, for
+example a team member who agrees to it. The cloning weights are gated: accept the terms of
+[kyutai/pocket-tts](https://huggingface.co/kyutai/pocket-tts) with a Hugging Face account,
+create a read token, and run the setup with it while online
+(`$env:ATLAS_DEMO_HF_TOKEN = "hf_…"; .\make.ps1 demo`, or `-HfToken hf_…`; it is saved in
+`.env` and never printed). Then **AI providers → Voice → Clone a voice**: name the voice,
+upload a WAV, MP3 or M4A file or record in the browser, tick the speaker's permission and
+save the models. Only clone someone who said yes, and never present the cloned voice as
+the real person; the confirmation is kept in the audit log. Without a token the dialog
+shows these setup steps, and the built-in voices work as before. Details and limits:
+[local-models.md](local-models.md#voice-cloning).
+
 ## Run the test call
 
 1. Open <http://localhost:5173> in Chrome or Edge on the same PC and sign in as

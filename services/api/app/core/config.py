@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     voice_allow_hosted_trial_models: bool = False
     # Origin of the ATLAS web app (browser test calls are restricted to it).
     web_app_origin: str = "http://localhost:5173"
+    # Base URL visitors' browsers use to reach this API (the website widget's script and
+    # sessions). Empty: the web app origin, which proxies /api to this service.
+    public_api_url: str | None = None
 
     # Knowledge base: documents agents consult during calls. Parsing and chunking run in
     # the voice service's external document-processing service (see docs/knowledge.md).
@@ -119,6 +122,19 @@ class Settings(BaseSettings):
     # A tenant's self-hosted connection URL is only warmed directly when it resolves to a
     # public address, unless this is true (models on your own private network).
     allow_private_model_urls: bool = False
+
+    # Pocket TTS voice cloning (docs/local-models.md, "Voice cloning"): where ATLAS itself
+    # reaches the Pocket TTS server to list, clone and delete voices, e.g.
+    # http://127.0.0.1:8002/v1 when the API runs on the host and the connection's base URL is
+    # the Docker-internal http://local-tts:8000/v1. Operator-set, so it may be private;
+    # outside local development the network policy requires https. Unset: the connection's
+    # own base URL, which must be public unless ALLOW_PRIVATE_MODEL_URLS is true.
+    local_tts_url: str | None = None
+    # Only when the Pocket TTS server requires a key (its POCKET_TTS_API_KEY).
+    local_tts_api_key: SecretStr = SecretStr("")
+    # Computing a voice takes a few seconds on CPU, longer while calls are speaking.
+    local_tts_timeout_seconds: float = 120.0
+    voice_clone_max_upload_bytes: int = 10 * 1024 * 1024
 
     @field_validator("cors_origins", mode="before")
     @classmethod

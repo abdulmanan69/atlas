@@ -322,6 +322,22 @@ class FakeRuntime:
                     if k in ("id", "name", "status", "workflow_uuid")
                 },
             )
+        if m == "GET" and (mm := re.fullmatch(r"/workflow/fetch/(\d+)", path)):
+            wf = org.workflows.get(int(mm[1]))
+            if wf is None:
+                return _json(404, {"detail": "Workflow not found"})
+            return _json(
+                200,
+                {
+                    "id": wf["id"],
+                    "name": wf["name"],
+                    "status": wf["status"],
+                    "workflow_uuid": wf["workflow_uuid"],
+                    "workflow_definition": wf["draft"],
+                    "workflow_configurations": wf["configurations"],
+                    "template_context_variables": wf.get("template_context_variables", {}),
+                },
+            )
         if not (mm := re.fullmatch(r"/workflow/(\d+)(/.*)?", path)):
             return _json(404, {"detail": "Not Found"})
         wf = org.workflows.get(int(mm[1]))
@@ -334,6 +350,8 @@ class FakeRuntime:
                 draft=body["workflow_definition"],
                 configurations=body["workflow_configurations"],
             )
+            if "template_context_variables" in body:
+                wf["template_context_variables"] = body["template_context_variables"]
             return _json(200, {k: wf[k] for k in ("id", "name", "status", "workflow_uuid")})
         if m == "POST" and rest == "/publish":
             start = next((n for n in wf["draft"]["nodes"] if n["type"] == "startCall"), None)
@@ -362,7 +380,16 @@ class FakeRuntime:
             wf["status"] = body["status"]
             return _json(200, {"id": wf["id"], "status": wf["status"]})
         if m == "POST" and rest == "/embed-token":
-            token = f"embed-{uuid.uuid4().hex[:8]}"
+            # One token per workflow, updated in place (routes/workflow_embed.py).
+            token = next(
+                (t for t, e in self.embed_tokens.items() if e[0] == org.id and e[1] == wf["id"]),
+                f"embed-{uuid.uuid4().hex[:8]}",
+            )
             self.embed_tokens[token] = (org.id, wf["id"], body.get("allowed_domains") or [])
             return _json(200, {"token": token, "allowed_domains": body.get("allowed_domains")})
+        if m == "GET" and rest == "/embed-token":
+            for t, (oid, wid, domains) in self.embed_tokens.items():
+                if oid == org.id and wid == wf["id"]:
+                    return _json(200, {"token": t, "allowed_domains": domains, "is_active": True})
+            return _json(200, None)
         return _json(404, {"detail": "Not Found"})

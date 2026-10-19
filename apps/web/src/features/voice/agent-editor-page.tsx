@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowLeft, CircleAlert, History, MoreHorizontal, Plus, Rocket, Save, Trash2, Workflow } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useFieldArray, useForm, type UseFormReturn } from "react-hook-form";
 import { Link, useBlocker, useParams } from "react-router";
 import { toast } from "sonner";
@@ -16,7 +16,8 @@ import { FormSelect, Select, SelectItem } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList } from "@/components/ui/tabs";
 import { useInvalidate, useMemberNames, useOrgId } from "@/features/queries";
 import { normalizeFlow } from "@/features/voice/flow/types";
-import { agentFormSchema, fromForm, LANGUAGES, normalizeChoice, toForm, VARIABLES, type AgentForm } from "@/features/voice/agent-form";
+import { agentFormSchema, fromForm, LANGUAGES, normalizeChoice, toForm, type AgentForm } from "@/features/voice/agent-form";
+import { AgentVariablesProvider, availableVariables, useAgentVariables } from "@/features/voice/agent-variables";
 import { CallSettingsTab } from "@/features/voice/flow/call-settings-tab";
 import type { FocusRequest } from "@/features/voice/flow/canvas";
 import { FlowTab } from "@/features/voice/flow/flow-tab";
@@ -157,7 +158,7 @@ function Editor({ agent }: { agent: AgentDetail }) {
     script: Boolean(errors.persona_name || errors.company_name || errors.greeting || errors.instructions || errors.questions || errors.closing || errors.end_condition),
     flow: Boolean(errors.flow || errors.global_rules) || issues.some((i) => i.target === "node" || i.target === "path"),
     outcomes: Boolean(errors.outcomes || errors.capture_fields),
-    settings: Boolean(errors.call_settings),
+    settings: Boolean(errors.call_settings || errors.variables),
     voice: Boolean(errors.override_llm || errors.override_tts),
   };
   const wide = isFlow && tab === "flow";
@@ -167,6 +168,12 @@ function Editor({ agent }: { agent: AgentDetail }) {
     setFocus({ target: i.target, id: i.id, nonce: Date.now() });
   };
   const dot = (show: boolean) => (show ? <span className="size-1.5 rounded-full bg-danger" aria-label="has errors" /> : null);
+  const customVariables = form.watch("variables");
+  const variables = useMemo(() => availableVariables(customVariables), [customVariables]);
+  const manageVariables = () => {
+    setTab("settings");
+    requestAnimationFrame(() => document.getElementById("call-settings-variables")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
 
   return (
     <>
@@ -243,8 +250,9 @@ function Editor({ agent }: { agent: AgentDetail }) {
         </Card>
       ) : null}
 
+      <AgentVariablesProvider value={variables}>
       <div className={cn("grid gap-5", wide ? "grid-cols-1" : "lg:grid-cols-[minmax(0,1fr)_340px]")}>
-        <Card className="min-w-0 overflow-hidden">
+        <Card className="min-w-0 overflow-clip">
           <Tabs value={tab} onValueChange={setTab}>
             <TabsList
               className="px-3 pt-1"
@@ -280,7 +288,7 @@ function Editor({ agent }: { agent: AgentDetail }) {
                 <OutcomesTab form={form} isFlow={isFlow} />
               </TabsContent>
               <TabsContent value="settings" className="p-5">
-                <CallSettingsTab form={form} />
+                <CallSettingsTab form={form} agentId={agent.id} canEdit={canEdit} />
               </TabsContent>
               <TabsContent value="voice" className="p-5">
                 <VoiceTab form={form} />
@@ -294,20 +302,32 @@ function Editor({ agent }: { agent: AgentDetail }) {
         <div className={cn("flex flex-col gap-5", wide && "lg:grid lg:grid-cols-2")}>
           <TestCallPanel agentId={agent.id} published={agent.published_version !== null && agent.status !== "archived"} />
           <Card>
-            <CardHeader title="Variables" description="Filled from the lead on every call" />
-            <ul className="flex flex-wrap gap-1.5 px-4 py-3">
-              {VARIABLES.map((v) => (
-                <li key={v}>
-                  <code className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[11.5px] text-ink-2">{`{{${v}}}`}</code>
+            <CardHeader
+              title="Variables"
+              description="Lead fields fill on every call; agent variables are set under Call settings"
+              action={
+                <Button size="sm" variant="ghost" onClick={manageVariables}>
+                  Manage
+                </Button>
+              }
+            />
+            <ul className="flex flex-wrap gap-1.5 px-4 py-3" aria-label="Variables you can use">
+              {variables.map((v) => (
+                <li key={v.name}>
+                  <code
+                    title={v.source === "agent" ? `Agent variable: ${v.value ?? ""}` : "Filled from the lead"}
+                    className={cn("rounded px-1.5 py-0.5 font-mono text-[11.5px]", v.source === "agent" ? "bg-accent/10 text-accent" : "bg-surface-2 text-ink-2")}
+                  >{`{{${v.name}}}`}</code>
                 </li>
               ))}
             </ul>
             <p className="border-t border-line px-4 py-3 text-[12px] text-muted">
-              Add a fallback for missing values: <code className="font-mono">{"{{first_name | fallback:there}}"}</code>. Custom lead fields work the same way.
+              Add a fallback for missing values: <code className="font-mono">{"{{first_name | fallback:there}}"}</code>. Custom lead fields work the same way, and win over an agent variable with the same name.
             </p>
           </Card>
         </div>
       </div>
+      </AgentVariablesProvider>
 
       <ConfirmDialog
         open={blocker.state === "blocked"}
@@ -370,6 +390,7 @@ function useVariableInserter(form: UseFormReturn<AgentForm>) {
 
 function ScriptTab({ form }: { form: UseFormReturn<AgentForm> }) {
   const e = form.formState.errors;
+  const variables = useAgentVariables();
   const questions = useFieldArray({ control: form.control, name: "questions" });
   const { track, insert } = useVariableInserter(form);
   const greeting = form.register("greeting");
@@ -397,15 +418,19 @@ function ScriptTab({ form }: { form: UseFormReturn<AgentForm> }) {
 
       <div className="flex flex-wrap items-center gap-1.5 rounded-md bg-surface-2/70 px-3 py-2 text-[12px] text-muted">
         Insert variable:
-        {VARIABLES.map((v) => (
+        {variables.map((v) => (
           <button
-            key={v}
+            key={v.name}
             type="button"
+            title={v.source === "agent" ? `Agent variable: ${v.value ?? ""}` : "Filled from the lead"}
             onMouseDown={(ev) => ev.preventDefault()}
-            onClick={() => insert(v)}
-            className="rounded border border-line bg-surface px-1.5 py-0.5 font-mono text-[11.5px] text-ink-2 hover:border-accent hover:text-accent"
+            onClick={() => insert(v.name)}
+            className={cn(
+              "rounded border bg-surface px-1.5 py-0.5 font-mono text-[11.5px] text-ink-2 hover:border-accent hover:text-accent",
+              v.source === "agent" ? "border-accent/40" : "border-line",
+            )}
           >
-            {v}
+            {v.name}
           </button>
         ))}
       </div>

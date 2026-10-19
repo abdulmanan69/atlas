@@ -128,6 +128,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/{agent_id}/audio": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Sound files uploaded for this agent */
+        get: operations["list_audio_api_v1_agents__agent_id__audio_get"];
+        put?: never;
+        /**
+         * Upload a WAV or MP3 file for background noise or a recorded message
+         * @description `purpose` `ambient`: a custom background sound, at most 10 MB. `message`: a voicemail or screening recording, at most 5 MB. The format is checked from the file's content. Reference the returned id from the agent's call settings (`ambient.audio_id`, `voicemail.message_audio_id`, `voicemail.screening_audio_id`); the file reaches the voice service when the agent is published.
+         */
+        post: operations["upload_audio_api_v1_agents__agent_id__audio_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent_id}/audio/{audio_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a sound file no saved version uses */
+        delete: operations["delete_audio_api_v1_agents__agent_id__audio__audio_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent_id}/audio/{audio_id}/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The sound file itself, for preview */
+        get: operations["audio_file_api_v1_agents__agent_id__audio__audio_id__file_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/{agent_id}/compiled-prompt": {
         parameters: {
             query?: never;
@@ -253,6 +308,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/{agent_id}/test-chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a typed test chat with the published version
+         * @description Recorded under Calls like a browser test call (mode test, channel text). Streams `started` (with the call id), then the agent's greeting turn.
+         */
+        post: operations["start_test_chat_api_v1_agents__agent_id__test_chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent_id}/test-chat/{call_id}/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** End a typed test chat (its transcript and outcome then arrive on the call) */
+        post: operations["end_test_chat_api_v1_agents__agent_id__test_chat__call_id__end_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent_id}/test-chat/{call_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send a message in a typed test chat and stream the agent's reply */
+        post: operations["send_test_chat_message_api_v1_agents__agent_id__test_chat__call_id__messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/{agent_id}/test-session": {
         parameters: {
             query?: never;
@@ -335,6 +444,66 @@ export interface paths {
         put?: never;
         /** Copy an earlier version into a new latest version */
         post: operations["restore_api_v1_agents__agent_id__versions__version__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent_id}/voicemail-classifier-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether a key is stored for a separate voicemail-detection model */
+        get: operations["get_classifier_key_api_v1_agents__agent_id__voicemail_classifier_key_get"];
+        /**
+         * Store the API key for a separate voicemail-detection model
+         * @description Used when `voicemail.classifier.model` is `connection`: the voice service runs that classifier with an inline key, so it is entered here once, stored encrypted, sent only to the voice service on publish, and never returned.
+         */
+        put: operations["set_classifier_key_api_v1_agents__agent_id__voicemail_classifier_key_put"];
+        post?: never;
+        /** Delete Classifier Key */
+        delete: operations["delete_classifier_key_api_v1_agents__agent_id__voicemail_classifier_key_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent_id}/web-embed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The agent's website widget: allowed sites, status and snippet */
+        get: operations["get_web_embed_api_v1_agents__agent_id__web_embed_get"];
+        /**
+         * Turn the website widget on or off and set the sites allowed to show it
+         * @description Applies at once; no publish needed. Turning it on needs at least one site.
+         */
+        put: operations["update_web_embed_api_v1_agents__agent_id__web_embed_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent_id}/web-embed/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Issue a new widget key; snippets with the old key stop working at once */
+        post: operations["rotate_web_embed_api_v1_agents__agent_id__web_embed_rotate_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -443,6 +612,50 @@ export interface paths {
         head?: never;
         /** Rename, rotate credentials, or change the endpoint */
         patch: operations["update_connection_api_v1_ai_connections__connection_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/ai/connections/{connection_id}/voices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Pocket TTS voices of a connection, with this organization's cloned voices
+         * @description Built-in voices, and the voices this organization cloned on the connection's server. `cloning_available` is false (with the setup steps) when the server has no voice-cloning weights.
+         */
+        get: operations["list_pocket_voices_api_v1_ai_connections__connection_id__voices_get"];
+        put?: never;
+        /**
+         * Clone a voice from a short sample of a speaker who gave permission
+         * @description Multipart upload: `name`, `audio` (WAV, 5 to 30 seconds after decoding, at most 10 MB) and `consent_attestation=true`. Only clone the voice of a speaker who gave permission. Do not use a cloned voice to deceive anyone, for fraudulent calls, or to present generated speech as the real person. The sample is forwarded to the Pocket TTS server, which keeps only the computed voice; it is not stored by this platform. The consent attestation is recorded in the audit log.
+         */
+        post: operations["clone_voice_api_v1_ai_connections__connection_id__voices_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/connections/{connection_id}/voices/{voice_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a cloned voice
+         * @description Refused while the organization's models or an agent use the voice.
+         */
+        delete: operations["delete_cloned_voice_api_v1_ai_connections__connection_id__voices__voice_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/ai/models": {
@@ -1461,6 +1674,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/embed/widget.js": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The website widget script
+         * @description Embed with `<script src=".../widget.js" data-agent-key="wk_..." async></script>`. Optional attributes: `data-label` (button text), `data-position` (`right` or `left`), `data-color` (a CSS color).
+         */
+        get: operations["widget_script_api_v1_public_embed_widget_js_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/embed/{key}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a voice conversation from an allowed website
+         * @description Records an inbound call and returns a one-time signaling address and ICE servers for the browser's audio connection.
+         */
+        post: operations["start_session_api_v1_public_embed__key__sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/embed/{key}/sessions/{call_id}/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report that a widget conversation ended
+         * @description Body `{call_token, connected}` as JSON; also accepted as text/plain so the widget can send it with `navigator.sendBeacon` when the page closes.
+         */
+        post: operations["end_session_api_v1_public_embed__key__sessions__call_id__end_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tasks": {
         parameters: {
             query?: never;
@@ -2026,6 +2299,35 @@ export interface components {
          * @enum {string}
          */
         ActorType: "user" | "ai_agent" | "system";
+        /** AgentAudioOut */
+        AgentAudioOut: {
+            /** Content Type */
+            content_type: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Duration Seconds
+             * @description WAV files only; null when unknown
+             */
+            duration_seconds: number | null;
+            /** Filename */
+            filename: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Purpose
+             * @enum {string}
+             */
+            purpose: "ambient" | "message";
+            /** Size Bytes */
+            size_bytes: number;
+        };
         /** AgentCallStats */
         AgentCallStats: {
             /**
@@ -2141,6 +2443,11 @@ export interface components {
             persona_name?: string;
             /** Qualification Questions */
             qualification_questions?: string[];
+            /**
+             * Variables
+             * @description Agent variables, usable in every prompt, greeting and message as {{name}}. A lead field with the same name and a value (custom lead fields) wins on that call
+             */
+            variables?: components["schemas"]["AgentVariable"][];
         };
         /** AgentConfigSave */
         AgentConfigSave: {
@@ -2268,6 +2575,19 @@ export interface components {
             /** Name */
             name: string;
         };
+        /**
+         * AgentVariable
+         * @description A fixed value prompts can use as `{{name}}`, e.g. an office address or a promo code.
+         */
+        AgentVariable: {
+            /**
+             * Name
+             * @description Used in prompts as {{name}}
+             */
+            name: string;
+            /** Value */
+            value: string;
+        };
         /** AgentVersionOut */
         AgentVersionOut: {
             /**
@@ -2284,8 +2604,16 @@ export interface components {
             /** Version */
             version: number;
         };
-        /** AmbientSettings */
+        /**
+         * AmbientSettings
+         * @description Background noise mixed under the agent's voice.
+         */
         AmbientSettings: {
+            /**
+             * Audio Id
+             * @description Custom background sound (POST /agents/{id}/audio, purpose ambient); empty uses the default office ambience
+             */
+            audio_id?: string | null;
             /**
              * Enabled
              * @default false
@@ -2404,6 +2732,26 @@ export interface components {
             /** Resource Type */
             resource_type: string | null;
         };
+        /** Body_clone_voice_api_v1_ai_connections__connection_id__voices_post */
+        Body_clone_voice_api_v1_ai_connections__connection_id__voices_post: {
+            /**
+             * Audio
+             * Format: binary
+             * @description WAV sample, 5 to 30 seconds, at most 10 MB
+             */
+            audio: string;
+            /**
+             * Consent Attestation
+             * @description "I have the speaker's permission to clone their voice." Must be true.
+             * @default false
+             */
+            consent_attestation?: boolean;
+            /**
+             * Name
+             * @description Shown in voice pickers
+             */
+            name: string;
+        };
         /** Body_import_leads_api_v1_leads_import_post */
         Body_import_leads_api_v1_leads_import_post: {
             /**
@@ -2412,6 +2760,20 @@ export interface components {
              * @description UTF-8 CSV with a header row
              */
             file: string;
+        };
+        /** Body_upload_audio_api_v1_agents__agent_id__audio_post */
+        Body_upload_audio_api_v1_agents__agent_id__audio_post: {
+            /**
+             * File
+             * Format: binary
+             * @description A .wav or .mp3 file
+             */
+            file: string;
+            /**
+             * Purpose
+             * @enum {string}
+             */
+            purpose: "ambient" | "message";
         };
         /** Body_upload_document_api_v1_knowledge_documents_post */
         Body_upload_document_api_v1_knowledge_documents_post: {
@@ -2465,6 +2827,13 @@ export interface components {
              * @default 0
              */
             captured_count?: number;
+            /**
+             * Channel
+             * @description `text` for a typed test chat from the agent editor (mode test); every other call is `voice`
+             * @default voice
+             * @enum {string}
+             */
+            channel?: "voice" | "text";
             /**
              * Created At
              * Format: date-time
@@ -2587,6 +2956,13 @@ export interface components {
              * @default 0
              */
             captured_count?: number;
+            /**
+             * Channel
+             * @description `text` for a typed test chat from the agent editor (mode test); every other call is `voice`
+             * @default voice
+             * @enum {string}
+             */
+            channel?: "voice" | "text";
             /**
              * Created At
              * Format: date-time
@@ -3296,6 +3672,27 @@ export interface components {
              */
             type?: "string" | "number" | "boolean";
         };
+        /** ClassifierKeyIn */
+        ClassifierKeyIn: {
+            /**
+             * Api Key
+             * Format: password
+             * @description Stored encrypted; never returned
+             */
+            api_key: string;
+            /** Connection Id */
+            connection_id: string;
+        };
+        /** ClassifierKeyOut */
+        ClassifierKeyOut: {
+            /** Connection Id */
+            connection_id: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /**
          * CompiledPrompt
          * @description What the model is told at one node, exactly as it will be sent.
@@ -3740,6 +4137,11 @@ export interface components {
              * @default 1
              */
             zoom?: number;
+        };
+        /** HTTPValidationError */
+        HTTPValidationError: {
+            /** Detail */
+            detail?: components["schemas"]["ValidationError"][];
         };
         /** IceServer */
         IceServer: {
@@ -4630,6 +5032,57 @@ export interface components {
              */
             window?: "process lifetime";
         };
+        /** PocketVoice */
+        PocketVoice: {
+            /**
+             * Cloned
+             * @description True for voices cloned by this organization
+             */
+            cloned: boolean;
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /**
+             * Default
+             * @default false
+             */
+            default?: boolean;
+            /**
+             * Id
+             * @description The value to use as the voice setting
+             */
+            id: string;
+            /**
+             * License
+             * @description Recording license (built-in voices)
+             */
+            license?: string | null;
+            /** Name */
+            name: string;
+            /** Sample Seconds */
+            sample_seconds?: number | null;
+        };
+        /** PocketVoiceList */
+        PocketVoiceList: {
+            /**
+             * Cloning Available
+             * @description False when the Pocket TTS server has no voice-cloning weights
+             */
+            cloning_available: boolean;
+            /**
+             * Setup Message
+             * @description What the server needs for voice cloning, when unavailable
+             */
+            setup_message?: string | null;
+            /**
+             * Setup Url
+             * @description Where the gated voice-cloning weights' terms are accepted
+             */
+            setup_url?: string | null;
+            /** Voices */
+            voices: components["schemas"]["PocketVoice"][];
+        };
         /** PresetChoice */
         PresetChoice: {
             /** Provider */
@@ -5172,6 +5625,79 @@ export interface components {
              */
             connected: boolean;
         };
+        /**
+         * TestChatEvent
+         * @description One server-sent event of a typed test chat (`data: <this JSON>`).
+         *
+         *     `started` (first event of a new chat, carries `call_id`), `agent_text` (one message
+         *     from the agent), `tool_start` / `tool_end` (a knowledge lookup or action, matched by
+         *     `tool_id`), `step` (the conversation moved to another step, `name`), `error` (the
+         *     turn failed, `message`) and finally `done` (`ended` is true when the agent ended the
+         *     conversation). Comment lines (`: keep-alive`) only keep the connection open.
+         */
+        TestChatEvent: {
+            /**
+             * At Ms
+             * @description Milliseconds since ATLAS passed the message (or the start of the chat) to the voice service. On the first `agent_text` of a turn it is the reply time
+             */
+            at_ms: number;
+            /**
+             * Call Id
+             * @description `started`: the chat's record under Calls (mode test)
+             */
+            call_id?: string | null;
+            /**
+             * Ended
+             * @description `done`: the agent ended the conversation
+             */
+            ended?: boolean | null;
+            /**
+             * Kind
+             * @description `tool_start` / `tool_end`: a knowledge lookup or an action
+             */
+            kind?: ("knowledge" | "action") | null;
+            /**
+             * Message
+             * @description `error`: what went wrong
+             */
+            message?: string | null;
+            /**
+             * Name
+             * @description `tool_start` / `tool_end`: the tool; `step`: the step name
+             */
+            name?: string | null;
+            /**
+             * Text
+             * @description `agent_text`: what the agent said
+             */
+            text?: string | null;
+            /**
+             * Tool Id
+             * @description `tool_start` / `tool_end`
+             */
+            tool_id?: string | null;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "started" | "agent_text" | "tool_start" | "tool_end" | "step" | "done" | "error";
+        };
+        /** TestChatMessage */
+        TestChatMessage: {
+            /**
+             * Text
+             * @description What the tester typed
+             */
+            text: string;
+        };
+        /** TestChatStart */
+        TestChatStart: {
+            /**
+             * Lead Id
+             * @description Fill template variables from this lead
+             */
+            lead_id?: string | null;
+        };
         /** TestSession */
         TestSession: {
             /**
@@ -5233,6 +5759,15 @@ export interface components {
              */
             id: string;
         };
+        /** ValidationError */
+        ValidationError: {
+            /** Location */
+            loc: (string | number)[];
+            /** Message */
+            msg: string;
+            /** Error Type */
+            type: string;
+        };
         /** VoiceOption */
         VoiceOption: {
             /** Accent */
@@ -5250,7 +5785,38 @@ export interface components {
             /** Preview Url */
             preview_url?: string | null;
         };
-        /** VoicemailSettings */
+        /**
+         * VoicemailClassifier
+         * @description The model that decides who answered: a person, voicemail, a call screener or a menu.
+         */
+        VoicemailClassifier: {
+            /**
+             * Connection Id
+             * @description Language model connection when model is 'connection'
+             */
+            connection_id?: string | null;
+            /**
+             * Instructions
+             * @description Replaces the built-in classifier instructions; empty keeps them. The reply must be one label: CONVERSATION, VOICEMAIL, NO_MESSAGE, SCREENER, SCREENING_WAIT, IVR or UNKNOWN
+             */
+            instructions?: string | null;
+            /**
+             * Model
+             * @description 'agent': the agent's own language model. 'connection': a separate model from an AI provider connection (its API key is stored with PUT /agents/{id}/voicemail-classifier-key)
+             * @default agent
+             * @enum {string}
+             */
+            model?: "agent" | "connection";
+            /**
+             * Model Name
+             * @description Model on that connection, e.g. gpt-4.1-mini
+             */
+            model_name?: string | null;
+        };
+        /**
+         * VoicemailSettings
+         * @description Answer handling: voicemail, call screeners and phone menus (outbound and inbound).
+         */
         VoicemailSettings: {
             /**
              * Action
@@ -5258,14 +5824,115 @@ export interface components {
              * @enum {string}
              */
             action?: "hangup" | "leave_message";
+            classifier?: components["schemas"]["VoicemailClassifier"];
             /**
              * Enabled
              * @description Detect answering machines on calls
              * @default true
              */
             enabled?: boolean;
-            /** Message */
+            /**
+             * Message
+             * @description Text to speak; with a recording, what the recording says (optional)
+             */
             message?: string | null;
+            /**
+             * Message Audio Id
+             * @description Recording to play (POST /agents/{id}/audio, purpose message)
+             */
+            message_audio_id?: string | null;
+            /**
+             * Message Format
+             * @description Leave the message as text (spoken by the voice) or a recording
+             * @default text
+             * @enum {string}
+             */
+            message_format?: "text" | "recording";
+            /** Screening Audio Id */
+            screening_audio_id?: string | null;
+            /**
+             * Screening Format
+             * @default text
+             * @enum {string}
+             */
+            screening_format?: "text" | "recording";
+            /**
+             * Screening Message
+             * @description Said to a call screener (who is calling and why) before waiting for the person; empty hangs up on screened calls
+             */
+            screening_message?: string | null;
+            /**
+             * Screening Wait Seconds
+             * @description How long to wait for the person after screening
+             * @default 30
+             */
+            screening_wait_seconds?: number;
+        };
+        /**
+         * WebCallSession
+         * @description What the website widget needs to connect a visitor's browser to the agent.
+         */
+        WebCallSession: {
+            /** Agent Name */
+            agent_name: string;
+            /**
+             * Call Id
+             * Format: uuid
+             */
+            call_id: string;
+            /**
+             * Call Token
+             * @description Proves the caller started this call; used to end it
+             */
+            call_token: string;
+            /** Company Name */
+            company_name: string;
+            /** Expires In Seconds */
+            expires_in_seconds: number;
+            /** Ice Servers */
+            ice_servers: components["schemas"]["IceServer"][];
+            /** Signaling Url */
+            signaling_url: string;
+        };
+        /** WebEmbedOut */
+        WebEmbedOut: {
+            /**
+             * Agent Published
+             * @description Visitors can only talk to a published, active agent
+             */
+            agent_published: boolean;
+            /** Allowed Domains */
+            allowed_domains: string[];
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Key
+             * @description Public widget key; null until the widget is first set up
+             */
+            key: string | null;
+            /** Last Used At */
+            last_used_at: string | null;
+            /** Rotated At */
+            rotated_at: string | null;
+            /** Script Url */
+            script_url: string;
+            /** Sessions Started */
+            sessions_started: number;
+            /**
+             * Snippet
+             * @description Paste before </body> on the allowed sites
+             */
+            snippet: string | null;
+        };
+        /** WebEmbedUpdate */
+        WebEmbedUpdate: {
+            /**
+             * Allowed Domains
+             * @description Sites allowed to show the widget: example.com, *.example.com, localhost:3000
+             */
+            allowed_domains?: string[];
+            /** Enabled */
+            enabled: boolean;
         };
         /** WebhookDeliveryOut */
         WebhookDeliveryOut: {
@@ -6167,6 +6834,257 @@ export interface operations {
             };
         };
     };
+    list_audio_api_v1_agents__agent_id__audio_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAudioOut"][];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    upload_audio_api_v1_agents__agent_id__audio_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_audio_api_v1_agents__agent_id__audio_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAudioOut"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description File is larger than the limit for its purpose */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_audio_api_v1_agents__agent_id__audio__audio_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+                audio_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A saved version of the agent uses the file */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    audio_file_api_v1_agents__agent_id__audio__audio_id__file_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+                audio_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "audio/mpeg": unknown;
+                    "audio/wav": unknown;
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     compiled_prompt_api_v1_agents__agent_id__compiled_prompt_get: {
         parameters: {
             query?: {
@@ -6596,6 +7514,226 @@ export interface operations {
             };
         };
     };
+    start_test_chat_api_v1_agents__agent_id__test_chat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestChatStart"];
+            };
+        };
+        responses: {
+            /** @description Server-sent events, one `data: <TestChatEvent>` per line pair, ending with `done` or `error` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["TestChatEvent"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not published, archived, chat ended or a reply in progress */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The voice service is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    end_test_chat_api_v1_agents__agent_id__test_chat__call_id__end_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+                call_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallOut"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    send_test_chat_message_api_v1_agents__agent_id__test_chat__call_id__messages_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+                call_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestChatMessage"];
+            };
+        };
+        responses: {
+            /** @description Server-sent events, one `data: <TestChatEvent>` per line pair, ending with `done` or `error` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["TestChatEvent"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not published, archived, chat ended or a reply in progress */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The voice service is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     test_session_api_v1_agents__agent_id__test_session_post: {
         parameters: {
             query?: never;
@@ -6851,6 +7989,360 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentDetail"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_classifier_key_api_v1_agents__agent_id__voicemail_classifier_key_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClassifierKeyOut"] | null;
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    set_classifier_key_api_v1_agents__agent_id__voicemail_classifier_key_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClassifierKeyIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClassifierKeyOut"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_classifier_key_api_v1_agents__agent_id__voicemail_classifier_key_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_web_embed_api_v1_agents__agent_id__web_embed_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebEmbedOut"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_web_embed_api_v1_agents__agent_id__web_embed_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebEmbedUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebEmbedOut"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    rotate_web_embed_api_v1_agents__agent_id__web_embed_rotate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebEmbedOut"];
                 };
             };
             /** @description Missing or invalid credentials */
@@ -7321,6 +8813,219 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ConnectionOut"];
                 };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_pocket_voices_api_v1_ai_connections__connection_id__voices_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PocketVoiceList"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    clone_voice_api_v1_ai_connections__connection_id__voices_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_clone_voice_api_v1_ai_connections__connection_id__voices_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PocketVoice"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Sample larger than the limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Sample is not a WAV file */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Voice cloning is not set up on the Pocket TTS server */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Pocket TTS server unreachable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_cloned_voice_api_v1_ai_connections__connection_id__voices__voice_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+                voice_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Missing or invalid credentials */
             401: {
@@ -11888,6 +13593,141 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    widget_script_api_v1_public_embed_widget_js_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/javascript": unknown;
+                };
+            };
+        };
+    };
+    start_session_api_v1_public_embed__key__sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebCallSession"];
+                };
+            };
+            /** @description The page's site is not allowed */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unknown or switched-off widget */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The agent is not published or not active */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too many sessions from this visitor or site */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    end_session_api_v1_public_embed__key__sessions__call_id__end_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+                call_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Call Token */
+                    call_token: string;
+                    /** Connected */
+                    connected: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown call or token */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
