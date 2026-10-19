@@ -48,6 +48,10 @@
 		header {
 			X-Frame-Options "DENY"
 			Permissions-Policy "microphone=(self), camera=(), geolocation=(), payment=()"
+			# Same-origin scripts only (the theme script is a file, not inline). Inline styles are
+			# allowed: the grid and dialogs position elements with style attributes. Calls connect
+			# to the signalling host; voice previews of hosted providers are https audio.
+			Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob: data: https:; connect-src 'self' wss://{$ATLAS_VOICE_HOST}; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 		}
 		# Hashed bundles never change; everything else (index.html) is revalidated.
 		@immutable path /assets/*

@@ -9,14 +9,8 @@
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f7f9" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0b0e14" />
     <title>ATLAS</title>
-    <script>
-      // Apply the saved theme before first paint to avoid a flash.
-      try {
-        var t = localStorage.getItem("atlas-theme") || "system";
-        var dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
-        document.documentElement.classList.toggle("dark", dark);
-      } catch (e) {}
-    </script>
+    <!-- Applies the saved theme before first paint. A file, not inline, so the Content-Security-Policy allows only same-origin scripts. -->
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>
