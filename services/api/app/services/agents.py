@@ -45,7 +45,7 @@ from app.schemas.voice import (
     TestSession,
 )
 from app.services import actions as action_service
-from app.services import audit
+from app.services import audit, llm_warmup
 from app.services import knowledge as knowledge_service
 from app.services import leads as lead_service
 from app.services.flows import compose_prompt, validate_flow
@@ -777,14 +777,13 @@ async def test_session(
     )
     origin = settings.web_app_origin.rstrip("/")
     domain = urlparse(origin).netloc
+    context = {**variables, "atlas_call_id": "", "atlas_test": "true"}
     async with runtime_client(db, ctx.org_id) as client:
         token = await client.ensure_embed_token(agent.runtime_workflow_id, [domain])
-        session = await client.start_embed_session(
-            token,
-            origin=origin,
-            context={**variables, "atlas_call_id": "", "atlas_test": "true"},
-        )
+        session = await client.start_embed_session(token, origin=origin, context=context)
         ice = await client.turn_servers(session.session_token)
+    # Self-hosted models only: read the prompt while the browser connects (background).
+    llm_warmup.schedule_published_warmup(ctx.org_id, agent.id, agent.published_version, context)
     public = urlparse(settings.voice_runtime_public_url)
     scheme = "wss" if public.scheme == "https" else "ws"
     signaling = f"{scheme}://{public.netloc}{public.path.rstrip('/')}/api/v1/ws/public/signaling/{session.session_token}"

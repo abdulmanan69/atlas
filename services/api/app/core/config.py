@@ -106,6 +106,20 @@ class Settings(BaseSettings):
     # Set to true only for local development against services on the same machine.
     allow_private_action_urls: bool = False
 
+    # Self-hosted language model warm-up (docs/local-models.md, "Warming the prompt"):
+    # when a call or browser test call starts with a self-hosted model, ATLAS sends the
+    # agent's prompt to the model server so the first reply does not wait for it.
+    local_llm_warmup_enabled: bool = True
+    # Where ATLAS itself reaches the model server, e.g. http://127.0.0.1:11434/v1 when the
+    # API runs on the host and the connection's base URL is a Docker-internal name such as
+    # http://local-llm:11434/v1. Operator-set, so it may be private; outside local
+    # development the network policy requires https.
+    local_llm_warmup_url: str | None = None
+    local_llm_warmup_timeout_seconds: float = 30.0
+    # A tenant's self-hosted connection URL is only warmed directly when it resolves to a
+    # public address, unless this is true (models on your own private network).
+    allow_private_model_urls: bool = False
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:

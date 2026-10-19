@@ -1,0 +1,186 @@
+{
+ "meta": {
+  "date": "2026-10-19",
+  "machine": "Intel i5-8500T, 6 cores, 12 GB RAM, no GPU; only the voice service (idle) and local-llm running",
+  "server": "docker compose local-llm: ollama/ollama:0.40.6, qwen2.5:1.5b (q4_K_M), OLLAMA_NUM_PARALLEL=1, OLLAMA_FLASH_ATTENTION=1, OLLAMA_CONTEXT_LENGTH=4096, LLAMA_ARG_CACHE_RAM=256",
+  "real_request": "The voice service's exact first request (POST /v1/chat/completions, stream + stream_options, system + spoken greeting + caller's words + 2 transition tools; 965 prompt tokens), produced by running the voice service's own composition code (WorkflowGraph, compose_system_prompt_for_node, compose_functions_for_node, its template renderer and the OpenAI adapter) inside its container for an agent compiled by ATLAS. ATLAS's warm-up text (system, greeting, tools) was identical for 36 of 36 variable sets across 3 agents.",
+  "warmup_request": "app.services.llm_warmup.build_warmup_body: same system, greeting and tools, user 'Hello?', max_tokens 1, stream false.",
+  "isolation": "Every scenario used leads no other scenario used, and the agent's first line contains {{full_name}}, so no two calls share more than ~8 tokens unless warmed.",
+  "ttft": "Time from sending the real request to the first streamed token, client side.",
+  "scenarios": {
+   "cold": "real request only",
+   "warm_then_real": "warm-up finished, 1 s pause, real request",
+   "warm_classifier_real": "warm-up, then the voice service's answer-classifier prompt (a different 800-token prompt), then the real request: the warmed prompt is restored from the server's RAM prompt cache",
+   "warm_no_tools": "warm-up without the tool list, then the real request (what happens when the Start has actions or documents)",
+   "real_during_warmup_3s": "real request sent 3 s after the warm-up started (caller answered and spoke almost at once)",
+   "warmup_client_timeout_2s": "warm-up abandoned by the client after 2 s, real request 12 s later",
+   "static_prompt_call1_call2": "agent without per-lead variables in its prompt, no warm-up: call 1, then call 2 to another lead"
+  },
+  "previous_measurement_note": "Part 1 tuning numbers (local-llm-tuning.json) were taken while a stuck background process used about 1.2 cores; these warm-up numbers were taken after it was stopped."
+ },
+ "summary": {
+  "cold": {
+   "ttft_ms_median": 10570.1,
+   "ttft_ms": [
+    10570.1,
+    10450.3,
+    10618.3
+   ]
+  },
+  "warm_then_real": {
+   "ttft_ms_median": 347.7,
+   "ttft_ms": [
+    601.1,
+    347.7,
+    327.4
+   ]
+  },
+  "warm_classifier_real": {
+   "ttft_ms_median": 384.1,
+   "ttft_ms": [
+    384.1,
+    768.2,
+    291.0
+   ]
+  },
+  "warm_no_tools": {
+   "ttft_ms_median": 2603.9,
+   "ttft_ms": [
+    2680.2,
+    2603.9,
+    2162.8
+   ]
+  },
+  "real_during_warmup_3s": {
+   "ttft_ms_median": 7404.7,
+   "ttft_ms": [
+    6757.3,
+    7610.8,
+    7404.7
+   ]
+  },
+  "warmup_client_timeout_2s": {
+   "ttft_ms_median": 5155.299999999999,
+   "ttft_ms": [
+    5022.2,
+    5288.4
+   ]
+  },
+  "static_prompt_call1_call2": {
+   "ttft_ms_median": 1907.85,
+   "ttft_ms": [
+    2963.4,
+    852.3
+   ]
+  }
+ },
+ "runs": {
+  "cold": [
+   {
+    "ttft_ms": 10570.1,
+    "first": "Hi"
+   },
+   {
+    "ttft_ms": 10450.3,
+    "first": "I"
+   },
+   {
+    "ttft_ms": 10618.3,
+    "first": "It"
+   }
+  ],
+  "warm_then_real": [
+   {
+    "ttft_ms": 601.1,
+    "first": "Hello",
+    "warmup_ms": 9942.7
+   },
+   {
+    "ttft_ms": 347.7,
+    "first": "My",
+    "warmup_ms": 10008.8
+   },
+   {
+    "ttft_ms": 327.4,
+    "first": "I",
+    "warmup_ms": 10938.9
+   }
+  ],
+  "warm_classifier_real": [
+   {
+    "ttft_ms": 384.1,
+    "first": "I",
+    "warmup_ms": 15657.8,
+    "classifier_ms": 9712.2
+   },
+   {
+    "ttft_ms": 768.2,
+    "first": "Of",
+    "warmup_ms": 9856.0,
+    "classifier_ms": 335.2
+   },
+   {
+    "ttft_ms": 291.0,
+    "first": "I",
+    "warmup_ms": 10788.8,
+    "classifier_ms": 355.9
+   }
+  ],
+  "warm_no_tools": [
+   {
+    "ttft_ms": 2680.2,
+    "first": "Hello",
+    "warmup_ms": 9827.1
+   },
+   {
+    "ttft_ms": 2603.9,
+    "first": "Hello",
+    "warmup_ms": 7857.7
+   },
+   {
+    "ttft_ms": 2162.8,
+    "first": "I",
+    "warmup_ms": 8547.5
+   }
+  ],
+  "real_during_warmup_3s": [
+   {
+    "ttft_ms": 6757.3,
+    "first": "Well",
+    "warmup_ms": 9510.6
+   },
+   {
+    "ttft_ms": 7610.8,
+    "first": "Hi",
+    "warmup_ms": 10254.0
+   },
+   {
+    "ttft_ms": 7404.7,
+    "first": "I",
+    "warmup_ms": 10155.0
+   }
+  ],
+  "warmup_client_timeout_2s": [
+   {
+    "ttft_ms": 5022.2,
+    "first": "Hello",
+    "warmup_ms": 2008.2
+   },
+   {
+    "ttft_ms": 5288.4,
+    "first": "Hello",
+    "warmup_ms": 2018.2
+   }
+  ],
+  "static_prompt_call1_call2": [
+   {
+    "ttft_ms": 2963.4,
+    "first": "Hello"
+   },
+   {
+    "ttft_ms": 852.3,
+    "first": "Hello"
+   }
+  ]
+ }
+}

@@ -1,0 +1,419 @@
+{
+ "meta": {
+  "date": "2026-10-19",
+  "machine": "Intel i5-8500T, 6 cores, 12 GB RAM, no GPU (Docker Desktop WSL2, 6 vCPU)",
+  "server": "ollama/ollama:0.40.6 (llama-server b11669), qwen2.5:1.5b unless noted, OLLAMA_NUM_PARALLEL=1, OLLAMA_CONTEXT_LENGTH=4096, container memory limit 2560m",
+  "method": "Each sample: POST /api/chat (stream) with a ~740-token agent prompt whose first line is a unique [session <uuid>], so nothing past the first ~5 tokens can come from the prompt cache. Configs are measured in alternation (A B C, A B C, ...) in 3 rounds of 2 samples after a load request, because background CPU load drifted by over 1 s between blocks. Runner options (num_thread, num_batch, num_ctx) are request options, which reload the model; flash attention is the OLLAMA_FLASH_ATTENTION env var (container restarted). prompt_tok_s = prompt_eval_count / prompt_eval_duration from Ollama's final chunk (prompt_eval_count includes the ~5 cached tokens).",
+  "background_load": "A stuck background process (a bash.exe plugin hook) used about 1.2 of the 6 cores during every one of these runs (it was stopped afterwards). Absolute times are therefore slower than on an idle machine; comparisons are within the same alternating block, so they stand.",
+  "skipped": [
+   "q8_0 and q3_K_M quantisations",
+   "OLLAMA_KV_CACHE_TYPE",
+   "num_thread 1-2",
+   "a clean (idle) machine"
+  ]
+ },
+ "blocks": [
+  {
+   "label": "fa0-A",
+   "config": "t6",
+   "model": "qwen2.5:1.5b",
+   "options": {
+    "num_thread": 6
+   },
+   "n": 6,
+   "ttft_ms_median": 8633.4,
+   "ttft_ms_min": 8037.4,
+   "ttft_ms_max": 9672.0,
+   "prompt_tok_s_median": 86.3,
+   "eval_tok_s_median": 10.3,
+   "prompt_eval_count": 740,
+   "ttft_ms_samples": [
+    8245.7,
+    8982.0,
+    8912.2,
+    8354.6,
+    9672.0,
+    8037.4
+   ]
+  },
+  {
+   "label": "fa0-A",
+   "config": "t4",
+   "model": "qwen2.5:1.5b",
+   "options": {
+    "num_thread": 4
+   },
+   "n": 6,
+   "ttft_ms_median": 9682.0,
+   "ttft_ms_min": 9408.3,
+   "ttft_ms_max": 11089.5,
+   "prompt_tok_s_median": 76.7,
+   "eval_tok_s_median": 16.5,
+   "prompt_eval_count": 740,
+   "ttft_ms_samples": [
+    9544.9,
+    9765.2,
+    9408.3,
+    11089.5,
+    9819.0,
+    9598.8
+   ]
+  },
+  {
+   "label": "fa0-A",
+   "config": "t5",
+   "model": "qwen2.5:1.5b",
+   "options": {
+    "num_thread": 5
+   },
+   "n": 6,
+   "ttft_ms_median": 9570.0,
+   "ttft_ms_min": 9156.6,
+   "ttft_ms_max": 12184.2,
+   "prompt_tok_s_median": 77.7,
+   "eval_tok_s_median": 12.9,
+   "prompt_eval_count": 741,
+   "ttft_ms_samples": [
+    9246.6,
+    9836.4,
+    11763.0,
+    12184.2,
+    9303.5,
+    9156.6
+   ]
+  },
+  {
+   "label": "fa1-A",
+   "config": "t6",
+   "model": "qwen2.5:1.5b",
+   "options": {
+    "num_thread": 6
+   },
+   "n": 6,
+   "ttft_ms_median": 7824.6,
+   "ttft_ms_min": 7581.5,
+   "ttft_ms_max": 8505.7,
+   "prompt_tok_s_median": 95.2,
+   "eval_tok_s_median": 16.4,
+   "prompt_eval_count": 739,
+   "ttft_ms_samples": [
+    7642.9,
+    7822.4,
+    7581.5,
+    8505.7,
+    7826.9,
+    7866.7
+   ]
+  },
+  {
+   "label": "fa1-A",
+   "config": "t4",
+   "model": "qwen2.5:1.5b",
+   "options": {
+    "num_thread": 4
+   },
+   "n": 6,
+   "ttft_ms_median": 9314.9,
+   "ttft_ms_min": 9119.0,
+   "ttft_ms_max": 9539.6,
+   "prompt_tok_s_median": 79.7,
+   "eval_tok_s_median": 16.6,
+   "prompt_eval_count": 737,
+   "ttft_ms_samples": [
+    9246.6,
+    9539.6,
+    9204.6,
+    9433.2,
+    9119.0,
+    9383.2
+   ]
+  },
+  {
+   "label": "fa1-A",
+   "config": "t5",
+   "model": "qwen2.5:1.5b",
+   "options": {
+    "num_thread": 5
+   },
+   "n": 6,
+   "ttft_ms_median": 8680.5,
+   "ttft_ms_min": 8574.9,
+   "ttft_ms_max": 9143.2,
+   "prompt_tok_s_median": 85.8,
+   "eval_tok_s_median": 13.5,
+   "prompt_eval_count": 739,
+   "ttft_ms_samples": [
+    8611.5,
+    8637.6,
+    8729.9,
+    9143.2,
+    8574.9,
+    8723.3
+   ]
+  },
+  {
+   "label": "fa1-batch",
+   "config": "def",
+   "model": "qwen2.5:1.5b",
+   "options": {},
+   "n": 6,
+   "ttft_ms_median": 8184.1,
+   "ttft_ms_min": 7349.9,
+   "ttft_ms_max": 11973.4,
+   "prompt_tok_s_median": 91.5,
+   "eval_tok_s_median": 10.8,
+   "prompt_eval_count": 740,
+   "ttft_ms_samples": [
+    7748.5,
+    7349.9,
+    7563.2,
+    8619.7,
+    11616.8,
+    11973.4
+   ]
+  },
+  {
+   "label": "fa1-batch",
+   "config": "b256",
+   "model": "qwen2.5:1.5b",
+   "options": {
+    "num_batch": 256
+   },
+   "n": 6,
+   "ttft_ms_median": 7794.6,
+   "ttft_ms_min": 7272.6,
+   "ttft_ms_max": 10893.3,
+   "prompt_tok_s_median": 95.5,
+   "eval_tok_s_median": 10.3,
+   "prompt_eval_count": 740,
+   "ttft_ms_samples": [
+    8166.4,
+    7599.0,
+    7990.2,
+    10893.3,
+    7454.9,
+    7272.6
+   ]
+  },
+  {
+   "label": "fa1-batch",
+   "config": "b1024",
+   "model": "qwen2.5:1.5b",
+   "options": {
+    "num_batch": 1024
+   },
+   "n": 6,
+   "ttft_ms_median": 7523.8,
+   "ttft_ms_min": 7007.2,
+   "ttft_ms_max": 9963.7,
+   "prompt_tok_s_median": 99.2,
+   "eval_tok_s_median": 12.9,
+   "prompt_eval_count": 740,
+   "ttft_ms_samples": [
+    7658.5,
+    7007.2,
+    9159.8,
+    9963.7,
+    7196.0,
+    7389.1
+   ]
+  },
+  {
+   "label": "fa1-batch",
+   "config": "ctx2048",
+   "model": "qwen2.5:1.5b",
+   "options": {
+    "num_ctx": 2048
+   },
+   "n": 6,
+   "ttft_ms_median": 7884.2,
+   "ttft_ms_min": 7356.7,
+   "ttft_ms_max": 8483.0,
+   "prompt_tok_s_median": 94.7,
+   "eval_tok_s_median": 14.9,
+   "prompt_eval_count": 738,
+   "ttft_ms_samples": [
+    7356.7,
+    8453.1,
+    8247.9,
+    7404.9,
+    8483.0,
+    7520.5
+   ]
+  },
+  {
+   "label": "fa1-quant",
+   "config": "q4KM",
+   "model": "qwen2.5:1.5b",
+   "options": {},
+   "n": 6,
+   "ttft_ms_median": 7563.5,
+   "ttft_ms_min": 6908.7,
+   "ttft_ms_max": 9740.8,
+   "prompt_tok_s_median": 98.5,
+   "eval_tok_s_median": 13.0,
+   "prompt_eval_count": 737,
+   "ttft_ms_samples": [
+    6908.7,
+    9037.3,
+    7495.5,
+    7631.5,
+    7132.4,
+    9740.8
+   ]
+  },
+  {
+   "label": "fa1-quant",
+   "config": "q4KM_b1024",
+   "model": "qwen2.5:1.5b",
+   "options": {
+    "num_batch": 1024
+   },
+   "n": 6,
+   "ttft_ms_median": 7683.8,
+   "ttft_ms_min": 7253.6,
+   "ttft_ms_max": 7975.8,
+   "prompt_tok_s_median": 97.2,
+   "eval_tok_s_median": 12.9,
+   "prompt_eval_count": 741,
+   "ttft_ms_samples": [
+    7428.3,
+    7958.1,
+    7451.3,
+    7975.8,
+    7916.3,
+    7253.6
+   ]
+  },
+  {
+   "label": "fa1-quant",
+   "config": "q4_0",
+   "model": "qwen2.5:1.5b-instruct-q4_0",
+   "options": {},
+   "n": 6,
+   "ttft_ms_median": 8958.0,
+   "ttft_ms_min": 7885.5,
+   "ttft_ms_max": 9812.5,
+   "prompt_tok_s_median": 83.0,
+   "eval_tok_s_median": 15.4,
+   "prompt_eval_count": 737,
+   "ttft_ms_samples": [
+    8243.1,
+    7885.5,
+    9063.5,
+    9126.8,
+    9812.5,
+    8852.4
+   ]
+  },
+  {
+   "label": "fa1-quant",
+   "config": "0.5b",
+   "model": "qwen2.5:0.5b",
+   "options": {},
+   "n": 6,
+   "ttft_ms_median": 3576.6,
+   "ttft_ms_min": 3160.1,
+   "ttft_ms_max": 4128.3,
+   "prompt_tok_s_median": 208.5,
+   "eval_tok_s_median": 32.1,
+   "prompt_eval_count": 740,
+   "ttft_ms_samples": [
+    4128.3,
+    3571.6,
+    3581.6,
+    3285.6,
+    3160.1,
+    3842.5
+   ]
+  },
+  {
+   "label": "fa0-B",
+   "config": "def",
+   "model": "qwen2.5:1.5b",
+   "options": {},
+   "n": 6,
+   "ttft_ms_median": 8578.0,
+   "ttft_ms_min": 8275.8,
+   "ttft_ms_max": 12089.0,
+   "prompt_tok_s_median": 86.8,
+   "eval_tok_s_median": 9.9,
+   "prompt_eval_count": 743,
+   "ttft_ms_samples": [
+    8391.1,
+    8657.9,
+    8498.2,
+    9513.8,
+    12089.0,
+    8275.8
+   ]
+  },
+  {
+   "label": "fa0-B",
+   "config": "b1024",
+   "model": "qwen2.5:1.5b",
+   "options": {
+    "num_batch": 1024
+   },
+   "n": 6,
+   "ttft_ms_median": 8766.1,
+   "ttft_ms_min": 8360.7,
+   "ttft_ms_max": 10748.2,
+   "prompt_tok_s_median": 84.8,
+   "eval_tok_s_median": 13.8,
+   "prompt_eval_count": 743,
+   "ttft_ms_samples": [
+    8911.8,
+    8960.8,
+    8360.7,
+    10748.2,
+    8620.5,
+    8598.8
+   ]
+  },
+  {
+   "label": "fa1-B",
+   "config": "def",
+   "model": "qwen2.5:1.5b",
+   "options": {},
+   "n": 6,
+   "ttft_ms_median": 8100.2,
+   "ttft_ms_min": 7824.3,
+   "ttft_ms_max": 9251.1,
+   "prompt_tok_s_median": 92.2,
+   "eval_tok_s_median": 10.2,
+   "prompt_eval_count": 741,
+   "ttft_ms_samples": [
+    8142.6,
+    7824.3,
+    8057.9,
+    8034.7,
+    9186.6,
+    9251.1
+   ]
+  },
+  {
+   "label": "fa1-B",
+   "config": "b1024",
+   "model": "qwen2.5:1.5b",
+   "options": {
+    "num_batch": 1024
+   },
+   "n": 6,
+   "ttft_ms_median": 7959.3,
+   "ttft_ms_min": 7573.3,
+   "ttft_ms_max": 12897.1,
+   "prompt_tok_s_median": 93.5,
+   "eval_tok_s_median": 13.6,
+   "prompt_eval_count": 738,
+   "ttft_ms_samples": [
+    8237.7,
+    7719.8,
+    7687.0,
+    7573.3,
+    12897.1,
+    8198.8
+   ]
+  }
+ ]
+}

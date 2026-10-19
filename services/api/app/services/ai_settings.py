@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -292,8 +293,12 @@ def _choice(raw: Any) -> ServiceChoice | None:
 
 
 async def get_selection(db: AsyncSession, ctx: TenantContext) -> ModelSelection:
-    account = await ensure_account(db, ctx.org_id)
-    async with runtime_client(db, ctx.org_id) as client:
+    return await get_selection_for_org(db, ctx.org_id)
+
+
+async def get_selection_for_org(db: AsyncSession, org_id: uuid.UUID) -> ModelSelection:
+    account = await ensure_account(db, org_id)
+    async with runtime_client(db, org_id) as client:
         default_uuid = await client.get_default_configuration()
         # The runtime's bootstrap default is not the tenant's choice: report "not set up".
         if not default_uuid or (

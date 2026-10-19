@@ -27,6 +27,8 @@ os.environ.update(
         "ATLAS_VOICE_RUNTIME_CALLBACK_URL": "http://host.docker.internal:8080",
         "ATLAS_WEB_APP_ORIGIN": "http://localhost:5173",
         "ATLAS_VOICE_ALLOW_HOSTED_TRIAL_MODELS": "false",
+        # Background model warm-ups are tested in test_llm_warmup.py, which enables them.
+        "ATLAS_LOCAL_LLM_WARMUP_ENABLED": "false",
     }
 )
 

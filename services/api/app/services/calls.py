@@ -35,7 +35,7 @@ from app.models.calls import TERMINAL_STATES, Call, CallDirection, CallEvent, Ca
 from app.models.crm import Activity, ActivityType, ActorType, ConsentStatus, Lead, PipelineStage
 from app.models.identity import Organization
 from app.models.voice import Agent, AgentStatus
-from app.services import audit, events, jobs
+from app.services import audit, events, jobs, llm_warmup
 from app.services import latency as latency_parser
 from app.services import leads as lead_service
 from app.services.runtime_accounts import runtime_client
@@ -240,6 +240,10 @@ async def start_outbound_call(db: AsyncSession, req: CallRequest, *, live: bool)
     call.started_at = datetime.now(UTC)
     _set_state(db, call, CallState.DIALING)
     await events.emit(db, req.organization_id, "call.started", _event_data(call))
+    # Self-hosted models only: read the agent's prompt while the phone rings (background).
+    llm_warmup.schedule_published_warmup(
+        req.organization_id, req.agent.id, req.agent.published_version, context
+    )
     return call
 
 
