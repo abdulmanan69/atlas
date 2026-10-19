@@ -156,7 +156,8 @@ function TurnsChart({ turns, thresholds, synthetic }: { turns: LatencyTurn[]; th
               {formatMs(m.ms)}
             </span>
           ))}
-          <span className="absolute right-0">{formatMs(scale)}</span>
+          {/* The scale end is labelled only when it is clear of the last threshold mark. */}
+          {marks.every((m) => pct(m.ms, scale) < 85) ? <span className="absolute right-0">{formatMs(scale)}</span> : null}
         </div>
         <span className="text-right">Response</span>
       </div>
@@ -173,7 +174,8 @@ function TurnsChart({ turns, thresholds, synthetic }: { turns: LatencyTurn[]; th
             >
               <div className="min-w-0">
                 <p className="truncate text-[12.5px] font-medium text-ink">
-                  <span className="font-mono text-faint">{t.turn}</span> {t.node_name ?? "Turn"}
+                  {t.turn === 0 && t.response_ms === null ? "Greeting" : `Turn ${t.turn}`}
+                  {t.node_name ? <span className="font-normal text-faint"> · {t.node_name}</span> : null}
                 </p>
                 {t.user_text ? (
                   <p className="truncate text-[11.5px] text-muted" title={t.user_text}>

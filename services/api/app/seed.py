@@ -298,6 +298,31 @@ async def _seed_voice(db: AsyncSession, org: Organization, user: User, rng: rand
     return created_calls
 
 
+async def _backfill_latency(db: AsyncSession, org: Organization) -> int:
+    """Give demo calls seeded before latency existed their synthetic timings."""
+    rows = (
+        await db.execute(
+            select(Call).where(
+                Call.organization_id == org.id,
+                Call.mode == CallMode.SIMULATED,
+                Call.state == CallState.COMPLETED,
+                Call.latency.is_(None),
+                Call.started_at.is_not(None),
+            )
+        )
+    ).scalars()
+    count = 0
+    for call in rows:
+        assert call.started_at is not None
+        call.latency = simulated_latency(
+            f"demo-{call.lead_id}",
+            duration_seconds=call.duration_seconds or 60,
+            started_at=call.started_at,
+        )
+        count += 1
+    return count
+
+
 async def seed() -> None:
     settings = get_settings()
     if settings.is_production:
@@ -306,6 +331,7 @@ async def seed() -> None:
     password = os.environ.get("ATLAS_DEMO_PASSWORD") or secrets.token_urlsafe(12)
     created_org = False
     calls_created = 0
+    backfilled = 0
 
     async with get_sessionmaker()() as db:
         user = (
@@ -329,6 +355,7 @@ async def seed() -> None:
         has_calls = await db.scalar(select(Call.id).where(Call.organization_id == org.id))
         if not has_calls:
             calls_created = await _seed_voice(db, org, user, rng)
+        backfilled = await _backfill_latency(db, org)
         await db.commit()
 
     if created_org:
@@ -341,7 +368,9 @@ async def seed() -> None:
             "Added the voice demo: 1 agent, 1 finished dry-run campaign, "
             f"{calls_created} simulated calls."
         )
-    if not created_org and not calls_created:
+    if backfilled:
+        print(f"Added synthetic response timings to {backfilled} demo calls.")
+    if not created_org and not calls_created and not backfilled:
         print("Demo data already present. Nothing to do.")
 
 

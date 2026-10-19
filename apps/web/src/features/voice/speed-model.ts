@@ -2,8 +2,12 @@
 import type { LatencyPreset, PresetChoice } from "@/features/calls/latency-types";
 import type { Catalog, Connection } from "@/features/voice/queries";
 
+/** One server type serves every self-hosted role, so its catalog title (per service) would mislabel the others. */
+const SELF_HOSTED = new Set(["speaches"]);
+
 /** Provider id → its catalog title, from any service; falls back to the id. */
 export function providerTitle(id: string, catalog: Catalog | undefined): string {
+  if (SELF_HOSTED.has(id)) return "Self-hosted models";
   if (!catalog) return id;
   for (const kind of ["stt", "llm", "tts", "embeddings"] as const) {
     const hit = catalog[kind].find((p) => p.id === id);
@@ -29,6 +33,8 @@ export function missingFromError(body: unknown): string[] | null {
 export function choiceLabel(choice: PresetChoice, catalog: Catalog | undefined): string {
   const s = choice.settings ?? {};
   const detail = [s.model, s.voice, s.voice_id].find((v): v is string => typeof v === "string" && v.length > 0);
+  // Self-hosted: the model is the meaningful part ("qwen2.5:1.5b"), not the server type.
+  if (SELF_HOSTED.has(choice.provider)) return detail ? `Self-hosted · ${detail}` : "Self-hosted models";
   const title = providerTitle(choice.provider, catalog);
   return detail ? `${title} · ${detail}` : title;
 }
