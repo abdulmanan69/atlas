@@ -26,6 +26,10 @@ import httpx
 DEMO_EMAIL = "demo@example.com"
 DEMO_ORG_NAME = "Demo Realty (demo data)"
 AGENT_NAME = "Mortgage lead qualifier"
+QUICK_OPENER_RULE = (
+    "Start every reply with a short acknowledgement of two to four words that ends with a full stop, "
+    'for example "Got it." or "That makes sense.", then continue. Keep every sentence short.'
+)
 AGENT_TEMPLATE = "lead_qualifier"
 POCKET_PRESET = "private_pocket_tts"
 STREAMING_PRESET = "private_streaming"
@@ -211,17 +215,28 @@ def browser_only_settings(api: Api, agent: dict) -> None:
     # The list endpoint returns a summary; save from the full agent so the config validates.
     full = api.call("GET", f"/agents/{agent['id']}")
     config = full.get("config") or {}
+    changes: list[str] = []
     voicemail = (config.get("call_settings") or {}).get("voicemail") or {}
-    if voicemail.get("enabled") is False:
-        say("voicemail detection already off for the demo agent")
+    if voicemail.get("enabled") is not False:
+        config.setdefault("call_settings", {}).setdefault("voicemail", {})["enabled"] = False
+        changes.append("voicemail detection off (browser calls never reach one)")
+    # The voice starts speaking only when the model has written a full sentence. A short
+    # opener ends that first sentence almost at once: measured on a 6-core CPU, the median
+    # reply went from 3.9 s to 3.3 s (docs/perf/e2e-test-call-streaming.json).
+    rules = (config.get("global_rules") or "").strip()
+    if QUICK_OPENER_RULE not in rules:
+        config["global_rules"] = (rules + "\n\n" + QUICK_OPENER_RULE).strip()
+        changes.append("replies open with a short acknowledgement (faster first words)")
+    if not changes:
+        say("demo agent settings already in place")
         return
-    config.setdefault("call_settings", {}).setdefault("voicemail", {})["enabled"] = False
     try:
         api.call("PUT", f"/agents/{agent['id']}/config",
-                 {"config": config, "note": "Demo: browser test calls only, voicemail detection off"})
-        say("voicemail detection turned off for the demo agent (browser calls never reach one)")
+                 {"config": config, "note": "Demo: " + "; ".join(changes)})
+        for change in changes:
+            say(f"demo agent: {change}")
     except ApiError as exc:
-        say(f"could not turn off voicemail detection ({exc.status}: {exc.message}); continuing")
+        say(f"could not update the demo agent's settings ({exc.status}: {exc.message}); continuing")
 
 
 def set_stt_model(api: Api, model: str) -> None:

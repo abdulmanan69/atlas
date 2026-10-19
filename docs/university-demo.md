@@ -18,6 +18,12 @@ on one machine (Docker, the models, the browser), with automated test calls
 |---|---|
 | Whisper base (default) | **4.4 s** / 5.1 s |
 | Whisper tiny.en (`.\make.ps1 demo -FastStt`) | **3.6 s** / 4.1 s |
+| Live transcription (`.\make.ps1 demo -DeepgramKey <key>`, needs internet once) | **3.3 s** / 5.1 s |
+
+The demo agent also opens every reply with a short acknowledgement ("Got it."): the voice
+starts as soon as the model finishes its first sentence, so a short first sentence is heard
+sooner. The setup adds this rule to the demo agent; add it to your own agents' global rules
+for the same effect.
 
 `-FastStt` is English only and less robust to accents, names and background noise. Try it
 before the audience arrives: make a test call, and if it understands you well, keep it; run

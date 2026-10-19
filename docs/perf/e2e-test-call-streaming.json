@@ -1,0 +1,1018 @@
+{
+  "tool": "infra/scripts/e2e_test_call.py",
+  "generated_at": "2026-10-19T18:45:05+00:00",
+  "results_dir": "D:\\main code\\.cache\\e2e-test-call\\20261019-234225",
+  "config": {
+    "api": "http://host.docker.internal:8080",
+    "agent": "Mortgage lead qualifier",
+    "organization": "Demo Realty (demo data)",
+    "runs": 2,
+    "caller_voice": "pocket-tts/marius",
+    "utterances": [
+      {
+        "text": "Yes, now is fine. I'm looking to buy my first home.",
+        "speech_ms": 2240,
+        "source": "tts:pocket-tts/marius"
+      },
+      {
+        "text": "Sometime in the next three months, ideally.",
+        "speech_ms": 1600,
+        "source": "tts:pocket-tts/marius"
+      },
+      {
+        "text": "Our budget is around four hundred thousand dollars.",
+        "speech_ms": 1690,
+        "source": "tts:pocket-tts/marius"
+      },
+      {
+        "text": "Just me and my wife. That's all for now, thank you.",
+        "speech_ms": 1930,
+        "source": "tts:pocket-tts/marius"
+      }
+    ],
+    "vad": {
+      "vad_db": -45.0,
+      "silence_db": -90.0,
+      "min_speech_ms": 60,
+      "end_silence_ms": 1500,
+      "gap_ms": 200
+    },
+    "limits": {
+      "max_reply_ms": 15000,
+      "greeting_timeout_s": 60.0,
+      "reply_timeout_s": 45.0,
+      "turn_timeout_s": 120.0
+    },
+    "runner": "voice-runtime container"
+  },
+  "summary": {
+    "runs": 2,
+    "passed": 2,
+    "turns": 8,
+    "client_reply_ms": {
+      "p50": 3322,
+      "max": 5082,
+      "values": [
+        3315,
+        3329,
+        5082,
+        3422,
+        2997,
+        2922,
+        4111,
+        3309
+      ]
+    },
+    "server_response_ms": {
+      "p50": 2896,
+      "max": 4482,
+      "values": [
+        2930,
+        2886,
+        4482,
+        2905,
+        2563,
+        2486,
+        3365,
+        2782
+      ]
+    },
+    "greeting_after_connect_ms": [
+      3432,
+      1438
+    ],
+    "choppy_turns": 6
+  },
+  "ok": true,
+  "runs": [
+    {
+      "run": 1,
+      "ok": true,
+      "failures": [],
+      "started_at": "2026-10-19T18:42:36.677+00:00",
+      "call_id": "5c199610-cb81-42c9-b795-65cb342acd56",
+      "workflow_run_id": 27,
+      "connection": {
+        "signaling": "ws://localhost:8000",
+        "ice_servers": 0,
+        "offer_to_answer_ms": 186,
+        "offer_to_connected_ms": 255,
+        "state": "connected"
+      },
+      "greeting": {
+        "status": "ok",
+        "first_audio_ms": 3432,
+        "agent_started_at": "2026-10-19T18:42:40.749+00:00",
+        "agent_ended_at": "2026-10-19T18:42:53.354+00:00",
+        "speaking_ms": 12606,
+        "voiced_ms": 6480,
+        "peak_level_db": -13.7,
+        "segments": 1,
+        "gaps": [
+          {
+            "at_s": 4.775,
+            "ms": 480,
+            "filler_ms": 100,
+            "max_level_db": -53.4,
+            "kind": "pause"
+          },
+          {
+            "at_s": 5.496,
+            "ms": 380,
+            "filler_ms": 340,
+            "max_level_db": -46.6,
+            "kind": "silent"
+          },
+          {
+            "at_s": 6.378,
+            "ms": 320,
+            "filler_ms": 280,
+            "max_level_db": -52.9,
+            "kind": "silent"
+          },
+          {
+            "at_s": 7.218,
+            "ms": 420,
+            "filler_ms": 400,
+            "max_level_db": -53.3,
+            "kind": "silent"
+          },
+          {
+            "at_s": 8.069,
+            "ms": 520,
+            "filler_ms": 120,
+            "max_level_db": -45.1,
+            "kind": "pause"
+          },
+          {
+            "at_s": 9.278,
+            "ms": 700,
+            "filler_ms": 220,
+            "max_level_db": -53.9,
+            "kind": "silent"
+          },
+          {
+            "at_s": 10.252,
+            "ms": 460,
+            "filler_ms": 440,
+            "max_level_db": -52.1,
+            "kind": "silent"
+          },
+          {
+            "at_s": 11.825,
+            "ms": 780,
+            "filler_ms": 760,
+            "max_level_db": -55.9,
+            "kind": "silent"
+          },
+          {
+            "at_s": 13.429,
+            "ms": 740,
+            "filler_ms": 220,
+            "max_level_db": -50.1,
+            "kind": "silent"
+          },
+          {
+            "at_s": 14.537,
+            "ms": 300,
+            "filler_ms": 260,
+            "max_level_db": -46.2,
+            "kind": "silent"
+          },
+          {
+            "at_s": 15.332,
+            "ms": 220,
+            "filler_ms": 160,
+            "max_level_db": -50.0,
+            "kind": "pause"
+          }
+        ],
+        "stalls": [],
+        "max_gap_ms": 780,
+        "choppy": true,
+        "server_live": {
+          "heard": null,
+          "agent_text": "Hi Alex, this is Sarah from Demo Realty (demo data). You recently asked about our services. Is now a good time for two quick questions?",
+          "response_ms": null,
+          "stt_ttfb_ms": null,
+          "llm_ttfb_ms": null,
+          "tts_ttfb_ms": 1588
+        }
+      },
+      "turns": [
+        {
+          "index": 1,
+          "text": "Yes, now is fine. I'm looking to buy my first home.",
+          "audio_source": "tts:pocket-tts/marius",
+          "caller_speech_ms": 2240,
+          "caller_started_at": "2026-10-19T18:42:54.859+00:00",
+          "caller_ended_at": "2026-10-19T18:42:57.098+00:00",
+          "status": "ok",
+          "reply_ms": 3315,
+          "agent_started_at": "2026-10-19T18:43:00.413+00:00",
+          "agent_ended_at": "2026-10-19T18:43:04.549+00:00",
+          "speaking_ms": 4137,
+          "voiced_ms": 2560,
+          "peak_level_db": -14.6,
+          "segments": 1,
+          "gaps": [
+            {
+              "at_s": 24.193,
+              "ms": 1360,
+              "filler_ms": 620,
+              "max_level_db": -47.6,
+              "kind": "silent"
+            }
+          ],
+          "stalls": [],
+          "max_gap_ms": 1360,
+          "choppy": true,
+          "overlap": false,
+          "server_live": {
+            "heard": "Yes yes now is fine I 'm looking to buy my first home",
+            "agent_text": "Great! What timeline are you working with for this purchase?",
+            "response_ms": 2930,
+            "stt_ttfb_ms": 262,
+            "llm_ttfb_ms": 995,
+            "tts_ttfb_ms": 908
+          },
+          "server": {
+            "turn": 2,
+            "node_name": "Conversation",
+            "user_text": "Yes yes now is fine I 'm looking to buy my first home",
+            "agent_text": "Great! What timeline are you working with for this purchase?",
+            "user_started_at": "2026-10-19T18:42:55.521000Z",
+            "user_ended_at": "2026-10-19T18:42:58.164000Z",
+            "agent_started_at": "2026-10-19T18:43:00.289000Z",
+            "agent_ended_at": "2026-10-19T18:43:04.689000Z",
+            "response_ms": 2930,
+            "stt_ttfb_ms": 262,
+            "llm_ttfb_ms": 995,
+            "tts_ttfb_ms": 908,
+            "tools": [],
+            "slow": true
+          }
+        },
+        {
+          "index": 2,
+          "text": "Sometime in the next three months, ideally.",
+          "audio_source": "tts:pocket-tts/marius",
+          "caller_speech_ms": 1600,
+          "caller_started_at": "2026-10-19T18:43:06.058+00:00",
+          "caller_ended_at": "2026-10-19T18:43:07.658+00:00",
+          "status": "ok",
+          "reply_ms": 3329,
+          "agent_started_at": "2026-10-19T18:43:10.987+00:00",
+          "agent_ended_at": "2026-10-19T18:43:14.587+00:00",
+          "speaking_ms": 3600,
+          "voiced_ms": 2660,
+          "peak_level_db": -14.0,
+          "segments": 1,
+          "gaps": [
+            {
+              "at_s": 34.775,
+              "ms": 840,
+              "filler_ms": 360,
+              "max_level_db": -47.4,
+              "kind": "silent"
+            }
+          ],
+          "stalls": [],
+          "max_gap_ms": 840,
+          "choppy": true,
+          "overlap": false,
+          "server_live": {
+            "heard": "Some time in the next three months ideally",
+            "agent_text": "Alright. Have you considered a specific area or neighborhood?",
+            "response_ms": 2886,
+            "stt_ttfb_ms": 326,
+            "llm_ttfb_ms": 458,
+            "tts_ttfb_ms": 1411
+          },
+          "server": {
+            "turn": 3,
+            "node_name": "Conversation",
+            "user_text": "Some time in the next three months ideally",
+            "agent_text": "Alright. Have you considered a specific area or neighborhood?",
+            "user_started_at": "2026-10-19T18:43:06.781000Z",
+            "user_ended_at": "2026-10-19T18:43:08.763000Z",
+            "agent_started_at": "2026-10-19T18:43:10.847000Z",
+            "agent_ended_at": "2026-10-19T18:43:14.804000Z",
+            "response_ms": 2886,
+            "stt_ttfb_ms": 326,
+            "llm_ttfb_ms": 458,
+            "tts_ttfb_ms": 1411,
+            "tools": [],
+            "slow": true
+          }
+        },
+        {
+          "index": 3,
+          "text": "Our budget is around four hundred thousand dollars.",
+          "audio_source": "tts:pocket-tts/marius",
+          "caller_speech_ms": 1690,
+          "caller_started_at": "2026-10-19T18:43:16.099+00:00",
+          "caller_ended_at": "2026-10-19T18:43:17.788+00:00",
+          "status": "ok",
+          "reply_ms": 5082,
+          "agent_started_at": "2026-10-19T18:43:22.870+00:00",
+          "agent_ended_at": "2026-10-19T18:43:24.429+00:00",
+          "speaking_ms": 1560,
+          "voiced_ms": 1520,
+          "peak_level_db": -13.9,
+          "segments": 1,
+          "gaps": [],
+          "stalls": [],
+          "max_gap_ms": 0,
+          "choppy": false,
+          "overlap": false,
+          "server_live": {
+            "heard": "Our budges around four hundred thousand dollars",
+            "agent_text": "Are you planning to buy with someone else?",
+            "response_ms": 4482,
+            "stt_ttfb_ms": 549,
+            "llm_ttfb_ms": 1007,
+            "tts_ttfb_ms": 1317
+          },
+          "server": {
+            "turn": 4,
+            "node_name": "Conversation",
+            "user_text": "Our budges around four hundred thousand dollars",
+            "agent_text": "Are you planning to buy with someone else?",
+            "user_started_at": "2026-10-19T18:43:16.759000Z",
+            "user_ended_at": "2026-10-19T18:43:18.845000Z",
+            "agent_started_at": "2026-10-19T18:43:22.523000Z",
+            "agent_ended_at": "2026-10-19T18:43:24.605000Z",
+            "response_ms": 4482,
+            "stt_ttfb_ms": 549,
+            "llm_ttfb_ms": 1007,
+            "tts_ttfb_ms": 1317,
+            "tools": [],
+            "slow": true
+          }
+        },
+        {
+          "index": 4,
+          "text": "Just me and my wife. That's all for now, thank you.",
+          "audio_source": "tts:pocket-tts/marius",
+          "caller_speech_ms": 1930,
+          "caller_started_at": "2026-10-19T18:43:25.938+00:00",
+          "caller_ended_at": "2026-10-19T18:43:27.867+00:00",
+          "status": "ok",
+          "reply_ms": 3422,
+          "agent_started_at": "2026-10-19T18:43:31.290+00:00",
+          "agent_ended_at": "2026-10-19T18:43:38.889+00:00",
+          "speaking_ms": 7599,
+          "voiced_ms": 4740,
+          "peak_level_db": -11.5,
+          "segments": 1,
+          "gaps": [
+            {
+              "at_s": 55.244,
+              "ms": 440,
+              "filler_ms": 0,
+              "max_level_db": -46.0,
+              "kind": "pause"
+            },
+            {
+              "at_s": 55.697,
+              "ms": 1340,
+              "filler_ms": 1320,
+              "max_level_db": -51.6,
+              "kind": "silent"
+            },
+            {
+              "at_s": 57.138,
+              "ms": 200,
+              "filler_ms": 0,
+              "max_level_db": -47.1,
+              "kind": "pause"
+            },
+            {
+              "at_s": 59.094,
+              "ms": 240,
+              "filler_ms": 0,
+              "max_level_db": -48.8,
+              "kind": "pause"
+            },
+            {
+              "at_s": 60.354,
+              "ms": 380,
+              "filler_ms": 0,
+              "max_level_db": -45.2,
+              "kind": "pause"
+            }
+          ],
+          "stalls": [],
+          "max_gap_ms": 1340,
+          "choppy": true,
+          "overlap": false,
+          "server_live": {
+            "heard": "Me and my wife That's all for now thank you",
+            "agent_text": "No problem. If you need any more help or advice, feel free to reach out. Is there anything else you're interested in?",
+            "response_ms": 2905,
+            "stt_ttfb_ms": 280,
+            "llm_ttfb_ms": 563,
+            "tts_ttfb_ms": 833
+          },
+          "server": {
+            "turn": 5,
+            "node_name": "Conversation",
+            "user_text": "Me and my wife That's all for now thank you",
+            "agent_text": "No problem. If you need any more help or advice, feel free to reach out. Is there anything else you're interested in?",
+            "user_started_at": "2026-10-19T18:43:26.619000Z",
+            "user_ended_at": "2026-10-19T18:43:28.944000Z",
+            "agent_started_at": "2026-10-19T18:43:31.046000Z",
+            "agent_ended_at": "2026-10-19T18:43:39.124000Z",
+            "response_ms": 2905,
+            "stt_ttfb_ms": 280,
+            "llm_ttfb_ms": 563,
+            "tts_ttfb_ms": 833,
+            "tools": [],
+            "slow": true
+          }
+        }
+      ],
+      "hangup": {
+        "by": "caller",
+        "server_confirmed": true,
+        "reason": "peer_connection_closed"
+      },
+      "ended_at": "2026-10-19T18:43:40.947+00:00",
+      "transport": {
+        "frames_received": 3131,
+        "max_frame_interval_ms": 100,
+        "lost_ms": 0
+      },
+      "recordings": {
+        "agent": "run-1/agent.wav",
+        "conversation": "run-1/conversation.wav",
+        "events": "run-1/events.jsonl"
+      },
+      "atlas_end_reported": true,
+      "organization": {
+        "id": "f6dd6e62-33c4-4bdf-b111-d41e2670139c",
+        "name": "Demo Realty (demo data)"
+      },
+      "agent": {
+        "id": "2ad88437-acca-4d65-9a98-29b029d06a77",
+        "name": "Mortgage lead qualifier",
+        "published_version": 7
+      },
+      "call_state": "completed",
+      "runtime_view": {
+        "source": "atlas",
+        "summary": {
+          "source": "runtime",
+          "turns": 5,
+          "measured_turns": 4,
+          "response_p50_ms": 2918,
+          "response_p95_ms": 4249,
+          "response_max_ms": 4482,
+          "first_response_ms": 2930,
+          "stt_ttfb_p50_ms": 303,
+          "llm_ttfb_p50_ms": 779,
+          "tts_ttfb_p50_ms": 1317,
+          "tool_time_ms": 0,
+          "slow_turns": 4,
+          "interruptions": 0
+        },
+        "turns": [
+          {
+            "turn": 1,
+            "node_name": "Conversation",
+            "user_text": null,
+            "agent_text": "Hi Alex, this is Sarah from Demo Realty (demo data). You recently asked about our services. Is now a good time for two quick questions?",
+            "user_started_at": null,
+            "user_ended_at": null,
+            "agent_started_at": null,
+            "agent_ended_at": "2026-10-19T18:42:38.750000Z",
+            "response_ms": null,
+            "stt_ttfb_ms": null,
+            "llm_ttfb_ms": null,
+            "tts_ttfb_ms": 1588,
+            "tools": [],
+            "slow": false
+          },
+          {
+            "turn": 2,
+            "node_name": "Conversation",
+            "user_text": "Yes yes now is fine I 'm looking to buy my first home",
+            "agent_text": "Great! What timeline are you working with for this purchase?",
+            "user_started_at": "2026-10-19T18:42:55.521000Z",
+            "user_ended_at": "2026-10-19T18:42:58.164000Z",
+            "agent_started_at": "2026-10-19T18:43:00.289000Z",
+            "agent_ended_at": "2026-10-19T18:43:04.689000Z",
+            "response_ms": 2930,
+            "stt_ttfb_ms": 262,
+            "llm_ttfb_ms": 995,
+            "tts_ttfb_ms": 908,
+            "tools": [],
+            "slow": true
+          },
+          {
+            "turn": 3,
+            "node_name": "Conversation",
+            "user_text": "Some time in the next three months ideally",
+            "agent_text": "Alright. Have you considered a specific area or neighborhood?",
+            "user_started_at": "2026-10-19T18:43:06.781000Z",
+            "user_ended_at": "2026-10-19T18:43:08.763000Z",
+            "agent_started_at": "2026-10-19T18:43:10.847000Z",
+            "agent_ended_at": "2026-10-19T18:43:14.804000Z",
+            "response_ms": 2886,
+            "stt_ttfb_ms": 326,
+            "llm_ttfb_ms": 458,
+            "tts_ttfb_ms": 1411,
+            "tools": [],
+            "slow": true
+          },
+          {
+            "turn": 4,
+            "node_name": "Conversation",
+            "user_text": "Our budges around four hundred thousand dollars",
+            "agent_text": "Are you planning to buy with someone else?",
+            "user_started_at": "2026-10-19T18:43:16.759000Z",
+            "user_ended_at": "2026-10-19T18:43:18.845000Z",
+            "agent_started_at": "2026-10-19T18:43:22.523000Z",
+            "agent_ended_at": "2026-10-19T18:43:24.605000Z",
+            "response_ms": 4482,
+            "stt_ttfb_ms": 549,
+            "llm_ttfb_ms": 1007,
+            "tts_ttfb_ms": 1317,
+            "tools": [],
+            "slow": true
+          },
+          {
+            "turn": 5,
+            "node_name": "Conversation",
+            "user_text": "Me and my wife That's all for now thank you",
+            "agent_text": "No problem. If you need any more help or advice, feel free to reach out. Is there anything else you're interested in?",
+            "user_started_at": "2026-10-19T18:43:26.619000Z",
+            "user_ended_at": "2026-10-19T18:43:28.944000Z",
+            "agent_started_at": "2026-10-19T18:43:31.046000Z",
+            "agent_ended_at": "2026-10-19T18:43:39.124000Z",
+            "response_ms": 2905,
+            "stt_ttfb_ms": 280,
+            "llm_ttfb_ms": 563,
+            "tts_ttfb_ms": 833,
+            "tools": [],
+            "slow": true
+          }
+        ]
+      }
+    },
+    {
+      "run": 2,
+      "ok": true,
+      "failures": [],
+      "started_at": "2026-10-19T18:43:52.701+00:00",
+      "call_id": "568b5572-c550-47bb-a2ea-ea36e9c57e1e",
+      "workflow_run_id": 28,
+      "connection": {
+        "signaling": "ws://localhost:8000",
+        "ice_servers": 0,
+        "offer_to_answer_ms": 133,
+        "offer_to_connected_ms": 166,
+        "state": "connected"
+      },
+      "greeting": {
+        "status": "ok",
+        "first_audio_ms": 1438,
+        "agent_started_at": "2026-10-19T18:43:54.493+00:00",
+        "agent_ended_at": "2026-10-19T18:44:02.714+00:00",
+        "speaking_ms": 8221,
+        "voiced_ms": 6500,
+        "peak_level_db": -14.3,
+        "segments": 1,
+        "gaps": [
+          {
+            "at_s": 2.539,
+            "ms": 320,
+            "filler_ms": 0,
+            "max_level_db": -48.3,
+            "kind": "pause"
+          },
+          {
+            "at_s": 4.512,
+            "ms": 300,
+            "filler_ms": 0,
+            "max_level_db": -46.5,
+            "kind": "pause"
+          },
+          {
+            "at_s": 5.493,
+            "ms": 480,
+            "filler_ms": 0,
+            "max_level_db": -50.0,
+            "kind": "pause"
+          },
+          {
+            "at_s": 7.812,
+            "ms": 340,
+            "filler_ms": 0,
+            "max_level_db": -46.2,
+            "kind": "pause"
+          }
+        ],
+        "stalls": [],
+        "max_gap_ms": 480,
+        "choppy": false,
+        "server_live": {
+          "heard": null,
+          "agent_text": "Hi Alex, this is Sarah from Demo Realty (demo data). You recently asked about our services. Is now a good time for two quick questions?",
+          "response_ms": null,
+          "stt_ttfb_ms": null,
+          "llm_ttfb_ms": null,
+          "tts_ttfb_ms": 639
+        }
+      },
+      "turns": [
+        {
+          "index": 1,
+          "text": "Yes, now is fine. I'm looking to buy my first home.",
+          "audio_source": "tts:pocket-tts/marius",
+          "caller_speech_ms": 2240,
+          "caller_started_at": "2026-10-19T18:44:04.195+00:00",
+          "caller_ended_at": "2026-10-19T18:44:06.436+00:00",
+          "status": "ok",
+          "reply_ms": 2997,
+          "agent_started_at": "2026-10-19T18:44:09.433+00:00",
+          "agent_ended_at": "2026-10-19T18:44:13.234+00:00",
+          "speaking_ms": 3801,
+          "voiced_ms": 1860,
+          "peak_level_db": -14.3,
+          "segments": 2,
+          "gaps": [
+            {
+              "at_s": 17.192,
+              "ms": 1801,
+              "max_level_db": null,
+              "kind": "break"
+            }
+          ],
+          "stalls": [],
+          "max_gap_ms": 1801,
+          "choppy": true,
+          "overlap": false,
+          "server_live": {
+            "heard": "Yet yes now is fine I'm looking to buy my first home",
+            "agent_text": "Great! How do you think you'd like your dream home?",
+            "response_ms": 2563,
+            "stt_ttfb_ms": 304,
+            "llm_ttfb_ms": 501,
+            "tts_ttfb_ms": 946
+          },
+          "server": {
+            "turn": 2,
+            "node_name": "Conversation",
+            "user_text": "Yet yes now is fine I'm looking to buy my first home",
+            "agent_text": "Great! How do you think you'd like your dream home?",
+            "user_started_at": "2026-10-19T18:44:04.882000Z",
+            "user_ended_at": "2026-10-19T18:44:07.542000Z",
+            "agent_started_at": "2026-10-19T18:44:09.303000Z",
+            "agent_ended_at": "2026-10-19T18:44:13.382000Z",
+            "response_ms": 2563,
+            "stt_ttfb_ms": 304,
+            "llm_ttfb_ms": 501,
+            "tts_ttfb_ms": 946,
+            "tools": [],
+            "slow": true
+          }
+        },
+        {
+          "index": 2,
+          "text": "Sometime in the next three months, ideally.",
+          "audio_source": "tts:pocket-tts/marius",
+          "caller_speech_ms": 1600,
+          "caller_started_at": "2026-10-19T18:44:14.736+00:00",
+          "caller_ended_at": "2026-10-19T18:44:16.335+00:00",
+          "status": "ok",
+          "reply_ms": 2922,
+          "agent_started_at": "2026-10-19T18:44:19.258+00:00",
+          "agent_ended_at": "2026-10-19T18:44:28.196+00:00",
+          "speaking_ms": 8939,
+          "voiced_ms": 5100,
+          "peak_level_db": -12.3,
+          "segments": 2,
+          "gaps": [
+            {
+              "at_s": 29.377,
+              "ms": 200,
+              "filler_ms": 0,
+              "max_level_db": -45.6,
+              "kind": "pause"
+            },
+            {
+              "at_s": 30.41,
+              "ms": 340,
+              "filler_ms": 320,
+              "max_level_db": -78.1,
+              "kind": "silent"
+            },
+            {
+              "at_s": 32.237,
+              "ms": 720,
+              "filler_ms": 0,
+              "max_level_db": -45.2,
+              "kind": "pause"
+            },
+            {
+              "at_s": 26.955,
+              "ms": 2341,
+              "max_level_db": null,
+              "kind": "break"
+            }
+          ],
+          "stalls": [],
+          "max_gap_ms": 2341,
+          "choppy": true,
+          "overlap": false,
+          "server_live": {
+            "heard": "Some time in the next three months ideally",
+            "agent_text": "OK. Have you had time to look into what kind of home you\u2019d need? You know, the budget, maybe some specific requirements?",
+            "response_ms": 2486,
+            "stt_ttfb_ms": 261,
+            "llm_ttfb_ms": 444,
+            "tts_ttfb_ms": 894
+          },
+          "server": {
+            "turn": 3,
+            "node_name": "Conversation",
+            "user_text": "Some time in the next three months ideally",
+            "agent_text": "OK. Have you had time to look into what kind of home you\u2019d need? You know, the budget, maybe some specific requirements?",
+            "user_started_at": "2026-10-19T18:44:15.484000Z",
+            "user_ended_at": "2026-10-19T18:44:17.460000Z",
+            "agent_started_at": "2026-10-19T18:44:19.145000Z",
+            "agent_ended_at": "2026-10-19T18:44:28.342000Z",
+            "response_ms": 2486,
+            "stt_ttfb_ms": 261,
+            "llm_ttfb_ms": 444,
+            "tts_ttfb_ms": 894,
+            "tools": [],
+            "slow": true
+          }
+        },
+        {
+          "index": 3,
+          "text": "Our budget is around four hundred thousand dollars.",
+          "audio_source": "tts:pocket-tts/marius",
+          "caller_speech_ms": 1690,
+          "caller_started_at": "2026-10-19T18:44:29.695+00:00",
+          "caller_ended_at": "2026-10-19T18:44:31.385+00:00",
+          "status": "ok",
+          "reply_ms": 4111,
+          "agent_started_at": "2026-10-19T18:44:35.497+00:00",
+          "agent_ended_at": "2026-10-19T18:44:41.597+00:00",
+          "speaking_ms": 6101,
+          "voiced_ms": 4700,
+          "peak_level_db": -12.6,
+          "segments": 1,
+          "gaps": [
+            {
+              "at_s": 44.115,
+              "ms": 760,
+              "filler_ms": 180,
+              "max_level_db": -45.4,
+              "kind": "pause"
+            },
+            {
+              "at_s": 46.635,
+              "ms": 520,
+              "filler_ms": 0,
+              "max_level_db": -48.4,
+              "kind": "pause"
+            }
+          ],
+          "stalls": [],
+          "max_gap_ms": 760,
+          "choppy": false,
+          "overlap": false,
+          "server_live": {
+            "heard": "Our budges around four hundred thousand dollars",
+            "agent_text": "That's the range you're looking at? Anything else you'd like to mention, Alex? It helps me narrow down our options.",
+            "response_ms": 3365,
+            "stt_ttfb_ms": 335,
+            "llm_ttfb_ms": 593,
+            "tts_ttfb_ms": 930
+          },
+          "server": {
+            "turn": 4,
+            "node_name": "Conversation",
+            "user_text": "Our budges around four hundred thousand dollars",
+            "agent_text": "That's the range you're looking at? Anything else you'd like to mention, Alex? It helps me narrow down our options.",
+            "user_started_at": "2026-10-19T18:44:30.405000Z",
+            "user_ended_at": "2026-10-19T18:44:32.459000Z",
+            "agent_started_at": "2026-10-19T18:44:35.023000Z",
+            "agent_ended_at": "2026-10-19T18:44:41.742000Z",
+            "response_ms": 3365,
+            "stt_ttfb_ms": 335,
+            "llm_ttfb_ms": 593,
+            "tts_ttfb_ms": 930,
+            "tools": [],
+            "slow": true
+          }
+        },
+        {
+          "index": 4,
+          "text": "Just me and my wife. That's all for now, thank you.",
+          "audio_source": "tts:pocket-tts/marius",
+          "caller_speech_ms": 1930,
+          "caller_started_at": "2026-10-19T18:44:43.096+00:00",
+          "caller_ended_at": "2026-10-19T18:44:45.026+00:00",
+          "status": "ok",
+          "reply_ms": 3309,
+          "agent_started_at": "2026-10-19T18:44:48.335+00:00",
+          "agent_ended_at": "2026-10-19T18:44:56.240+00:00",
+          "speaking_ms": 7906,
+          "voiced_ms": 4560,
+          "peak_level_db": -11.7,
+          "segments": 2,
+          "gaps": [
+            {
+              "at_s": 56.489,
+              "ms": 280,
+              "filler_ms": 140,
+              "max_level_db": -46.8,
+              "kind": "pause"
+            },
+            {
+              "at_s": 60.337,
+              "ms": 300,
+              "filler_ms": 0,
+              "max_level_db": -48.2,
+              "kind": "pause"
+            },
+            {
+              "at_s": 62.097,
+              "ms": 600,
+              "filler_ms": 0,
+              "max_level_db": -46.5,
+              "kind": "pause"
+            },
+            {
+              "at_s": 57.258,
+              "ms": 1819,
+              "max_level_db": null,
+              "kind": "break"
+            }
+          ],
+          "stalls": [],
+          "max_gap_ms": 1819,
+          "choppy": true,
+          "overlap": false,
+          "server_live": {
+            "heard": "Me and my wife That's all for now thank you",
+            "agent_text": "No problem, Alex. If there's anything else you need, don't hesitate to contact us. Have a great day!",
+            "response_ms": 2782,
+            "stt_ttfb_ms": 323,
+            "llm_ttfb_ms": 550,
+            "tts_ttfb_ms": 930
+          },
+          "server": {
+            "turn": 5,
+            "node_name": "Conversation",
+            "user_text": "Me and my wife That's all for now thank you",
+            "agent_text": "No problem, Alex. If there's anything else you need, don't hesitate to contact us. Have a great day!",
+            "user_started_at": "2026-10-19T18:44:43.799000Z",
+            "user_ended_at": "2026-10-19T18:44:46.122000Z",
+            "agent_started_at": "2026-10-19T18:44:48.102000Z",
+            "agent_ended_at": "2026-10-19T18:44:56.503000Z",
+            "response_ms": 2782,
+            "stt_ttfb_ms": 323,
+            "llm_ttfb_ms": 550,
+            "tts_ttfb_ms": 930,
+            "tools": [],
+            "slow": true
+          }
+        }
+      ],
+      "hangup": {
+        "by": "caller",
+        "server_confirmed": true,
+        "reason": "peer_connection_closed"
+      },
+      "ended_at": "2026-10-19T18:44:58.276+00:00",
+      "transport": {
+        "frames_received": 3226,
+        "max_frame_interval_ms": 84,
+        "lost_ms": 0
+      },
+      "recordings": {
+        "agent": "run-2/agent.wav",
+        "conversation": "run-2/conversation.wav",
+        "events": "run-2/events.jsonl"
+      },
+      "atlas_end_reported": true,
+      "organization": {
+        "id": "f6dd6e62-33c4-4bdf-b111-d41e2670139c",
+        "name": "Demo Realty (demo data)"
+      },
+      "agent": {
+        "id": "2ad88437-acca-4d65-9a98-29b029d06a77",
+        "name": "Mortgage lead qualifier",
+        "published_version": 7
+      },
+      "call_state": "completed",
+      "runtime_view": {
+        "source": "atlas",
+        "summary": {
+          "source": "runtime",
+          "turns": 5,
+          "measured_turns": 4,
+          "response_p50_ms": 2672,
+          "response_p95_ms": 3278,
+          "response_max_ms": 3365,
+          "first_response_ms": 2563,
+          "stt_ttfb_p50_ms": 304,
+          "llm_ttfb_p50_ms": 526,
+          "tts_ttfb_p50_ms": 930,
+          "tool_time_ms": 0,
+          "slow_turns": 4,
+          "interruptions": 0
+        },
+        "turns": [
+          {
+            "turn": 1,
+            "node_name": "Conversation",
+            "user_text": null,
+            "agent_text": "Hi Alex, this is Sarah from Demo Realty (demo data). You recently asked about our services. Is now a good time for two quick questions?",
+            "user_started_at": null,
+            "user_ended_at": null,
+            "agent_started_at": null,
+            "agent_ended_at": "2026-10-19T18:43:53.717000Z",
+            "response_ms": null,
+            "stt_ttfb_ms": null,
+            "llm_ttfb_ms": null,
+            "tts_ttfb_ms": 639,
+            "tools": [],
+            "slow": false
+          },
+          {
+            "turn": 2,
+            "node_name": "Conversation",
+            "user_text": "Yet yes now is fine I'm looking to buy my first home",
+            "agent_text": "Great! How do you think you'd like your dream home?",
+            "user_started_at": "2026-10-19T18:44:04.882000Z",
+            "user_ended_at": "2026-10-19T18:44:07.542000Z",
+            "agent_started_at": "2026-10-19T18:44:09.303000Z",
+            "agent_ended_at": "2026-10-19T18:44:13.382000Z",
+            "response_ms": 2563,
+            "stt_ttfb_ms": 304,
+            "llm_ttfb_ms": 501,
+            "tts_ttfb_ms": 946,
+            "tools": [],
+            "slow": true
+          },
+          {
+            "turn": 3,
+            "node_name": "Conversation",
+            "user_text": "Some time in the next three months ideally",
+            "agent_text": "OK. Have you had time to look into what kind of home you\u2019d need? You know, the budget, maybe some specific requirements?",
+            "user_started_at": "2026-10-19T18:44:15.484000Z",
+            "user_ended_at": "2026-10-19T18:44:17.460000Z",
+            "agent_started_at": "2026-10-19T18:44:19.145000Z",
+            "agent_ended_at": "2026-10-19T18:44:28.342000Z",
+            "response_ms": 2486,
+            "stt_ttfb_ms": 261,
+            "llm_ttfb_ms": 444,
+            "tts_ttfb_ms": 894,
+            "tools": [],
+            "slow": true
+          },
+          {
+            "turn": 4,
+            "node_name": "Conversation",
+            "user_text": "Our budges around four hundred thousand dollars",
+            "agent_text": "That's the range you're looking at? Anything else you'd like to mention, Alex? It helps me narrow down our options.",
+            "user_started_at": "2026-10-19T18:44:30.405000Z",
+            "user_ended_at": "2026-10-19T18:44:32.459000Z",
+            "agent_started_at": "2026-10-19T18:44:35.023000Z",
+            "agent_ended_at": "2026-10-19T18:44:41.742000Z",
+            "response_ms": 3365,
+            "stt_ttfb_ms": 335,
+            "llm_ttfb_ms": 593,
+            "tts_ttfb_ms": 930,
+            "tools": [],
+            "slow": true
+          },
+          {
+            "turn": 5,
+            "node_name": "Conversation",
+            "user_text": "Me and my wife That's all for now thank you",
+            "agent_text": "No problem, Alex. If there's anything else you need, don't hesitate to contact us. Have a great day!",
+            "user_started_at": "2026-10-19T18:44:43.799000Z",
+            "user_ended_at": "2026-10-19T18:44:46.122000Z",
+            "agent_started_at": "2026-10-19T18:44:48.102000Z",
+            "agent_ended_at": "2026-10-19T18:44:56.503000Z",
+            "response_ms": 2782,
+            "stt_ttfb_ms": 323,
+            "llm_ttfb_ms": 550,
+            "tts_ttfb_ms": 930,
+            "tools": [],
+            "slow": true
+          }
+        ]
+      }
+    }
+  ]
+}
