@@ -13,7 +13,9 @@ import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { Checkbox, Input, Label } from "@/components/ui/primitives";
 import { Select, SelectItem } from "@/components/ui/select";
 import { useOrgId } from "@/features/queries";
+import { PocketVoicePicker } from "@/features/voice/pocket-voice-picker";
 import { connectionsFor, providerOf, vk, type Catalog, type Connection, type ServiceChoice, type ServiceKind } from "@/features/voice/queries";
+import { isPocketConnection } from "@/features/voice/voice-cloning";
 import { api, unwrap } from "@/lib/api";
 import { useDebounced } from "@/lib/hooks";
 
@@ -64,6 +66,7 @@ export function ServiceEditor({
   const options = connectionsFor(kind, catalog, connections);
   const connection = options.find((c) => c.id === value?.connection_id);
   const provider = providerOf(kind, catalog, connection);
+  const pocket = kind === "tts" && isPocketConnection(connection);
   const id = useId();
 
   return (
@@ -97,6 +100,7 @@ export function ServiceEditor({
               value={(value.settings?.[name] as Value | undefined) ?? null}
               provider={provider.id}
               connectionId={value.connection_id}
+              pocket={pocket}
               onChange={(v) => onChange({ ...value, settings: { ...value.settings, [name]: v } })}
             />
           ))}
@@ -117,6 +121,7 @@ function SettingField({
   disabled,
   provider,
   connectionId,
+  pocket,
 }: {
   name: string;
   prop: PropSchema;
@@ -125,11 +130,17 @@ function SettingField({
   disabled?: boolean;
   provider: string;
   connectionId: string;
+  /** A Pocket TTS connection: its voices (built-in and cloned) are listed by ATLAS. */
+  pocket?: boolean;
 }) {
   const id = useId();
   const label = prop.title ?? name.replace(/_/g, " ");
   const t = typeOf(prop);
   const placeholder = prop.default !== undefined && prop.default !== null ? `Default: ${String(prop.default)}` : undefined;
+
+  if (pocket && name === "voice") {
+    return <PocketVoicePicker label={label} value={(value as string | null) ?? ""} onChange={onChange} connectionId={connectionId} placeholder={placeholder} disabled={disabled} />;
+  }
 
   if (prop.voice_catalog) {
     return <VoicePicker label={label} value={(value as string | null) ?? ""} onChange={onChange} provider={provider} connectionId={connectionId} placeholder={placeholder} disabled={disabled} />;

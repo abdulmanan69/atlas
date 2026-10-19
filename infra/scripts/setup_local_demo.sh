@@ -11,6 +11,10 @@
 #   --preset P           auto (default) | pocket | streaming
 #   --deepgram-key KEY   a real Deepgram key, only to save the live-transcription connection
 #                        (needs internet once). Prefer env ATLAS_DEMO_DEEPGRAM_KEY. Never printed.
+#   --hf-token TOKEN     optional Hugging Face token that turns on Pocket TTS voice cloning;
+#                        the account must have accepted the terms of kyutai/pocket-tts.
+#                        Saved in .env as POCKET_TTS_HF_TOKEN. Prefer env ATLAS_DEMO_HF_TOKEN.
+#                        Never printed. See docs/local-models.md, "Voice cloning".
 #   --skip-warm          do not load the models into memory at the end
 #   --fast-stt           Whisper tiny.en instead of base: ~0.7 s faster per reply, English only
 #   --rebuild            rebuild the two locally built model images (needs internet)
@@ -37,6 +41,7 @@ REQUIRED_SERVICES=" postgres redis voice-db voice-redis voice-storage voice-runt
 
 STOP=0 RESTART=0 DRY_RUN=0 SKIP_WARM=0 REBUILD=0 PRESET=auto
 KEY="${ATLAS_DEMO_DEEPGRAM_KEY:-}"
+HF_TOKEN_ARG="${ATLAS_DEMO_HF_TOKEN:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --stop) STOP=1 ;;
@@ -47,14 +52,16 @@ while [ $# -gt 0 ]; do
     --rebuild) REBUILD=1 ;;
     --preset) PRESET="${2:-}"; shift ;;
     --deepgram-key) KEY="${2:-}"; shift ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    --hf-token) HF_TOKEN_ARG="${2:-}"; shift ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
   esac
   shift
 done
 case "$PRESET" in auto|pocket|streaming) ;; *) echo "--preset must be auto, pocket or streaming" >&2; exit 2 ;; esac
 # Kept in shell variables only: the API, worker and web app started below must not inherit them.
-unset ATLAS_DEMO_DEEPGRAM_KEY ATLAS_DEMO_PASSWORD
+unset ATLAS_DEMO_DEEPGRAM_KEY ATLAS_DEMO_PASSWORD ATLAS_DEMO_HF_TOKEN
+HF_TOKEN_ARG="$(printf '%s' "$HF_TOKEN_ARG" | tr -d '[:space:]')"
 
 case "$(uname -s)" in
   Linux*) PLATFORM=linux ;;
@@ -76,7 +83,7 @@ GENERATED_PASSWORD=""
 step() { printf '\n\033[36m==> %s\033[0m\n' "$1"; }
 info() { printf '    %s\n' "$1"; }
 warn() { printf '    \033[33mWARNING: %s\033[0m\n' "$1"; WARNINGS+=("$1"); }
-fail() { printf '\n\033[31mERROR: %s\033[0m\n' "$1"; unset ATLAS_DEMO_PASSWORD ATLAS_DEMO_DEEPGRAM_KEY; exit 1; }
+fail() { printf '\n\033[31mERROR: %s\033[0m\n' "$1"; unset ATLAS_DEMO_PASSWORD ATLAS_DEMO_DEEPGRAM_KEY ATLAS_DEMO_HF_TOKEN HF_TOKEN_ARG; exit 1; }
 plan() { printf '    \033[90m[dry run] would %s\033[0m\n' "$1"; }
 
 # ------------------------------------------------------------------------------ helpers
@@ -406,6 +413,27 @@ else
   info "all required secrets are set"
 fi
 
+# Pocket TTS voice cloning: where the host-run API reaches the server, and the optional token.
+TTS_SET=()
+if ! grep -q -E "^[[:space:]]*ATLAS_LOCAL_TTS_URL[[:space:]]*=" "$SRC_ENV" 2>/dev/null; then
+  TTS_SET+=(ATLAS_LOCAL_TTS_URL)
+  [ "$DRY_RUN" = 1 ] || env_set ATLAS_LOCAL_TTS_URL "http://127.0.0.1:8002/v1" "$ENV_FILE"
+fi
+if [ -n "$HF_TOKEN_ARG" ]; then
+  if printf '%s' "$HF_TOKEN_ARG" | grep -q -E '^[A-Za-z0-9_-]{8,200}$'; then
+    TTS_SET+=(POCKET_TTS_HF_TOKEN)
+    [ "$DRY_RUN" = 1 ] || env_set POCKET_TTS_HF_TOKEN "$HF_TOKEN_ARG" "$ENV_FILE"
+  else
+    warn "The Hugging Face token has unexpected characters; it was not saved. Voice cloning stays off."
+  fi
+fi
+if [ "${#TTS_SET[@]}" -gt 0 ]; then
+  if [ "$DRY_RUN" = 1 ]; then plan "set in .env (token values not shown): ${TTS_SET[*]}"; else info "set in .env (token values not shown): ${TTS_SET[*]}"; fi
+fi
+CLONING_TOKEN_SET=0
+if [ -n "$HF_TOKEN_ARG" ] || [ -n "$(env_get POCKET_TTS_HF_TOKEN "$SRC_ENV")" ]; then CLONING_TOKEN_SET=1; fi
+unset HF_TOKEN_ARG
+
 # 3. code dependencies
 step "Code dependencies (API and web app)"
 if [ "$DRY_RUN" = 1 ]; then
@@ -648,6 +676,13 @@ else
 fi
 echo "  Test call:     Agents > Mortgage lead qualifier > Test call > Start test call (allow the microphone)"
 echo "  Afterwards:    Calls > the newest test call > Response times"
+if [ "$CLONING_TOKEN_SET" = 1 ]; then
+  if [ "$(http_code http://127.0.0.1:8002/v1/voices 10)" = 200 ]; then
+    echo "  Voice cloning: ready (AI providers > Voice > Clone a voice; only with the speaker's permission)"
+  else
+    echo "  Voice cloning: off. The token is saved, but the gated weights did not load: accept the terms at https://huggingface.co/kyutai/pocket-tts with the token's account, then re-run."
+  fi
+fi
 echo "  Logs:          $LOG_DIR"
 echo "  Stop all:      make demo-stop   (or: bash infra/scripts/setup_local_demo.sh --stop)"
 if [ "${#WARNINGS[@]}" -gt 0 ]; then

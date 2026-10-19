@@ -31,6 +31,12 @@
 .PARAMETER DeepgramKey
   A real Deepgram key, only needed to save the live-transcription connection (needs internet).
   Never printed. Prefer env ATLAS_DEMO_DEEPGRAM_KEY so it does not end up in shell history.
+.PARAMETER HfToken
+  Optional Hugging Face token that turns on Pocket TTS voice cloning (AI providers > Voice >
+  Clone a voice). The account must have accepted the terms of the gated kyutai/pocket-tts
+  weights first (docs/local-models.md, "Voice cloning"). Saved in .env as
+  POCKET_TTS_HF_TOKEN and passed to the local-tts container as HF_TOKEN; never printed.
+  Prefer env ATLAS_DEMO_HF_TOKEN so it does not end up in shell history.
 .PARAMETER SkipWarm
   Do not load the models into memory at the end.
 .PARAMETER FastStt
@@ -50,6 +56,7 @@ param(
   [Alias("WhatIf")][switch]$DryRun,
   [ValidateSet("auto", "pocket", "streaming")][string]$Preset = "auto",
   [string]$DeepgramKey = "",
+  [string]$HfToken = "",
   [switch]$SkipWarm,
   [switch]$FastStt,
   [switch]$Rebuild
@@ -100,6 +107,7 @@ function Plan([string]$m) { Write-Host "    [dry run] would $m" -ForegroundColor
 $script:OrigEnv = @{
   "ATLAS_DEMO_PASSWORD"     = $env:ATLAS_DEMO_PASSWORD
   "ATLAS_DEMO_DEEPGRAM_KEY" = $env:ATLAS_DEMO_DEEPGRAM_KEY
+  "ATLAS_DEMO_HF_TOKEN"     = $env:ATLAS_DEMO_HF_TOKEN
 }
 function Cleanup-Env {
   foreach ($k in $script:OrigEnv.Keys) {
@@ -365,8 +373,12 @@ if ($Stop) {
 $key = $DeepgramKey
 if (-not $key -and $env:ATLAS_DEMO_DEEPGRAM_KEY) { $key = $env:ATLAS_DEMO_DEEPGRAM_KEY }
 $key = $key.Trim()
+$hfToken = $HfToken
+if (-not $hfToken -and $env:ATLAS_DEMO_HF_TOKEN) { $hfToken = $env:ATLAS_DEMO_HF_TOKEN }
+$hfToken = $hfToken.Trim()
 # Not inherited by the API, worker and web app started below (restored at the end).
 Remove-Item Env:ATLAS_DEMO_DEEPGRAM_KEY -ErrorAction SilentlyContinue
+Remove-Item Env:ATLAS_DEMO_HF_TOKEN -ErrorAction SilentlyContinue
 Remove-Item Env:ATLAS_DEMO_PASSWORD -ErrorAction SilentlyContinue
 
 if ($DryRun) { Write-Host "Dry run: nothing will be changed." -ForegroundColor DarkGray }
@@ -487,6 +499,21 @@ if ($updates.Count -gt 0) {
   if ($DryRun) { Plan "generate (random, not shown): $names" }
   else { Write-EnvValues $EnvFile $updates; Info "generated (random, not shown): $names" }
 } else { Info "all required secrets are set" }
+
+# Pocket TTS voice cloning: where the host-run API reaches the server, and the optional token.
+$ttsUpdates = @{}
+if (-not $envMap.ContainsKey("ATLAS_LOCAL_TTS_URL")) { $ttsUpdates["ATLAS_LOCAL_TTS_URL"] = "http://127.0.0.1:8002/v1" }
+if ($hfToken) {
+  if ($hfToken -notmatch "^[A-Za-z0-9_-]{8,200}$") {
+    Warn "The Hugging Face token has unexpected characters; it was not saved. Voice cloning stays off."
+  } else { $ttsUpdates["POCKET_TTS_HF_TOKEN"] = $hfToken }
+}
+if ($ttsUpdates.Count -gt 0) {
+  $names = ($ttsUpdates.Keys | Sort-Object) -join ", "
+  if ($DryRun) { Plan "set in .env (token values not shown): $names" }
+  else { Write-EnvValues $EnvFile $ttsUpdates; Info "set in .env (token values not shown): $names" }
+}
+$cloningTokenSet = [bool]$ttsUpdates["POCKET_TTS_HF_TOKEN"] -or [bool]($envMap["POCKET_TTS_HF_TOKEN"])
 
 # 3. code dependencies -------------------------------------------------------------
 Step "Code dependencies (API and web app)"
@@ -752,6 +779,11 @@ if ($script:GeneratedPassword) {
 }
 Write-Host "  Test call:     Agents > Mortgage lead qualifier > Test call > Start test call (allow the microphone)"
 Write-Host "  Afterwards:    Calls > the newest test call > Response times"
+if ($cloningTokenSet) {
+  $cloning = Get-HttpStatus "http://127.0.0.1:8002/v1/voices" 10
+  if ($cloning -eq 200) { Write-Host "  Voice cloning: ready (AI providers > Voice > Clone a voice; only with the speaker's permission)" }
+  else { Write-Host "  Voice cloning: off. The token is saved, but the gated weights did not load: accept the terms at https://huggingface.co/kyutai/pocket-tts with the token's account, then re-run." }
+}
 Write-Host "  Logs:          $LogDir"
 Write-Host "  Stop all:      .\make.ps1 demo-stop"
 if ($script:Warnings.Count -gt 0) {

@@ -331,6 +331,11 @@ async def save_selection(
             continue
         if choice.connection_id not in known:
             raise ValidationFailedError(f"Unknown connection for {kind.upper()}")
+        if kind == "tts":
+            # Cloned voices live in one shared store on the Pocket TTS server.
+            from app.services.voice_cloning import assert_voice_owned
+
+            await assert_voice_owned(db, ctx.org_id, choice.settings.get("voice"))
         spec[kind] = {
             "provider_connection_uuid": choice.connection_id,
             "settings": {k: v for k, v in choice.settings.items() if v not in (None, "")},

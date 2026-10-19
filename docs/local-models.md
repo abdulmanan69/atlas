@@ -490,7 +490,7 @@ Both run on CPU, stream audio, and answer the same OpenAI-style speech request.
 | Weights license | Apache 2.0 (upstream `hexgrad/Kokoro-82M`; the ONNX repack card states none) | CC BY 4.0: commercial use allowed, with attribution to Kyutai |
 | Code license | Apache 2.0 (speech server: MIT) | MIT |
 | Languages | English and several others, by voice | English, French, German, Portuguese, Italian, Spanish, Dutch (one language per server) |
-| Voices | Built-in voice packs (`af_heart` …) | 27 built-in voices; ATLAS allows only those licensed for commercial use (below) |
+| Voices | Built-in voice packs (`af_heart` …) | 27 built-in voices; ATLAS allows only those licensed for commercial use (below). Optional [voice cloning](#voice-cloning) with the gated weights |
 | Streaming | Phrase-sized chunks; a short sentence arrives in one piece (measured: first audio ≈ total) | Yes, frame by frame (12.5 frames per second) |
 | Measured here (i5-8500T) | 1,826 ms to first audio | 212 ms to first audio (Kyutai states ~200 ms on a MacBook Air M4) |
 | Memory limit in compose | shared 1.75 GB with Whisper | 1.5 GB |
@@ -505,15 +505,17 @@ language model. Run the benchmark to decide on your hardware. Neither model spea
 - Code: MIT ([github.com/kyutai-labs/pocket-tts](https://github.com/kyutai-labs/pocket-tts)).
 - Weights: CC BY 4.0. The main repository
   [kyutai/pocket-tts](https://huggingface.co/kyutai/pocket-tts) is **gated** (you must
-  log in and accept terms) and holds the voice-cloning weights. ATLAS does not use it.
-  The library falls back to
+  log in and accept terms) and holds the voice-cloning weights. ATLAS uses it only when
+  you turn on [voice cloning](#voice-cloning) with a token. Otherwise the library falls
+  back to
   [kyutai/pocket-tts-without-voice-cloning](https://huggingface.co/kyutai/pocket-tts-without-voice-cloning),
   which is **not gated**, is also CC BY 4.0, and holds the built-in voices. An anonymous
   download returns HTTP 200 there and 401 from the gated repository.
 - Acceptable use (from the model card): no voice impersonation or cloning without
   consent, no deception (including fraudulent calls or presenting generated speech as a
-  real person), no unlawful or harmful content. The ATLAS adapter accepts only built-in
-  voice names: no uploads or URLs, so it cannot clone a voice.
+  real person), no unlawful or harmful content. Speech requests name a built-in or a
+  cloned voice id, never a URL or a file; cloning is a separate, consent-gated upload
+  ([Voice cloning](#voice-cloning)) and is off unless the gated weights are set up.
 - Attribution: credit "Kyutai Pocket TTS (CC BY 4.0)" and, for VCTK or Alba MacKenna
   voices, that voice's source, wherever you list third-party components.
 
@@ -546,11 +548,96 @@ server logs a warning if you add a voice that is not cleared for commercial use.
 | `POCKET_TTS_API_KEY` | unset | If set, clients must send `Authorization: Bearer <key>` |
 | `POCKET_TTS_WARMUP` | `1` | Synthesises one short phrase at startup, so the first call is not slow |
 | `POCKET_TTS_THREADS` | `1` in compose (`LOCAL_TTS_THREADS`); unset = the library's own choice, also 1 | CPU threads for synthesis; the audio decoder runs on one more thread. Alone, 2 threads reach first audio a little sooner (about 150 vs 180 ms), but while the language model runs they made the voice slower than real time: 26 stutters in 10 replies, against none with 1 |
+| `HF_TOKEN` | compose passes `POCKET_TTS_HF_TOKEN` from `.env`; empty | Hugging Face token of an account that accepted the gated weights' terms: turns on [voice cloning](#voice-cloning). Never logged |
+| `POCKET_TTS_VOICE_DIR` | `/home/app/.cache/voices` (in the weights volume) | Where cloned voices are kept: `<id>.safetensors` (the computed voice) and `<id>.json` (name, date, sample length, consent statement) |
+| `POCKET_TTS_MAX_CUSTOM_VOICES` | `50` | Most cloned voices kept on the server (each 6 to 19 MB on disk) |
+| `POCKET_TTS_CUSTOM_VOICE_CACHE` | `4` | Cloned voices held in memory, least recently used dropped first (the newest are loaded at startup) |
 
 The adapter supports `response_format` `pcm` (24 kHz, 16-bit, mono, as the voice service
 expects) and `wav`, and streams audio as it is generated. It runs one synthesis at a time,
 because the model is not thread-safe. Pocket TTS has no speed control, so `speed` is
 accepted and ignored.
+
+### Voice cloning
+
+Pocket TTS can speak in a new voice computed from a short recording. ATLAS offers this as
+**AI providers → Voice → Clone a voice** (also in an agent's **Voice & model** tab) for
+Pocket TTS connections. It is **off by default** because it needs the gated weights.
+
+**Rules (from the model card, shown in the form in plain words).** Only clone the voice of
+a person who gave permission, and keep a record of it. Never use a cloned voice to deceive:
+no fraudulent or scam calls, no presenting generated speech as the real person. Nothing
+unlawful or harmful. Whoever clones a voice must tick "I have the speaker's permission to
+clone their voice"; ATLAS refuses the request without it and writes the attestation to the
+audit log (`ai.voice_cloned`: who, when, voice id and name, the attestation; never the
+audio). Only owners and admins can clone or delete voices.
+
+**Turn it on (one time).**
+
+1. Sign in at Hugging Face and accept the terms of
+   [kyutai/pocket-tts](https://huggingface.co/kyutai/pocket-tts).
+2. Create a **read** token for that account at
+   [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
+3. Put it in `.env` as `POCKET_TTS_HF_TOKEN=hf_…`, or let the demo setup do it:
+   `.\make.ps1 demo -HfToken hf_…` or `bash infra/scripts/setup_local_demo.sh --hf-token hf_…`
+   (better: set `ATLAS_DEMO_HF_TOKEN` first, so the token stays out of shell history). The
+   scripts never print it. Compose passes it to `local-tts` as `HF_TOKEN`.
+4. Restart the server: `docker compose --profile local-ai up -d local-tts`. It downloads
+   the cloning weights once (about 0.2 GB, into the `local_tts_models` volume) and logs
+   `Voice cloning enabled`; `GET http://127.0.0.1:8002/v1/voices` then answers 200.
+5. When the API runs on the host (as in the demo), it reaches the server through
+   `ATLAS_LOCAL_TTS_URL=http://127.0.0.1:8002/v1` (in `.env.example`; the setup scripts add
+   it to an existing `.env`). The connection's own base URL, `http://local-tts:8000/v1`,
+   only resolves inside Docker. If the server sets `POCKET_TTS_API_KEY`, set the same value
+   as `ATLAS_LOCAL_TTS_API_KEY`.
+
+Without a token, or when the token's account has not accepted the terms (the download is
+refused and the library falls back to the open weights), the server's `/v1/voices`
+endpoints answer **501** with these steps, and ATLAS shows them instead of the form.
+Built-in voices keep working either way.
+
+**Limits.** One speaker, 5 to 30 seconds after decoding, at most 10 MB. The web app
+accepts WAV, MP3 and M4A files or records in the browser (a timer stops it at 30 s), and
+converts the sample to a 24 kHz mono WAV before uploading. The server reads WAV only
+(16/24/32-bit PCM or float, common sample rates) on purpose: it has no MP3 or AAC decoder.
+A quiet room and 10 to 20 seconds of natural speech work best. One voice is computed at a
+time (a second request gets 429), and the server keeps at most
+`POCKET_TTS_MAX_CUSTOM_VOICES` voices.
+
+Measured on the dev CPU (i5-8500T, one torch thread, open weights and a synthetic signal):
+computing a voice takes about 6 s for 10 s of audio and 8 s for 30 s, and stays within the
+memory the model already needs while loading (about 1 GB peak). The library's one-pass
+encoder grows with the square of the length (27 s and 840 MiB extra for 30 s, more than the
+container's 1.5 GB limit allows), so the adapter encodes the sample in windows that give
+the same result (checked by `BoundedEncoderTest` in `infra/docker/pocket-tts/test_app.py`).
+The sample's length does not slow calls down: first audio stayed about 150 ms with a 10, 20
+or 30 s voice.
+
+**What is stored.** The uploaded audio is decoded in memory and discarded. The server
+keeps only the computed voice state (safetensors, which cannot carry code) and a small
+JSON record with the voice's name, date, sample length and consent statement. ATLAS keeps
+a `custom_voices` row (organization, connection, voice id, name, creator, date). One server
+stores the voices of every organization, so ATLAS shows, selects and deletes only an
+organization's own: ids end in 16 random hex digits (`custom-<name>-<random>`), lists are
+filtered per organization, and saving another organization's voice id in the models is
+refused. Deleting a voice that the organization's models or an agent still use is refused.
+
+**Use it.** After cloning, the voice appears in the voice picker with a **Cloned** badge
+and is selected; save the models (or the agent) to use it on calls. Delete it from the
+same picker (trash icon, with confirmation). If the token is removed later, cloned voices
+stay on disk but the server refuses to speak them until cloning is on again.
+
+**API.** `GET /api/v1/ai/connections/{id}/voices` (managers and up),
+`POST /api/v1/ai/connections/{id}/voices` (multipart `name`, `audio`,
+`consent_attestation=true`) and `DELETE /api/v1/ai/connections/{id}/voices/{voice_id}`
+(owners and admins). The server itself exposes `GET`/`POST /v1/voices` and
+`DELETE /v1/voices/{id}`. Its tests (with a fake model) run inside the image:
+
+```bash
+docker compose --profile local-ai run --rm --no-deps \
+  -v "$PWD/infra/docker/pocket-tts:/srv/tests:ro" --entrypoint python \
+  local-tts -m unittest discover -s /srv/tests -t /srv/tests
+```
 
 ## Every speed setting, explained
 
