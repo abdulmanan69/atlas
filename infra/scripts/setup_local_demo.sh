@@ -12,6 +12,7 @@
 #   --deepgram-key KEY   a real Deepgram key, only to save the live-transcription connection
 #                        (needs internet once). Prefer env ATLAS_DEMO_DEEPGRAM_KEY. Never printed.
 #   --skip-warm          do not load the models into memory at the end
+#   --fast-stt           Whisper tiny.en instead of base: ~0.7 s faster per reply, English only
 #   --rebuild            rebuild the two locally built model images (needs internet)
 #
 # Default preset private_pocket_tts (Whisper + qwen2.5:1.5b + Pocket TTS) works with no
@@ -42,6 +43,7 @@ while [ $# -gt 0 ]; do
     --restart) RESTART=1 ;;
     --dry-run|--what-if) DRY_RUN=1 ;;
     --skip-warm) SKIP_WARM=1 ;;
+    --fast-stt) STT_MODEL=Systran/faster-whisper-tiny.en ;;
     --rebuild) REBUILD=1 ;;
     --preset) PRESET="${2:-}"; shift ;;
     --deepgram-key) KEY="${2:-}"; shift ;;
@@ -609,7 +611,7 @@ else
     fi
   fi
   rm -f "$PY_OUT"
-  api_python "$HELPER" finish --preset "$TARGET" --web "$WEB_URL"
+  api_python "$HELPER" finish --stt-model "$STT_MODEL" --preset "$TARGET" --web "$WEB_URL"
   line="$(grep '^PRESET=' "$PY_OUT" | tail -n 1)"
   [ -n "$line" ] && ACTIVE_PRESET="${line#PRESET=}"
   [ "$PY_EXIT" = 0 ] || warn "the demo agent could not be published (see above); fix it in the web app under Agents"
@@ -622,9 +624,9 @@ step "Loading the models into memory"
 SKIP=kokoro
 [ "$ACTIVE_PRESET" = private_streaming ] && SKIP=kokoro,stt
 if [ "$SKIP_WARM" = 1 ]; then info "skipped (--skip-warm). Before the demo run: make local-ai-warm"
-elif [ "$DRY_RUN" = 1 ]; then plan "run bench_local_models.py --warm-only --skip $SKIP"
+elif [ "$DRY_RUN" = 1 ]; then plan "run bench_local_models.py --warm-only --stt-model $STT_MODEL --skip $SKIP"
 else
-  api_python ../../infra/scripts/bench_local_models.py --warm-only --skip "$SKIP"
+  api_python ../../infra/scripts/bench_local_models.py --warm-only --stt-model "$STT_MODEL" --skip "$SKIP"
   rm -f "$PY_OUT"
   [ "$PY_EXIT" = 0 ] || warn "warming the models failed; the first reply of the first call will be slow"
 fi

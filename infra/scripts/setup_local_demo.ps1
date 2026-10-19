@@ -33,6 +33,9 @@
   Never printed. Prefer env ATLAS_DEMO_DEEPGRAM_KEY so it does not end up in shell history.
 .PARAMETER SkipWarm
   Do not load the models into memory at the end.
+.PARAMETER FastStt
+  Use Whisper tiny.en instead of base: about 0.7 s faster per reply on a 6-core CPU, English
+  only, and less robust to accents and noise. Try it, and run without it to switch back.
 .PARAMETER Rebuild
   Rebuild the two locally built model images (needs internet).
 
@@ -48,6 +51,7 @@ param(
   [ValidateSet("auto", "pocket", "streaming")][string]$Preset = "auto",
   [string]$DeepgramKey = "",
   [switch]$SkipWarm,
+  [switch]$FastStt,
   [switch]$Rebuild
 )
 
@@ -69,6 +73,7 @@ $ApiUrl = "http://127.0.0.1:8080"
 $WebUrl = "http://localhost:5173"
 $LlmModel = "qwen2.5:1.5b"
 $SttModel = "Systran/faster-whisper-base"
+if ($FastStt) { $SttModel = "Systran/faster-whisper-tiny.en" }
 $CoreServices = @("postgres", "redis", "voice-db", "voice-redis", "voice-storage", "voice-runtime",
   "local-llm", "local-speech", "local-tts")
 # Docker Desktop's own processes publish container ports on the host.
@@ -711,7 +716,7 @@ if ($DryRun) {
       $target = "private_pocket_tts"
     }
   }
-  $out = Invoke-ApiPython @($helper, "finish", "--preset", $target, "--web", $WebUrl)
+  $out = Invoke-ApiPython @($helper, "finish", "--stt-model", $SttModel, "--preset", $target, "--web", $WebUrl)
   $line = $out | Where-Object { $_ -like "PRESET=*" } | Select-Object -Last 1
   if ($line) { $activePreset = $line.Substring(7) }
   if ($script:LastPyExit -ne 0) { Warn "the demo agent could not be published (see above); fix it in the web app under Agents" }
@@ -724,7 +729,7 @@ if ($activePreset -eq "private_streaming") { $skip = "kokoro,stt" }
 if ($SkipWarm) { Info "skipped (-SkipWarm). Before the demo run: .\make.ps1 local-ai-warm" }
 elseif ($DryRun) { Plan "run bench_local_models.py --warm-only --skip $skip" }
 else {
-  $null = Invoke-ApiPython @("..\..\infra\scripts\bench_local_models.py", "--warm-only", "--skip", $skip)
+  $null = Invoke-ApiPython @("..\..\infra\scripts\bench_local_models.py", "--warm-only", "--stt-model", $SttModel, "--skip", $skip)
   if ($script:LastPyExit -ne 0) { Warn "warming the models failed; the first reply of the first call will be slow" }
 }
 

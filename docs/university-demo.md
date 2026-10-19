@@ -11,10 +11,19 @@ demo (see [Path B](#path-b-little-or-no-internet-there-offline-bundle)).
 ## Hardware: what to expect
 
 Measured on the development PC: Intel i5-8500T (6 cores, 2018), 12 GB RAM, no GPU, everything
-on one machine (Docker, the models, the browser). **A reply starts about 5 to 6 seconds after
-you stop talking** with the default setup (Whisper speech-to-text). Each model alone is faster
-(see [Running AI models on your own hardware](local-models.md)), but during a call they
-compete for the same 6 cores and 12 GB with Docker and the browser.
+on one machine (Docker, the models, the browser), with automated test calls
+(`.\make.ps1 e2e-call`, 2026-10-19, warm models, thread caps from `docker-compose.yml`):
+
+| Speech-to-text | Reply starts after you stop talking (typical / slowest) |
+|---|---|
+| Whisper base (default) | **4.4 s** / 5.1 s |
+| Whisper tiny.en (`.\make.ps1 demo -FastStt`) | **3.6 s** / 4.1 s |
+
+`-FastStt` is English only and less robust to accents, names and background noise. Try it
+before the audience arrives: make a test call, and if it understands you well, keep it; run
+`.\make.ps1 demo` without the switch to go back to Whisper base. The first call after the
+model servers start is slower (they load into memory); `.\make.ps1 demo` warms them, and the
+automated test call warms them too.
 
 | | Works (measured) | Recommended |
 |---|---|---|

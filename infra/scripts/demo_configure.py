@@ -224,8 +224,25 @@ def browser_only_settings(api: Api, agent: dict) -> None:
         say(f"could not turn off voicemail detection ({exc.status}: {exc.message}); continuing")
 
 
-def phase_finish(api: Api, preset: str, web_url: str) -> int:
+def set_stt_model(api: Api, model: str) -> None:
+    """The presets pin Whisper base; -FastStt swaps in tiny.en on the same connection."""
+    selection = api.call("GET", "/ai/models")
+    stt = selection.get("stt") or {}
+    current = (stt.get("settings") or {}).get("model")
+    if not stt.get("connection_id") or current == model:
+        return
+    stt.setdefault("settings", {})["model"] = model
+    api.call("PUT", "/ai/models", selection)
+    say(f"speech-to-text model set to {model} (was {current})")
+
+
+def phase_finish(api: Api, preset: str, web_url: str, stt_model: str = "") -> int:
     active = apply_preset(api, preset)
+    if stt_model and active == POCKET_PRESET:
+        try:
+            set_stt_model(api, stt_model)
+        except ApiError as exc:
+            say(f"could not set the speech-to-text model ({exc.status}: {exc.message}); continuing")
     try:
         check = api.call("POST", "/ai/models/check")
     except ApiError as exc:
@@ -258,6 +275,7 @@ def main() -> int:
     p.add_argument("--api", default="http://127.0.0.1:8080")
     p.add_argument("--web", default="http://localhost:5173")
     p.add_argument("--preset", default=POCKET_PRESET, choices=[POCKET_PRESET, STREAMING_PRESET])
+    p.add_argument("--stt-model", default="", help="Whisper model for the Pocket TTS preset")
     args = p.parse_args()
 
     password = os.environ.get("ATLAS_DEMO_PASSWORD", "")
@@ -269,7 +287,7 @@ def main() -> int:
         api.login(password)
         if args.phase == "connections":
             return phase_connections(api, key)
-        return phase_finish(api, args.preset, args.web)
+        return phase_finish(api, args.preset, args.web, args.stt_model)
     except ApiError as exc:
         print(f"ATLAS API error: {exc}", file=sys.stderr)
         return 1
