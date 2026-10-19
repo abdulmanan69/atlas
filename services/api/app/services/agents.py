@@ -46,7 +46,7 @@ from app.schemas.voice import (
     TestSession,
 )
 from app.services import actions as action_service
-from app.services import agent_settings, audit, llm_warmup
+from app.services import agent_settings, audit, llm_warmup, voice_cloning
 from app.services import calls as call_service
 from app.services import knowledge as knowledge_service
 from app.services import leads as lead_service
@@ -429,6 +429,13 @@ async def update_meta(
     return agent
 
 
+async def _check_voice_override(db: AsyncSession, ctx: TenantContext, config: AgentConfig) -> None:
+    """An agent's own voice may be a cloned voice of this organization only."""
+    tts = config.model_override.tts if config.model_override else None
+    if tts is not None:
+        await voice_cloning.assert_voice_owned(db, ctx.org_id, tts.settings.get("voice"))
+
+
 async def save_config(
     db: AsyncSession, ctx: TenantContext, agent_id: uuid.UUID, config: AgentConfig, note: str | None
 ) -> Agent:
@@ -439,6 +446,7 @@ async def save_config(
     if current == config:
         return agent
     await agent_settings.check_audio_references(db, ctx.org_id, agent.id, config)
+    await _check_voice_override(db, ctx, config)
     agent.latest_version += 1
     db.add(
         AgentVersion(
@@ -621,6 +629,8 @@ async def publish(
         raise InvalidStateTransitionError("Archived agents cannot be published")
     target = version or agent.latest_version
     config = await config_of(db, agent, target)
+    # Versions saved before the voice check existed are checked again here.
+    await _check_voice_override(db, ctx, config)
     checked, action_names, documents = await validate_config(db, ctx, config)
     if not checked.valid:
         raise ValidationFailedError(

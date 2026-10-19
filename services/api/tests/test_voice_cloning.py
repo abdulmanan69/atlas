@@ -292,6 +292,25 @@ async def test_organizations_only_see_and_use_their_own_voices(
     )
     assert r.status_code == 422 and "cloned voice" in r.json()["error"]["message"]
 
+    # Nor as one agent's own voice.
+    agent = (await client.post("/api/v1/agents", headers=other.headers, json={"name": "B"})).json()
+    config = agent["config"] | {
+        "model_override": {"tts": {"connection_id": conn_b, "settings": {"voice": voice_a}}}
+    }
+    r = await client.put(
+        f"/api/v1/agents/{agent['id']}/config", headers=other.headers, json={"config": config}
+    )
+    assert r.status_code == 422 and "cloned voice" in r.json()["error"]["message"]
+    # Its owner can.
+    mine = (await client.post("/api/v1/agents", headers=owner.headers, json={"name": "A"})).json()
+    config = mine["config"] | {
+        "model_override": {"tts": {"connection_id": conn_a, "settings": {"voice": voice_a}}}
+    }
+    r = await client.put(
+        f"/api/v1/agents/{mine['id']}/config", headers=owner.headers, json={"config": config}
+    )
+    assert r.status_code == 200, r.text
+
 
 async def test_roles_and_connection_kind(
     client: httpx.AsyncClient, owner: Account, pocket: FakePocket
