@@ -1,7 +1,9 @@
 """Fast-stack guidance, one-click provider presets and pipeline health (ADR 0006).
 
-Figures in the guide are what each provider publishes, never ATLAS measurements; the
-measured numbers live on each call (`calls.latency`) and in Reports. Pipeline health
+Figures in the guide are what each provider publishes, except rows flagged `measured`
+(self-hosted servers ATLAS ships, timed on its reference CPU machine, see
+docs/local-models.md); call measurements live on each call (`calls.latency`) and in
+Reports. Pipeline health
 reads the voice service's Prometheus endpoint, which is process-wide across every
 tenant, so it is offered to owners and admins only and labelled as platform-wide.
 """
@@ -35,7 +37,8 @@ from app.services import ai_settings, audit
 log = logging.getLogger(__name__)
 
 DISCLAIMER = (
-    "Typical figures are published by each provider and were not measured by ATLAS. "
+    "Typical figures are published by each provider and were not measured by ATLAS, "
+    "except rows marked as measured, which ATLAS timed on a 6-core CPU without a GPU. "
     "They usually exclude network time and vary with region, load, model and settings. "
     "Self-hosted speed depends on your hardware. The response times your calls actually "
     "had are shown on each call and in Reports."
@@ -45,6 +48,15 @@ DISCLAIMER = (
 # version no text-to-speech service reads it (service_factory.py:757-758), so none is
 # offered. Add provider ids here once the voice service implements the cache for them.
 TTS_CACHE_PROVIDERS: tuple[str, ...] = ()
+
+# The self-hosted streaming server (infra/docker/streaming-stt) answers the Deepgram live
+# protocol, so it is used through a Deepgram connection whose base URL points at it. This
+# is the model name it reports; any name outside the Flux models keeps the voice service
+# on its /v1/listen client. Median figures from docs/perf/local-streaming-stt.json (8 kHz
+# phone audio, real-time feed through the voice service's own client).
+STREAMING_STT_MODEL = "zipformer-en-streaming"
+STREAMING_STT_FIRST_WORDS_MS = 780
+STREAMING_STT_FINAL_MS = 296
 
 GUIDE: tuple[LatencyGuideProvider, ...] = (
     LatencyGuideProvider(
@@ -95,8 +107,29 @@ GUIDE: tuple[LatencyGuideProvider, ...] = (
         turn_aware=False,
         note=(
             "Self-hosted Whisper. Not streaming: audio is transcribed after the person "
-            "stops speaking, so every turn waits for the whole utterance. Speed depends "
-            "on your hardware and model size."
+            "stops speaking, so every turn waits for the whole utterance (measured: about "
+            "2 s for a 5 s sentence on a 6-core CPU). No live words either: with Snappy "
+            "or Balanced response speed, which wait for the caller's first words before "
+            "treating speech as an interruption, a caller can only interrupt the agent "
+            "once they stop talking. For English calls use the self-hosted streaming "
+            "server (Private streaming preset); keep Whisper for Urdu and other languages."
+        ),
+    ),
+    LatencyGuideProvider(
+        kind="stt",
+        provider="deepgram",
+        model_hint=STREAMING_STT_MODEL,
+        typical_ms=STREAMING_STT_FINAL_MS,
+        measured=True,
+        streaming=True,
+        turn_aware=False,
+        note=(
+            "Self-hosted streaming speech-to-text (local-stt server, sherpa-onnx "
+            "Zipformer, Apache 2.0), added as a Deepgram connection with base URL "
+            f"http://local-stt:8000. Measured on phone audio: first words about "
+            f"{STREAMING_STT_FIRST_WORDS_MS} ms after the caller starts, final transcript "
+            f"{STREAMING_STT_FINAL_MS} ms after the caller stops (including the 0.2 s "
+            "silence that ends a turn). English only."
         ),
     ),
     LatencyGuideProvider(
@@ -255,13 +288,39 @@ PRESETS: tuple[LatencyPreset, ...] = (
         ),
         requires=["speaches"],
     ),
+    LatencyPreset(
+        id="private_streaming",
+        title="Private streaming (self-hosted)",
+        description=(
+            "Self-hosted, with live transcription: the caller's words are recognised while "
+            "they speak, so replies start sooner than with Whisper. Needs a Deepgram "
+            "connection with base URL http://local-stt:8000 (the streaming server), plus "
+            "the self-hosted language model and Pocket TTS connections. English only."
+        ),
+        choices=PresetChoices(
+            stt=PresetChoice(
+                provider="deepgram", settings={"model": STREAMING_STT_MODEL, "language": "en"}
+            ),
+            llm=PresetChoice(provider="speaches", settings={"model": SELF_HOSTED_LLM_MODEL}),
+            tts=PresetChoice(
+                provider="speaches", settings={"model": "pocket-tts", "voice": "alba"}
+            ),
+        ),
+        requires=["deepgram", "speaches"],
+    ),
 )
 _PRESETS = {p.id: p for p in PRESETS}
 # Choices that must use one specific self-hosted server: only connections whose name or
 # address matches one of these hints qualify (otherwise the provider counts as missing).
+_STREAMING_STT_HINTS = ("local-stt", "streaming-stt")
 _REQUIRED_HINTS: dict[tuple[str, str], tuple[str, ...]] = {
     ("private_pocket_tts", "tts"): ("local-tts", "pocket"),
+    ("private_streaming", "stt"): _STREAMING_STT_HINTS,
+    ("private_streaming", "tts"): ("local-tts", "pocket"),
 }
+# Dedicated servers that are never a fallback for other presets: a Deepgram connection
+# pointed at the local streaming server cannot serve Flux or cloud-only models.
+_EXCLUSIVE_HINTS = _STREAMING_STT_HINTS
 
 # For a self-hosted provider one tenant often has two connections (language model and
 # speech servers): prefer the one whose name or address suggests the right role.
@@ -299,7 +358,9 @@ def _pick(
     if required:
         candidates = [c for c in candidates if any(h in _haystack(c) for h in required)]
     else:
-        # A dedicated server (e.g. Pocket TTS) is only used when a preset asks for it.
+        # A dedicated server (e.g. Pocket TTS) is only used when a preset asks for it;
+        # an exclusive one (the streaming speech server) not even as a last resort.
+        candidates = [c for c in candidates if not any(h in _haystack(c) for h in _EXCLUSIVE_HINTS)]
         dedicated = {h for hints in _REQUIRED_HINTS.values() for h in hints}
         general = [c for c in candidates if not any(h in _haystack(c) for h in dedicated)]
         candidates = general or candidates

@@ -503,6 +503,14 @@ async def test_latency_guide_is_honest(client: httpx.AsyncClient, owner: Account
         p for p in guide["providers"] if p["provider"] == "speaches" and p["kind"] == "stt"
     )
     assert speaches["streaming"] is False and speaches["typical_ms"] is None
+    assert "interrupt" in speaches["note"] and "streaming server" in speaches["note"]
+    # Only ATLAS's own self-hosted streaming server carries a measured figure.
+    measured = [p for p in guide["providers"] if p["measured"]]
+    assert [p["model_hint"] for p in measured] == [ai_speed.STREAMING_STT_MODEL]
+    streaming = measured[0]
+    assert streaming["provider"] == "deepgram" and streaming["kind"] == "stt"
+    assert streaming["streaming"] is True and streaming["typical_ms"] > 0
+    assert "local-stt" in streaming["note"] and "English only" in streaming["note"]
     text = str(guide).lower()
     assert "dograh" not in text and "pipecat" not in text
     viewer = await invite_and_join(client, owner, "viewer@example.com", "viewer")
@@ -563,6 +571,79 @@ def test_preset_picks_matching_self_hosted_connection() -> None:
     assert "kokoro" not in str(guide.model_dump()).replace("Kokoro-82M", "")
     preset = next(p for p in guide.presets if p.id == "private_pocket_tts")
     assert preset.choices.tts.settings == {"model": "pocket-tts", "voice": "alba"}
+
+
+def test_streaming_server_is_used_only_by_the_private_streaming_preset() -> None:
+    from app.schemas.voice import ConnectionOut
+
+    def deepgram(id_: str, name: str, url: str | None = None) -> ConnectionOut:
+        return ConnectionOut(
+            id=id_,
+            name=name,
+            provider="deepgram",
+            provider_title="Deepgram",
+            connection_settings={"base_url": url} if url else {},
+            configured_credentials=["api_key"],
+        )
+
+    cloud = deepgram("d1", "Deepgram")
+    local = deepgram("d2", "Live speech", "http://local-stt:8000")
+    required = ai_speed._REQUIRED_HINTS[("private_streaming", "stt")]
+    assert ai_speed._pick("stt", "deepgram", [cloud, local], required) is local
+    assert ai_speed._pick("stt", "deepgram", [cloud], required) is None
+    assert ai_speed._pick("stt", "deepgram", [local, cloud]) is cloud
+    # A cloud preset (e.g. Flux) must never land on the local server, even as a fallback.
+    assert ai_speed._pick("stt", "deepgram", [local]) is None
+
+    preset = next(p for p in ai_speed.PRESETS if p.id == "private_streaming")
+    assert preset.title == "Private streaming (self-hosted)"
+    assert preset.choices.stt.provider == "deepgram"
+    model = preset.choices.stt.settings["model"]
+    assert model == ai_speed.STREAMING_STT_MODEL
+    assert model not in ("flux-general-en", "flux-general-multi"), "Flux uses /v2/listen"
+    assert preset.choices.llm.settings == {"model": ai_speed.SELF_HOSTED_LLM_MODEL}
+    pocket = next(p for p in ai_speed.PRESETS if p.id == "private_pocket_tts")
+    assert preset.choices.tts == pocket.choices.tts
+    assert set(preset.requires) == {"deepgram", "speaches"}
+
+
+async def test_apply_private_streaming_preset(
+    client: httpx.AsyncClient, owner: Account, runtime: CallsRuntime
+) -> None:
+    url = "/api/v1/ai-settings/presets/private_streaming/apply"
+    llm = await _connect(
+        client, owner, "speaches", connection_settings={"base_url": "http://local-llm:11434/v1"}
+    )
+    tts = await _connect(
+        client, owner, "speaches", connection_settings={"base_url": "http://local-tts:8000/v1"}
+    )
+    # A plain Deepgram connection is not the streaming server.
+    await _connect(client, owner, "deepgram")
+    r = await client.post(url, headers=owner.headers)
+    assert r.status_code == 409, r.text
+    assert r.json()["error"]["details"] == {"missing": ["deepgram"]}
+
+    stt = await _connect(
+        client, owner, "deepgram", connection_settings={"base_url": "http://local-stt:8000"}
+    )
+    r = await client.post(url, headers=owner.headers)
+    assert r.status_code == 200, r.text
+    selection = r.json()
+    assert selection["stt"] == {
+        "connection_id": stt,
+        "settings": {"model": ai_speed.STREAMING_STT_MODEL, "language": "en"},
+    }
+    assert selection["llm"] == {
+        "connection_id": llm,
+        "settings": {"model": ai_speed.SELF_HOSTED_LLM_MODEL},
+    }
+    assert selection["tts"] == {
+        "connection_id": tts,
+        "settings": {"model": "pocket-tts", "voice": "alba"},
+    }
+    conns = (await client.get("/api/v1/ai/connections", headers=owner.headers)).json()
+    local = next(c for c in conns if c["id"] == stt)
+    assert local["connection_settings"] == {"base_url": "http://local-stt:8000"}
 
 
 # ------------------------------------------------------------------ pipeline health

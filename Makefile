@@ -2,7 +2,7 @@
 API := services/api
 WEB := apps/web
 
-.PHONY: help infra local-ai-up local-tts-up local-ai-models local-ai-warm local-ai-bench local-ai-down voice-up voice-down voice-logs up down dev-api dev-web worker migrate migration seed test lint format typecheck check build
+.PHONY: help infra local-ai-up local-tts-up local-stt-up local-ai-models local-ai-warm local-ai-bench local-ai-down voice-up voice-down voice-logs up down dev-api dev-web worker migrate migration seed test lint format typecheck check build
 
 help:
 	@grep -E '^[a-z-]+:' Makefile | cut -d: -f1 | tr '\n' ' '; echo
@@ -19,6 +19,9 @@ local-ai-up:      ## Start self-hosted models (Ollama + Whisper/Kokoro), CPU
 local-tts-up:     ## Build and start Pocket TTS (OpenAI-compatible voice on 127.0.0.1:8002), CPU
 	docker compose --profile local-ai up -d --build local-tts
 
+local-stt-up:     ## Build and start live English speech-to-text (Deepgram protocol on 127.0.0.1:8003), CPU
+	docker compose --profile local-ai up -d --build local-stt
+
 local-ai-models:  ## Download the default small local models (about 1.5 GB, once)
 	sh infra/scripts/pull-local-models.sh
 
@@ -29,7 +32,7 @@ local-ai-bench:   ## Measure local STT/TTS/LLM latency (needs about 3.5 GB free 
 	cd services/api && uv run python ../../infra/scripts/bench_local_models.py
 
 local-ai-down:    ## Stop the self-hosted model containers (frees their RAM)
-	docker compose --profile local-ai stop local-llm local-speech local-tts
+	docker compose --profile local-ai stop local-llm local-speech local-tts local-stt
 
 voice-down:
 	docker compose --profile voice stop voice-runtime voice-storage voice-db

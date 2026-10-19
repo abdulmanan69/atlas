@@ -87,9 +87,17 @@ class LatencyGuideProvider(APIModel):
     model_hint: str | None = Field(description="Model or option the figure refers to")
     typical_ms: int | None = Field(
         description=(
-            "Typical latency as stated by the provider (not measured by ATLAS); "
-            "null when the provider states no figure or it depends on your hardware"
+            "Typical latency as stated by the provider (not measured by ATLAS), or as "
+            "measured by ATLAS on its reference CPU machine when `measured` is true; "
+            "null when no figure is stated or it depends on your hardware"
         )
+    )
+    measured: bool = Field(
+        default=False,
+        description=(
+            "typical_ms was measured by ATLAS on a 6-core CPU without a GPU "
+            "(self-hosted models guide), not stated by a provider"
+        ),
     )
     streaming: bool = Field(description="Results stream as they are produced")
     turn_aware: bool = Field(

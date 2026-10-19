@@ -1,0 +1,6 @@
+# Streaming speech-to-text server, Python 3.12, CPU only.
+# sherpa-onnx-core bundles the ONNX Runtime CPU libraries; no GPU packages are installed.
+sherpa-onnx==1.13.8
+sherpa-onnx-core==1.13.8
+numpy==2.5.3
+websockets==17.1

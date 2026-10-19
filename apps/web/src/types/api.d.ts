@@ -3850,6 +3850,12 @@ export interface components {
              */
             kind: "stt" | "llm" | "tts";
             /**
+             * Measured
+             * @description typical_ms was measured by ATLAS on a 6-core CPU without a GPU (self-hosted models guide), not stated by a provider
+             * @default false
+             */
+            measured?: boolean;
+            /**
              * Model Hint
              * @description Model or option the figure refers to
              */
@@ -3873,7 +3879,7 @@ export interface components {
             turn_aware: boolean;
             /**
              * Typical Ms
-             * @description Typical latency as stated by the provider (not measured by ATLAS); null when the provider states no figure or it depends on your hardware
+             * @description Typical latency as stated by the provider (not measured by ATLAS), or as measured by ATLAS on its reference CPU machine when `measured` is true; null when no figure is stated or it depends on your hardware
              */
             typical_ms: number | null;
         };

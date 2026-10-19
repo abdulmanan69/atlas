@@ -153,7 +153,10 @@ function LatencyGuideTable({ guide, catalog }: { guide: LatencyGuide; catalog: C
                 <span className="font-medium">{providerTitle(p.provider, catalog)}</span>
                 {p.model_hint ? <span className="block font-mono text-[11px] text-faint">{p.model_hint}</span> : null}
               </Td>
-              <Td className={cn("whitespace-nowrap text-right font-mono", p.typical_ms === null && "text-faint")}>{p.typical_ms === null ? "—" : `≈ ${formatMs(p.typical_ms)}`}</Td>
+              <Td className={cn("whitespace-nowrap text-right font-mono", p.typical_ms === null && "text-faint")}>
+                {p.typical_ms === null ? "—" : `≈ ${formatMs(p.typical_ms)}`}
+                {p.measured ? <span className="block font-sans text-[11px] text-faint">measured by ATLAS</span> : null}
+              </Td>
               <Td>{p.streaming ? <Badge tone="success">Yes</Badge> : <Badge>No</Badge>}</Td>
               <Td>{p.kind === "stt" ? p.turn_aware ? <Badge tone="success">Yes</Badge> : <Badge>No</Badge> : <span className="text-faint">—</span>}</Td>
               <Td className="text-[12px] text-muted">{p.note}</Td>
