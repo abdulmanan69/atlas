@@ -147,6 +147,10 @@ services:
 
   voice-runtime:
     profiles: ["voice"]
+    # Lets the voice service call ATLAS on the host (webhooks, test-call results). Docker
+    # Desktop (Windows/macOS) provides this name already; Linux needs the mapping.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Pinned to the version whose source is in vendor/voice-runtime (contract-checked).
     image: dograhai/dograh-api:1.49.0
     environment:
@@ -220,8 +224,8 @@ services:
       OLLAMA_CONTEXT_LENGTH: "4096"
       # CPU backend supports it (default is "auto"); forced on. Measured 2026-10-19 on the
       # 6-core dev CPU, fresh 740-token prompt: first token 7.8-8.1 s on vs 8.6 s off.
-      # Threads (all 6, the default), num_batch 512 and q4_K_M were also measured best;
-      # see docs/perf/local-llm-tuning.json.
+      # num_batch 512 and q4_K_M were also measured best (docs/perf/local-llm-tuning.json);
+      # for threads see LLAMA_ARG_THREADS below.
       OLLAMA_FLASH_ATTENTION: "1"
       # Local only: no remote inference or web search.
       OLLAMA_NO_CLOUD: "1"
@@ -230,6 +234,14 @@ services:
       # default cap, 8192 MiB, is far above this container's limit: measured 27 MiB per
       # 965-token call prompt, so 256 MiB keeps about 9 of them.
       LLAMA_ARG_CACHE_RAM: "256"
+      # CPU threads of the model server (read by llama.cpp; Ollama passes no -t unless a
+      # model sets num_thread). The voice speaks while the model is still writing the
+      # reply, so leave it 2 cores: measured on the 6-core dev CPU with all three servers
+      # busy, 4 threads started replies 0.5 s sooner than 6 (all cores) and kept the
+      # voice smooth, while 5 or 6 left audible pauses mid-reply and 5 also stutter
+      # (docs/perf/local-turn-contention.json).
+      # Set LOCAL_LLM_THREADS to your physical core count minus 2; -1 = all cores.
+      LLAMA_ARG_THREADS: "${LOCAL_LLM_THREADS:-4}"
     ports:
       - "127.0.0.1:11434:11434"
     volumes:
@@ -247,7 +259,7 @@ services:
       # int8 weights: faster on CPU, small accuracy cost.
       WHISPER__COMPUTE_TYPE: int8
       # Threads for Whisper; STT and the LLM run one after the other in a turn.
-      WHISPER__CPU_THREADS: "4"
+      WHISPER__CPU_THREADS: "${LOCAL_STT_THREADS:-4}"
       # Never unload models (-1). In this version the Whisper TTL also applies to Kokoro.
       WHISPER__TTL: "-1"
       # No Gradio UI: less memory, faster start.
@@ -273,6 +285,10 @@ services:
     environment:
       POCKET_TTS_LANGUAGE: english
       POCKET_TTS_DEFAULT_VOICE: alba
+      # torch threads for synthesis (the audio decoder runs on one more thread). 1, the
+      # library's own choice, measured best while the language model runs: with 2 the
+      # voice stuttered 26 times in 10 turns, with 1 never (docs/perf/local-turn-contention.json).
+      POCKET_TTS_THREADS: "${LOCAL_TTS_THREADS:-1}"
     ports:
       - "127.0.0.1:8002:8000"
     volumes:

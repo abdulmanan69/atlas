@@ -98,6 +98,13 @@ GUIDE: tuple[LatencyGuideProvider, ...] = (
         turn_aware=True,
         note="Detects the end of the turn itself. English only. No published figure.",
     ),
+    # Whisper turn timing in the pinned voice service: a "min_words" turn start (Snappy,
+    # Balanced) begins the turn only at the transcript, which resets the pause strategy and
+    # restarts its 0.6 s timer; "default" starts at the speech itself, so the turn ends as
+    # soon as the transcript arrives. Driven with the service's own turn classes: +0.6 s vs
+    # 0 ms; real calls with "default": 2-20 ms (docs/perf/local-turn-contention.json). Not
+    # changed in the presets: with streaming speech-to-text "min_words" costs nothing and
+    # keeps noise from interrupting the agent.
     LatencyGuideProvider(
         kind="stt",
         provider="speaches",
@@ -111,8 +118,14 @@ GUIDE: tuple[LatencyGuideProvider, ...] = (
             "2 s for a 5 s sentence on a 6-core CPU). No live words either: with Snappy "
             "or Balanced response speed, which wait for the caller's first words before "
             "treating speech as an interruption, a caller can only interrupt the agent "
-            "once they stop talking. For English calls use the self-hosted streaming "
-            "server (Private streaming preset); keep Whisper for Urdu and other languages."
+            "once they stop talking. Snappy and Balanced also add 0.6 s to every reply "
+            "with Whisper: they start the person's turn only when the transcript arrives, "
+            "which restarts the voice service's 0.6 s pause timer. A Custom response speed "
+            "with 'On any speech' and 'When they pause' skips that wait, but then any sound "
+            "the microphone picks up, including the agent's own voice from a speaker, "
+            "interrupts the agent at once. Streaming speech-to-text has neither problem. "
+            "For English calls use the self-hosted streaming server (Private streaming "
+            "preset); keep Whisper for Urdu and other languages."
         ),
     ),
     LatencyGuideProvider(

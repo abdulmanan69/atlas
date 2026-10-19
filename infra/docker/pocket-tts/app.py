@@ -17,6 +17,8 @@ Environment:
   POCKET_TTS_VOICES          comma-separated allow-list (default: commercial-use voices)
   POCKET_TTS_API_KEY         if set, require `Authorization: Bearer <key>`
   POCKET_TTS_WARMUP          "1" (default) runs one short synthesis at startup
+  POCKET_TTS_THREADS         torch CPU threads for synthesis (default: the library's own
+                             choice, 1; the audio decoder runs on a second thread)
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from contextlib import asynccontextmanager
 from queue import Queue
 from typing import Literal
 
+import torch
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pocket_tts import TTSModel
@@ -83,6 +86,10 @@ MODEL_ID = os.environ.get("POCKET_TTS_MODEL_ID", "pocket-tts")
 DEFAULT_VOICE = os.environ.get("POCKET_TTS_DEFAULT_VOICE", "alba")
 API_KEY = os.environ.get("POCKET_TTS_API_KEY") or None
 WARMUP = os.environ.get("POCKET_TTS_WARMUP", "1") == "1"
+# Importing pocket_tts calls torch.set_num_threads(1) (models/tts_model.py, v3.3.0); a
+# value here replaces it. torch applies it to the synthesis worker threads as well.
+_threads_env = os.environ.get("POCKET_TTS_THREADS", "").strip()
+THREADS: int | None = int(_threads_env) if _threads_env else None
 _voices_env = os.environ.get("POCKET_TTS_VOICES", "").strip()
 ALLOWED_VOICES: list[str] = (
     [v.strip() for v in _voices_env.split(",") if v.strip()]
@@ -140,6 +147,10 @@ async def lifespan(_: FastAPI):
             logger.warning("Voice %s is licensed %s: check before commercial use", v, VOICE_LICENSES[v])
     if DEFAULT_VOICE not in ALLOWED_VOICES:
         raise RuntimeError(f"POCKET_TTS_DEFAULT_VOICE={DEFAULT_VOICE} is not in the allow-list")
+    if THREADS is not None:
+        if THREADS < 1:
+            raise RuntimeError(f"POCKET_TTS_THREADS must be at least 1, got {THREADS}")
+        torch.set_num_threads(THREADS)
     started = time.perf_counter()
     # Without a Hugging Face token the library falls back to the ungated
     # kyutai/pocket-tts-without-voice-cloning weights (CC BY 4.0), which is all this server needs.
@@ -148,7 +159,10 @@ async def lifespan(_: FastAPI):
     if WARMUP:
         for _ in _pcm_chunks("Hello there.", DEFAULT_VOICE, threading.Event()):
             pass
-    logger.info("Pocket TTS ready in %.1fs (language=%s)", time.perf_counter() - started, LANGUAGE)
+    logger.info(
+        "Pocket TTS ready in %.1fs (language=%s, torch threads=%d)",
+        time.perf_counter() - started, LANGUAGE, torch.get_num_threads(),
+    )
     yield
 
 

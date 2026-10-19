@@ -1,4 +1,5 @@
 # Running AI models on your own hardware
+To set up a complete offline demo on another PC in one command, see [Demo on another machine, fully offline](university-demo.md).
 
 ATLAS agents need three models on every call: **speech-to-text** (hear the caller), a
 **language model** (decide what to say), and **text-to-speech** (speak). Each can be a
@@ -116,6 +117,81 @@ Three findings:
 A faster CPU, a GPU or hosted speech-to-text changes these numbers a lot; re-run the
 benchmark on the machine you deploy to.
 
+### A whole turn, with all three servers busy
+
+The figures above were measured one server at a time. In a call they share the CPU: the
+voice starts speaking the first sentence while the language model is still writing the
+rest of the reply. Two browser test calls on 2026-10-19 (Whisper base, `qwen2.5:1.5b`
+warmed, Pocket TTS; 10 caller turns after the greeting) answered after **5.6 s** (median,
+3.6–8.0 s). Where that time went, from each call's per-turn events
+(`docs/perf/local-turn-contention.json`, `task1_real_call_timeline`):
+
+| From the end of the caller's speech | Median (range) |
+|---|---|
+| Speech-to-text, including the 0.2 s that ends the turn | 1.8 s (1.5–2.1) |
+| Waiting for the end of the turn | 0.004 s (0.002–0.015) |
+| Language model to its first token | 0.9 s (0.5–1.9) |
+| **Language model writing its first sentence** | **1.7 s (0.4–3.7)** |
+| Voice until playback starts | 0.7 s (0.55–0.86) |
+
+The "missing" 1.4–2 s is the language model writing its first sentence: the voice service
+sends text to the voice only at a sentence end, and the first-token time stops at the first
+word. In these calls the model wrote only 4–6 tokens a second. The voice also starts later
+than Pocket TTS's own 0.2 s, because the voice service plays a reply only once 0.5 s of
+audio has arrived.
+
+**Thread caps.** `infra/scripts/bench_local_turn.py turn` reproduces a turn with all three
+servers running: Whisper transcribes a 3 s sentence, the transcript goes to the model with
+a 950-token warmed prompt, and each finished sentence goes to Pocket TTS while the model
+keeps writing. It also replays the audio in real time to find gaps. 10 turns per setting,
+fresh containers, no call running:
+
+| Threads (model / Pocket TTS / Whisper) | Reply starts (median, 90th pct) | Stutter inside sentences | Pause between sentences |
+|---|---|---|---|
+| 6 / 1 / 4 (old default: all cores) | 3.5 s, 5.0 s | none | in 9 of 10 replies, median 0.55 s, up to 3.5 s |
+| **4 / 1 / 4 (new default)** | **3.0 s, 3.6 s** | **none** | in 3 of 10 replies, at most 0.17 s |
+| 5 / 1 / 4 | 3.0 s, 4.3 s | 8 times in 4 replies | in 8 of 10, up to 3.0 s |
+| 3 / 1 / 4 | 3.1 s, 3.6 s | 7 times in 2 replies | in 6 of 10, up to 1.8 s |
+| 4 / 2 / 4 | 3.2 s, 3.9 s | 26 times, every reply | in 2 of 10 |
+| 6 / 2 / 4 (5 replies) | 5.2 s, 6.1 s | 17 times, every reply | every reply |
+
+With all six cores the model and the voice slow each other down: the model wrote 6 tokens
+a second while the voice spoke (10 before), so the second sentence often came late. Leaving
+two cores to Pocket TTS (the model on 4, Pocket TTS on its default single thread plus its
+decoder thread) gave the fastest and smoothest replies. Giving Pocket TTS a second thread
+made it slower than real time under load (choppy audio). The compose file now sets these
+defaults (`LOCAL_LLM_THREADS=4`, `LOCAL_TTS_THREADS=1`, `LOCAL_STT_THREADS=4`); on another
+machine set `LOCAL_LLM_THREADS` to the number of physical cores minus 2.
+
+**Waiting for the end of the turn.** The calls above used a Custom response speed with
+"On any speech", and the turn ended within 15 ms of Whisper's transcript. With **Snappy
+or Balanced, every Whisper reply waits 0.6 s more**: those presets start the caller's turn
+only when words arrive, and for Whisper the words arrive all at once after the caller
+stopped, which restarts the voice service's 0.6 s pause timer (measured with the voice
+service's own turn-taking code). "On any speech" avoids the wait, but then any sound,
+including the agent's own voice from a speaker, interrupts the agent; in the browser calls
+about half the replies were cut off. Streaming speech-to-text has neither problem, so the
+presets are unchanged.
+
+**The first reply of a call.** In both browser calls the caller's first words lasted more
+than 2.5 s, so the voice service's answering-machine check asked the language model,
+which did not answer within its 3 s budget on this CPU; the greeting started 3 s late
+(first reply 7.5–7.8 s). A first "Hello?" shorter than 2.5 s skips the check; turning
+off answering-machine detection does too.
+
+**Memory.** With the voice service, the three model servers, the dev servers and a
+browser on this 12 GB machine, Windows ran out of free memory and paged the Docker
+virtual machine: the model then wrote 0.3–1 tokens a second and a test call took 12–37 s
+per reply. Restarting `local-llm` brought it back to 9–14 tokens a second. Keep at least
+1.5 GB free (close other programs, stop `local-stt` if unused), or use a machine with
+16 GB.
+
+What one reply costs now, after the first reply, for a 3 s sentence with Whisper and
+Pocket TTS: **3.0 s** in the benchmark (3.5 s before the thread caps), and about 3.4–3.6 s
+in a call, where the voice service's 0.5 s of audio buffering and its own work come on
+top. Not yet confirmed by a real call with the new settings. Add 0.6 s with Snappy or
+Balanced.
+
 ### Warming the prompt
 
 When an outbound call or a browser test call starts and the agent's language model is
@@ -208,6 +284,10 @@ the median of 3 runs:
 | Speech-to-text | Time to transcribe 5 s of speech (made by Kokoro, or `--stt-wav file.wav`) | `POST /v1/audio/transcriptions` |
 | Voice (Kokoro and Pocket TTS) | Time to first audio byte, and total, for a 12-word sentence streamed as 24 kHz PCM | `POST /v1/audio/speech`, as the voice service calls it |
 | Language model | Time to first token, and tokens per second, for about 60 tokens | `POST /v1/chat/completions` with `stream: true` |
+
+To measure whole turns with all three servers busy (stutter and pauses included), run
+`infra/scripts/bench_local_turn.py` from `services/api` (`wavs`, then `turn`; `--help`
+explains each step). Stop any test call first: both slow each other down.
 
 Choose other models with flags, e.g. `--llm-model llama3.2:1b --stt-model
 Systran/faster-whisper-small`; skip a target with `--skip pocket`. Targets that are not
@@ -465,6 +545,7 @@ server logs a warning if you add a voice that is not cleared for commercial use.
 | `POCKET_TTS_VOICES` | commercial-use voices | Allow-list of voice names |
 | `POCKET_TTS_API_KEY` | unset | If set, clients must send `Authorization: Bearer <key>` |
 | `POCKET_TTS_WARMUP` | `1` | Synthesises one short phrase at startup, so the first call is not slow |
+| `POCKET_TTS_THREADS` | `1` in compose (`LOCAL_TTS_THREADS`); unset = the library's own choice, also 1 | CPU threads for synthesis; the audio decoder runs on one more thread. Alone, 2 threads reach first audio a little sooner (about 150 vs 180 ms), but while the language model runs they made the voice slower than real time: 26 stutters in 10 replies, against none with 1 |
 
 The adapter supports `response_format` `pcm` (24 kHz, 16-bit, mono, as the voice service
 expects) and `wav`, and streams audio as it is generated. It runs one synthesis at a time,
@@ -487,13 +568,14 @@ the pinned image version.
 | `OLLAMA_FLASH_ATTENTION` | `1` | Supported on CPU (the default is "auto"). Saves memory as context grows, and measured 6–9% faster to first token on a fresh 740-token prompt (7.8–8.1 s on, 8.6 s off). |
 | `OLLAMA_NO_CLOUD` | `1` | No remote inference or web search, so everything stays local. |
 | `LLAMA_ARG_CACHE_RAM` | `256` | RAM for earlier prompts the model server can switch back to (read by the llama.cpp server inside the image). Its default, 8192 MiB, is far above the container's 2.5 GB limit; a 965-token call prompt takes 27 MiB, so 256 MiB keeps about 9. |
+| `LLAMA_ARG_THREADS` | `4` (override with `LOCAL_LLM_THREADS`; `-1` = all cores) | CPU threads of the model server (read by the llama.cpp server; Ollama passes no thread count unless a model sets `num_thread`, and the voice service's OpenAI-style requests cannot). Leaves two of the six cores to Pocket TTS, which speaks while the model is still writing: replies started 0.5 s sooner and without mid-reply pauses ([A whole turn](#a-whole-turn-with-all-three-servers-busy)). Use physical cores minus 2. |
 
 Also measured on 2026-10-19 and left at their defaults (fresh 740-token prompt, configs
 measured in alternation; `docs/perf/local-llm-tuning.json`):
 
 | Option | Tried | Result |
 |---|---|---|
-| `num_thread` | 4, 5, 6 | 6 (all cores, the default) is fastest: 4 is 19% and 5 is 11% slower to first token |
+| `num_thread` | 4, 5, 6 | Alone, 6 (all cores) is fastest: 4 is 19% and 5 is 11% slower to first token. With Pocket TTS speaking at the same time, 4 is best; see `LLAMA_ARG_THREADS` above |
 | `num_batch` | 256, 512, 1024 | No consistent difference: 1024 against 512 was 8% faster in one run, then 2% slower, 2% faster and 2% slower; 512 kept |
 | `num_ctx` | 2048, 4096 | 2048 within noise (4% faster in one run); 4096 kept for longer calls |
 | Quantisation | `qwen2.5:1.5b` (q4_K_M), `qwen2.5:1.5b-instruct-q4_0` | q4_0 is 18% slower to first token here (83 vs 98 tokens/s reading the prompt) |
@@ -518,7 +600,7 @@ commercial use**. Use `llama3.2:3b` if you need a 3B model for production.
 | Setting | Value | Why |
 |---|---|---|
 | `WHISPER__COMPUTE_TYPE` | `int8` | Quantised weights run faster on CPU, with a small accuracy cost. |
-| `WHISPER__CPU_THREADS` | `4` | Whisper threads. Speech-to-text and the language model run one after the other, so they don't compete. |
+| `WHISPER__CPU_THREADS` | `4` (override with `LOCAL_STT_THREADS`) | Whisper threads. Speech-to-text runs before the language model and the voice, so they don't compete. 2 and 6 threads were also tried; timings varied too much between runs to pick another value. |
 | `WHISPER__TTL` | `-1` | Never unload. In this version the same timer also applies to Kokoro. |
 | `ENABLE_UI` | `false` | No web UI: less memory, faster start. |
 

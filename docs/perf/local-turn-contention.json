@@ -1,0 +1,2192 @@
+{
+ "meta": {
+  "date": "2026-10-19",
+  "machine": "Intel i5-8500T (6 cores, 6 threads), 12 GB RAM, no GPU; Windows 11, Docker Desktop (WSL2 VM, 6 GB)",
+  "servers": "docker compose profile local-ai: local-llm ollama/ollama:0.40.6 qwen2.5:1.5b (q4_K_M); local-speech speaches 0.8.3-cpu Systran/faster-whisper-base int8; local-tts Pocket TTS 3.3.0, voice alba",
+  "also_running": "the voice service stack, ATLAS postgres/redis, ATLAS API and web dev servers, the Docker Desktop window and other work on the machine; runs during a call were discarded",
+  "tool": "infra/scripts/bench_local_turn.py (subcommands wavs, stt, tts, turn)"
+ },
+ "task1_real_call_timeline": {
+  "source": "realtime_feedback_events of two browser test calls (voice-service runs 2 and 3: 10 caller turns after the greeting) and one scripted test call on fresh containers (run 8: 4 turns). Agent on a Custom response speed: turn start 'default' (On any speech), turn stop 'transcription'.",
+  "how": "t0 = rtf-latency-measured.timestamp - latency_seconds (end of the caller's speech). Each stage starts at its rtf-ttfb-metric timestamp - ttfb_seconds. STT ttfb counts from the end of speech (includes the 0.2 s VAD stop). gap_transcript_to_llm = turn-stop wait; gap_first_token_to_tts = the language model writing its first sentence; gap_audio_to_speaking = transport.",
+  "browser_calls_runs_2_3": {
+   "latency_s": {
+    "n": 10,
+    "median": 5.588,
+    "min": 3.582,
+    "max": 8.043
+   },
+   "stt_ttfb": {
+    "n": 8,
+    "median": 1.816,
+    "min": 1.507,
+    "max": 2.14
+   },
+   "gap_transcript_to_llm": {
+    "n": 10,
+    "median": 0.004,
+    "min": 0.002,
+    "max": 0.015
+   },
+   "llm_ttfb": {
+    "n": 10,
+    "median": 0.925,
+    "min": 0.546,
+    "max": 1.885
+   },
+   "gap_first_token_to_tts": {
+    "n": 10,
+    "median": 1.67,
+    "min": 0.43,
+    "max": 3.729
+   },
+   "tts_ttfb": {
+    "n": 10,
+    "median": 0.673,
+    "min": 0.554,
+    "max": 0.858
+   },
+   "gap_audio_to_speaking": {
+    "n": 10,
+    "median": 0.026,
+    "min": 0.01,
+    "max": 0.053
+   }
+  },
+  "scripted_call_run_8": {
+   "latency_s": {
+    "n": 4,
+    "median": 4.798,
+    "min": 3.569,
+    "max": 9.772
+   },
+   "stt_ttfb": {
+    "n": 4,
+    "median": 1.203,
+    "min": 0.084,
+    "max": 1.417
+   },
+   "gap_transcript_to_llm": {
+    "n": 4,
+    "median": 0.004,
+    "min": 0.001,
+    "max": 0.005
+   },
+   "llm_ttfb": {
+    "n": 4,
+    "median": 0.787,
+    "min": 0.361,
+    "max": 1.338
+   },
+   "gap_first_token_to_tts": {
+    "n": 4,
+    "median": 1.108,
+    "min": 0.666,
+    "max": 2.255
+   },
+   "tts_ttfb": {
+    "n": 4,
+    "median": 0.542,
+    "min": 0.508,
+    "max": 0.875
+   },
+   "gap_audio_to_speaking": {
+    "n": 4,
+    "median": 0.022,
+    "min": 0.013,
+    "max": 0.026
+   }
+  },
+  "per_turn_browser_calls": [
+   {
+    "file": "run_2.json",
+    "turn": 1,
+    "latency_s": 7.84,
+    "user_text": "Hello",
+    "user_start_rel": -8.086,
+    "transcript_rel": 3.189,
+    "tts_ttfb": 1.257,
+    "tts_start_rel": 6.354,
+    "tts_end_rel": 7.611,
+    "gap_audio_to_speaking": 0.229,
+    "sum_ttfb": 1.257,
+    "unaccounted": 6.583
+   },
+   {
+    "file": "run_2.json",
+    "turn": 2,
+    "latency_s": 5.539,
+    "user_text": "You",
+    "user_start_rel": -0.301,
+    "transcript_rel": 1.904,
+    "stt_ttfb": 1.923,
+    "stt_start_rel": -0.022,
+    "stt_end_rel": 1.9,
+    "llm_ttfb": 1.885,
+    "llm_start_rel": 1.919,
+    "llm_end_rel": 3.804,
+    "tts_ttfb": 0.809,
+    "tts_start_rel": 4.677,
+    "tts_end_rel": 5.486,
+    "gap_stt_to_llm": 0.019,
+    "gap_transcript_to_llm": 0.015,
+    "gap_first_token_to_tts": 0.873,
+    "gap_audio_to_speaking": 0.053,
+    "sum_ttfb": 4.617,
+    "unaccounted": 0.922
+   },
+   {
+    "file": "run_2.json",
+    "turn": 4,
+    "latency_s": 5.703,
+    "user_text": "Can you hear me?",
+    "user_start_rel": -0.339,
+    "transcript_rel": 2.021,
+    "stt_ttfb": 2.017,
+    "stt_start_rel": -0.001,
+    "stt_end_rel": 2.017,
+    "llm_ttfb": 0.567,
+    "llm_start_rel": 2.025,
+    "llm_end_rel": 2.592,
+    "tts_ttfb": 0.554,
+    "tts_start_rel": 5.121,
+    "tts_end_rel": 5.675,
+    "gap_stt_to_llm": 0.008,
+    "gap_transcript_to_llm": 0.004,
+    "gap_first_token_to_tts": 2.529,
+    "gap_audio_to_speaking": 0.028,
+    "sum_ttfb": 3.138,
+    "unaccounted": 2.565
+   },
+   {
+    "file": "run_2.json",
+    "turn": 5,
+    "latency_s": 5.638,
+    "user_text": "I just asked you can you hear me?",
+    "user_start_rel": -1.133,
+    "transcript_rel": 2.151,
+    "stt_ttfb": 2.14,
+    "stt_start_rel": 0.002,
+    "stt_end_rel": 2.142,
+    "llm_ttfb": 1.066,
+    "llm_start_rel": 2.162,
+    "llm_end_rel": 3.228,
+    "tts_ttfb": 0.721,
+    "tts_start_rel": 4.907,
+    "tts_end_rel": 5.628,
+    "gap_stt_to_llm": 0.02,
+    "gap_transcript_to_llm": 0.011,
+    "gap_first_token_to_tts": 1.679,
+    "gap_audio_to_speaking": 0.01,
+    "sum_ttfb": 3.927,
+    "unaccounted": 1.711
+   },
+   {
+    "file": "run_2.json",
+    "turn": 6,
+    "latency_s": 4.258,
+    "user_text": "la la la",
+    "user_start_rel": -0.54,
+    "transcript_rel": 1.949,
+    "stt_ttfb": 1.947,
+    "stt_start_rel": -0.001,
+    "stt_end_rel": 1.946,
+    "llm_ttfb": 0.926,
+    "llm_start_rel": 1.954,
+    "llm_end_rel": 2.88,
+    "tts_ttfb": 0.594,
+    "tts_start_rel": 3.626,
+    "tts_end_rel": 4.219,
+    "gap_stt_to_llm": 0.008,
+    "gap_transcript_to_llm": 0.005,
+    "gap_first_token_to_tts": 0.746,
+    "gap_audio_to_speaking": 0.039,
+    "sum_ttfb": 3.467,
+    "unaccounted": 0.791
+   },
+   {
+    "file": "run_2.json",
+    "turn": 7,
+    "latency_s": 4.443,
+    "user_text": "We are",
+    "user_start_rel": -0.161,
+    "transcript_rel": 1.507,
+    "stt_ttfb": 1.507,
+    "stt_start_rel": -0.003,
+    "stt_end_rel": 1.504,
+    "llm_ttfb": 0.647,
+    "llm_start_rel": 1.51,
+    "llm_end_rel": 2.157,
+    "tts_ttfb": 0.6,
+    "tts_start_rel": 3.818,
+    "tts_end_rel": 4.418,
+    "gap_stt_to_llm": 0.006,
+    "gap_transcript_to_llm": 0.003,
+    "gap_first_token_to_tts": 1.661,
+    "gap_audio_to_speaking": 0.025,
+    "sum_ttfb": 2.754,
+    "unaccounted": 1.689
+   },
+   {
+    "file": "run_2.json",
+    "turn": 8,
+    "latency_s": 5.963,
+    "user_text": "Which way am I?",
+    "user_start_rel": -0.3,
+    "transcript_rel": 1.707,
+    "stt_ttfb": 1.708,
+    "stt_start_rel": -0.004,
+    "stt_end_rel": 1.704,
+    "llm_ttfb": 0.546,
+    "llm_start_rel": 1.711,
+    "llm_end_rel": 2.257,
+    "tts_ttfb": 0.676,
+    "tts_start_rel": 5.26,
+    "tts_end_rel": 5.936,
+    "gap_stt_to_llm": 0.007,
+    "gap_transcript_to_llm": 0.004,
+    "gap_first_token_to_tts": 3.003,
+    "gap_audio_to_speaking": 0.027,
+    "sum_ttfb": 2.93,
+    "unaccounted": 3.033
+   },
+   {
+    "file": "run_2.json",
+    "turn": 9,
+    "latency_s": 5.537,
+    "user_text": "mm-hmm",
+    "user_start_rel": -0.138,
+    "transcript_rel": 1.638,
+    "stt_ttfb": 1.636,
+    "stt_start_rel": -0.001,
+    "stt_end_rel": 1.634,
+    "llm_ttfb": 0.923,
+    "llm_start_rel": 1.643,
+    "llm_end_rel": 2.566,
+    "tts_ttfb": 0.669,
+    "tts_start_rel": 4.847,
+    "tts_end_rel": 5.515,
+    "gap_stt_to_llm": 0.009,
+    "gap_transcript_to_llm": 0.005,
+    "gap_first_token_to_tts": 2.281,
+    "gap_audio_to_speaking": 0.022,
+    "sum_ttfb": 3.228,
+    "unaccounted": 2.309
+   },
+   {
+    "file": "run_2.json",
+    "turn": 11,
+    "latency_s": 6.5,
+    "user_text": "No, no, no, not only the me",
+    "user_start_rel": 2.261,
+    "transcript_rel": 2.864,
+    "llm_ttfb": 1.216,
+    "llm_start_rel": 2.868,
+    "llm_end_rel": 4.085,
+    "tts_ttfb": 0.858,
+    "tts_start_rel": 5.63,
+    "tts_end_rel": 6.489,
+    "gap_transcript_to_llm": 0.004,
+    "gap_first_token_to_tts": 1.545,
+    "gap_audio_to_speaking": 0.011,
+    "sum_ttfb": 2.074,
+    "unaccounted": 4.426
+   },
+   {
+    "file": "run_3.json",
+    "turn": 1,
+    "latency_s": 7.508,
+    "user_text": "Hello, can you hear me?",
+    "user_start_rel": -0.536,
+    "transcript_rel": 3.472,
+    "tts_ttfb": 0.988,
+    "tts_start_rel": 6.486,
+    "tts_end_rel": 7.474,
+    "gap_audio_to_speaking": 0.034,
+    "sum_ttfb": 0.988,
+    "unaccounted": 6.52
+   },
+   {
+    "file": "run_3.json",
+    "turn": 2,
+    "latency_s": 8.043,
+    "user_text": "Yes",
+    "user_start_rel": -0.216,
+    "transcript_rel": 2.343,
+    "llm_ttfb": 1.261,
+    "llm_start_rel": 2.347,
+    "llm_end_rel": 3.608,
+    "tts_ttfb": 0.679,
+    "tts_start_rel": 7.337,
+    "tts_end_rel": 8.017,
+    "gap_transcript_to_llm": 0.004,
+    "gap_first_token_to_tts": 3.729,
+    "gap_audio_to_speaking": 0.026,
+    "sum_ttfb": 1.94,
+    "unaccounted": 6.103
+   },
+   {
+    "file": "run_3.json",
+    "turn": 3,
+    "latency_s": 3.582,
+    "user_text": "Hi, hello",
+    "user_start_rel": -0.485,
+    "transcript_rel": 1.62,
+    "stt_ttfb": 1.621,
+    "stt_start_rel": -0.005,
+    "stt_end_rel": 1.616,
+    "llm_ttfb": 0.86,
+    "llm_start_rel": 1.622,
+    "llm_end_rel": 2.482,
+    "tts_ttfb": 0.636,
+    "tts_start_rel": 2.912,
+    "tts_end_rel": 3.548,
+    "gap_stt_to_llm": 0.006,
+    "gap_transcript_to_llm": 0.002,
+    "gap_first_token_to_tts": 0.43,
+    "gap_audio_to_speaking": 0.034,
+    "sum_ttfb": 3.117,
+    "unaccounted": 0.465
+   }
+  ],
+  "finding": "The unaccounted 1.4-2 s is the language model writing its first sentence. The voice service hands text to the voice only at a sentence end (punctuation and the next character, pipecat SimpleTextAggregator), and the LLM ttfb stops at the first token. Measured 0.43-3.73 s (median 1.67 s) in the browser calls, about 4-6 tokens/s, against 10-15 tokens/s in the benchmark. The turn-stop wait (transcript to LLM request) was 2-15 ms. TTS ttfb in calls (0.55-0.86 s) is above Pocket TTS's first frame (about 0.2 s) because the voice service plays only once 0.5 s of audio has arrived (pipecat TTSService.chunk_size, CHUNK_SECONDS = 0.5).",
+  "first_reply_of_call": "Runs 2 and 3 answered the first caller turn after 7.8 and 7.5 s. That turn lasted 12 s and 4 s (more than human_utterance_max_ms 2500), so the answering-machine check asked the language model and gave up after classify_budget_ms 3000 (log: 'Answer supervisor event=classifier_timeout'); the greeting played after that. Voicemail detection is on by default in CallSettings (voicemail.enabled)."
+ },
+ "task1_turn_stop_wait": {
+  "code": "vendor run_pipeline.py:213-259: turn_stop_strategy 'transcription' -> SpeechTimeoutUserTurnStopStrategy() (user_speech_timeout 0.6 s; STT wait from ttfs_p99_latency, pipecat default 1.0 s, skipped for finalized transcripts); turn_start 'min_words' -> MinWordsUserTurnStartStrategy; 'default' -> TranscriptionUserTurnStartStrategy + VADUserTurnStartStrategy. SegmentedSTTService marks every transcript finalized. UserTurnController resets the stop strategy (handle_user_turn_started) when a start strategy fires, before the stop strategy sees the same transcript.",
+  "measurement": "The pinned voice service's own UserTurnController and strategies, run inside the voice-runtime container with a segmented-STT frame sequence: VAD start, 2 s of speech, VAD stop (stop_secs 0.2), then a finalized transcript after a delay.",
+  "turn_stop_after_transcript_ms": {
+   "default start, transcript 0.3 s after VAD stop": 308,
+   "default start, 1.0 s": 0,
+   "default start, 1.8 s": 0,
+   "min_words (Snappy, Balanced), 0.3 s": 601,
+   "min_words, 1.0 s": 601,
+   "min_words, 1.8 s": 603,
+   "min_words with streaming interim words, 0.3 s": 301,
+   "min_words with streaming interim words, 1.0 s": 4,
+   "min_words with streaming interim words, 1.8 s": 1
+  },
+  "conclusion": "With Whisper, Snappy and Balanced (turn start min_words) add 0.6 s to every reply: the turn only starts at the transcript, which resets the stop strategy and restarts its 0.6 s timer. Turn start 'default' (Custom 'On any speech'; Patient uses it too) ends the turn as the transcript arrives (real calls: 2-15 ms) but lets any sound interrupt the agent (about half the turns of the browser calls were interrupted). With streaming STT min_words costs nothing, so the presets were not changed; a note was added to the latency guide (app/services/ai_speed.py)."
+ },
+ "task2_thread_caps": {
+  "method": "Each turn: POST a 2.5-3.0 s utterance (padded to 4.0-4.5 s like a voice-service segment) to local-speech; stream the transcript to /v1/chat/completions with a 935-1079-token prompt (global rules, Start prompt, greeting, 2 tools, the conversation so far; warmed first like ATLAS; temperature 0, max_tokens 120); at each sentence end send the sentence to Pocket TTS while the model keeps generating, each next sentence after the previous one is synthesised (as the voice service). Playback simulated in real time from the first audio byte: a gap inside a sentence over 50 ms is an audible stutter, one at a sentence start a pause between sentences. 5 turns per round; before each round the containers were recreated (fresh memory), the VM page cache dropped and no call was active. reply_start_ms = end of the caller's speech (0.2 s before the STT request) to the first audio byte. Content pieces per second are about tokens per second.",
+  "mechanisms_verified": {
+   "ollama_threads": "Ollama 0.40.6 runs /usr/lib/ollama/llama-server without -t; the request option num_thread restarts it with '-t N' (checked with /api/generate options.num_thread=4: new llama-server process with '-t 4'). The OpenAI-compatible endpoint the voice service uses cannot pass it, and a Modelfile PARAMETER would need a renamed model. llama-server --help: '-t, --threads N ... (env: LLAMA_ARG_THREADS)'. Ollama passes its environment to llama-server (LLAMA_ARG_CACHE_RAM present in its /proc environ); with LLAMA_ARG_THREADS=4 it logs 'system_info: n_threads = 4 (n_threads_batch = 4)'.",
+   "pocket_tts_threads": "pocket_tts/models/tts_model.py:57 calls torch.set_num_threads(1) at import; the Mimi decoder runs on a second thread. infra/docker/pocket-tts/app.py now reads POCKET_TTS_THREADS and calls torch.set_num_threads (checked: applies to worker threads; the server logs 'torch threads=N').",
+   "whisper_threads": "speaches WhisperConfig.cpu_threads with env_nested_delimiter '__' -> WHISPER__CPU_THREADS, passed to faster-whisper cpu_threads."
+  },
+  "configs": {
+   "llm-1-tts1-stt4": {
+    "description": "before (old defaults: LLM all 6 cores, Pocket TTS 1, Whisper 4)",
+    "env": "LLAMA_ARG_THREADS=-1 POCKET_TTS_THREADS=1 WHISPER__CPU_THREADS=4",
+    "rounds": [
+     "llm-1-tts1-stt4:r1",
+     "llm-1-tts1-stt4:r2"
+    ],
+    "turns": 10,
+    "reply_start_ms": {
+     "median": 3528,
+     "p90": 4974,
+     "max": 5740
+    },
+    "stt_ms_median": 1704,
+    "llm_first_token_ms_median": 910,
+    "llm_first_sentence_ms_median": 1540,
+    "tts_first_audio_ms_median": 208,
+    "tts_rtf_median": 0.61,
+    "tts_rtf_max": 1.28,
+    "sentences_slower_than_real_time": "2 of 20",
+    "llm_pieces_per_s_before_voice_median": 10,
+    "llm_pieces_per_s_while_voice_speaks_median": 6,
+    "stutters_inside_sentences": {
+     "audible_over_50ms": 0,
+     "total_ms": 96,
+     "turns_affected": 0
+    },
+    "pauses_between_sentences": {
+     "turns_with_audible_pause": 9,
+     "median_ms": 548,
+     "max_ms": 3494
+    },
+    "per_turn": [
+     {
+      "wav": "s3_1",
+      "transcript": "We want to buy a family house near a good primary school.",
+      "reply": "Sure, that sounds like a good fit. What timeline are you working with?",
+      "stt_ms": 2242,
+      "llm_first_token_ms": 1659,
+      "llm_first_sentence_ms": 3117,
+      "tts_first_audio_ms": 180,
+      "reply_start_ms": 5740,
+      "tts_rtf_first_sentence": 0.604,
+      "llm_rate_before_tts": 6.2,
+      "llm_rate_during_tts": 12.3,
+      "prompt_tokens": 935,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_2",
+      "transcript": "Our budget really depends on the price of the house.",
+      "reply": "Got it. Do you have any specific budget in mind?",
+      "stt_ms": 1521,
+      "llm_first_token_ms": 1824,
+      "llm_first_sentence_ms": 2893,
+      "tts_first_audio_ms": 274,
+      "reply_start_ms": 4889,
+      "tts_rtf_first_sentence": 1.069,
+      "llm_rate_before_tts": 2.8,
+      "llm_rate_during_tts": 5.9,
+      "prompt_tokens": 972,
+      "completion_tokens": 13,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 479,
+        "audible_count": 1,
+        "longest_ms": 479
+       }
+      }
+     },
+     {
+      "wav": "s3_3",
+      "transcript": "My wife and I will make the final decision together.",
+      "reply": "Absolutely, that's great. Is there anything else you'd like to add?",
+      "stt_ms": 1599,
+      "llm_first_token_ms": 481,
+      "llm_first_sentence_ms": 862,
+      "tts_first_audio_ms": 276,
+      "reply_start_ms": 2937,
+      "tts_rtf_first_sentence": 0.825,
+      "llm_rate_before_tts": 15.8,
+      "llm_rate_during_tts": 9.9,
+      "prompt_tokens": 1005,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 5,
+        "audible_count": 0,
+        "longest_ms": 5
+       },
+       "between_sentences": {
+        "total_ms": 475,
+        "audible_count": 1,
+        "longest_ms": 475
+       }
+      }
+     },
+     {
+      "wav": "s3_4",
+      "transcript": "We would like to move in some time before the end of June.",
+      "reply": "Got it. Is there anything else you'd like to add?",
+      "stt_ms": 1703,
+      "llm_first_token_ms": 877,
+      "llm_first_sentence_ms": 1182,
+      "tts_first_audio_ms": 276,
+      "reply_start_ms": 3362,
+      "tts_rtf_first_sentence": 1.278,
+      "llm_rate_before_tts": 9.9,
+      "llm_rate_during_tts": 3.6,
+      "prompt_tokens": 1045,
+      "completion_tokens": 14,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 84,
+        "audible_count": 0,
+        "longest_ms": 34
+       },
+       "between_sentences": {
+        "total_ms": 1874,
+        "audible_count": 1,
+        "longest_ms": 1874
+       }
+      }
+     },
+     {
+      "wav": "s3_5",
+      "transcript": "Could one of your specialists call me back tomorrow morning?",
+      "reply": "Of course, Alex. Could you please confirm the day and time you'd like to be contacted?",
+      "stt_ms": 1725,
+      "llm_first_token_ms": 398,
+      "llm_first_sentence_ms": 851,
+      "tts_first_audio_ms": 206,
+      "reply_start_ms": 2982,
+      "tts_rtf_first_sentence": 0.825,
+      "llm_rate_before_tts": 11.0,
+      "llm_rate_during_tts": 10.3,
+      "prompt_tokens": 1079,
+      "completion_tokens": 21,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 1084,
+        "audible_count": 1,
+        "longest_ms": 1084
+       }
+      }
+     },
+     {
+      "wav": "s3_1",
+      "transcript": "We want to buy a family house near a good primary school.",
+      "reply": "Sure, that sounds like a good fit. What timeline are you working with?",
+      "stt_ms": 1704,
+      "llm_first_token_ms": 449,
+      "llm_first_sentence_ms": 1953,
+      "tts_first_audio_ms": 340,
+      "reply_start_ms": 4198,
+      "tts_rtf_first_sentence": 0.839,
+      "llm_rate_before_tts": 6.0,
+      "llm_rate_during_tts": 3.8,
+      "prompt_tokens": 935,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 554,
+        "audible_count": 1,
+        "longest_ms": 554
+       }
+      }
+     },
+     {
+      "wav": "s3_2",
+      "transcript": "Our budget really depends on the price of the house.",
+      "reply": "Got it. Do you have any specific budget in mind?",
+      "stt_ms": 1770,
+      "llm_first_token_ms": 1551,
+      "llm_first_sentence_ms": 1809,
+      "tts_first_audio_ms": 195,
+      "reply_start_ms": 3975,
+      "tts_rtf_first_sentence": 0.755,
+      "llm_rate_before_tts": 11.6,
+      "llm_rate_during_tts": 5.3,
+      "prompt_tokens": 972,
+      "completion_tokens": 13,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 543,
+        "audible_count": 1,
+        "longest_ms": 543
+       }
+      }
+     },
+     {
+      "wav": "s3_3",
+      "transcript": "My wife and I will make the final decision together.",
+      "reply": "Absolutely, that's great. Is there anything else you'd like to add?",
+      "stt_ms": 1459,
+      "llm_first_token_ms": 699,
+      "llm_first_sentence_ms": 1662,
+      "tts_first_audio_ms": 181,
+      "reply_start_ms": 3503,
+      "tts_rtf_first_sentence": 0.592,
+      "llm_rate_before_tts": 6.2,
+      "llm_rate_during_tts": 16.5,
+      "prompt_tokens": 1005,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 190,
+        "audible_count": 1,
+        "longest_ms": 190
+       }
+      }
+     },
+     {
+      "wav": "s3_4",
+      "transcript": "We would like to move in some time before the end of June.",
+      "reply": "Got it. Is there anything else you'd like to add?",
+      "stt_ms": 1680,
+      "llm_first_token_ms": 944,
+      "llm_first_sentence_ms": 1153,
+      "tts_first_audio_ms": 188,
+      "reply_start_ms": 3223,
+      "tts_rtf_first_sentence": 0.747,
+      "llm_rate_before_tts": 14.3,
+      "llm_rate_during_tts": 2.7,
+      "prompt_tokens": 1045,
+      "completion_tokens": 14,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 3494,
+        "audible_count": 1,
+        "longest_ms": 3494
+       }
+      }
+     },
+     {
+      "wav": "s3_5",
+      "transcript": "Could one of your specialists call me back tomorrow morning?",
+      "reply": "Of course, Alex. Could you please confirm the day and time you'd like to be contacted?",
+      "stt_ms": 1725,
+      "llm_first_token_ms": 1062,
+      "llm_first_sentence_ms": 1418,
+      "tts_first_audio_ms": 210,
+      "reply_start_ms": 3553,
+      "tts_rtf_first_sentence": 0.728,
+      "llm_rate_before_tts": 14.1,
+      "llm_rate_during_tts": 6.6,
+      "prompt_tokens": 1079,
+      "completion_tokens": 21,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 7,
+        "audible_count": 0,
+        "longest_ms": 7
+       },
+       "between_sentences": {
+        "total_ms": 825,
+        "audible_count": 1,
+        "longest_ms": 825
+       }
+      }
+     }
+    ]
+   },
+   "llm4-tts2-stt4": {
+    "description": "LLM 4, Pocket TTS 2, Whisper 4",
+    "env": "LLAMA_ARG_THREADS=4 POCKET_TTS_THREADS=2 WHISPER__CPU_THREADS=4",
+    "rounds": [
+     "llm4-tts2-stt4:r1",
+     "llm4-tts2-stt4:r2"
+    ],
+    "turns": 10,
+    "reply_start_ms": {
+     "median": 3206,
+     "p90": 3930,
+     "max": 4147
+    },
+    "stt_ms_median": 1653,
+    "llm_first_token_ms_median": 488,
+    "llm_first_sentence_ms_median": 892,
+    "tts_first_audio_ms_median": 462,
+    "tts_rtf_median": 0.8,
+    "tts_rtf_max": 1.99,
+    "sentences_slower_than_real_time": "8 of 24",
+    "llm_pieces_per_s_before_voice_median": 15,
+    "llm_pieces_per_s_while_voice_speaks_median": 8,
+    "stutters_inside_sentences": {
+     "audible_over_50ms": 26,
+     "total_ms": 4541,
+     "turns_affected": 10
+    },
+    "pauses_between_sentences": {
+     "turns_with_audible_pause": 2,
+     "median_ms": 0,
+     "max_ms": 391
+    },
+    "per_turn": [
+     {
+      "wav": "s3_1",
+      "transcript": "We want to buy a family house near a good primary school.",
+      "reply": "Sure, that sounds like a good fit. What timeline are you working with?",
+      "stt_ms": 1959,
+      "llm_first_token_ms": 599,
+      "llm_first_sentence_ms": 1341,
+      "tts_first_audio_ms": 646,
+      "reply_start_ms": 4147,
+      "tts_rtf_first_sentence": 0.791,
+      "llm_rate_before_tts": 12.1,
+      "llm_rate_during_tts": 9.4,
+      "prompt_tokens": 935,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 57,
+        "audible_count": 1,
+        "longest_ms": 57
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_2",
+      "transcript": "Our budget really depends on the price of the house.",
+      "reply": "Got it. Do you have any specific budget in mind?",
+      "stt_ms": 1839,
+      "llm_first_token_ms": 425,
+      "llm_first_sentence_ms": 631,
+      "tts_first_audio_ms": 432,
+      "reply_start_ms": 3102,
+      "tts_rtf_first_sentence": 0.867,
+      "llm_rate_before_tts": 14.5,
+      "llm_rate_during_tts": 6.5,
+      "prompt_tokens": 972,
+      "completion_tokens": 13,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 128,
+        "audible_count": 1,
+        "longest_ms": 128
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_3",
+      "transcript": "My wife and I will make the final decision together.",
+      "reply": "Absolutely, that's perfect. Is there anything else you'd like to add?",
+      "stt_ms": 1499,
+      "llm_first_token_ms": 487,
+      "llm_first_sentence_ms": 865,
+      "tts_first_audio_ms": 737,
+      "reply_start_ms": 3301,
+      "tts_rtf_first_sentence": 1.128,
+      "llm_rate_before_tts": 15.9,
+      "llm_rate_during_tts": 9.3,
+      "prompt_tokens": 1005,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 200,
+        "audible_count": 2,
+        "longest_ms": 109
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_4",
+      "transcript": "We would like to move in some time before the end of June.",
+      "reply": "Got it. Thank you for your time, Alex. If you're interested, we can arrange a call back for you. Is that convenient?",
+      "stt_ms": 1689,
+      "llm_first_token_ms": 718,
+      "llm_first_sentence_ms": 915,
+      "tts_first_audio_ms": 307,
+      "reply_start_ms": 3112,
+      "tts_rtf_first_sentence": 1.315,
+      "llm_rate_before_tts": 15.2,
+      "llm_rate_during_tts": 7.4,
+      "prompt_tokens": 1045,
+      "completion_tokens": 30,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 653,
+        "audible_count": 5,
+        "longest_ms": 236
+       },
+       "between_sentences": {
+        "total_ms": 330,
+        "audible_count": 1,
+        "longest_ms": 330
+       }
+      }
+     },
+     {
+      "wav": "s3_5",
+      "transcript": "Could one of your specialists call me back tomorrow morning?",
+      "reply": "Of course, that would be great. Could you please confirm the day and time?",
+      "stt_ms": 1536,
+      "llm_first_token_ms": 482,
+      "llm_first_sentence_ms": 1119,
+      "tts_first_audio_ms": 238,
+      "reply_start_ms": 3094,
+      "tts_rtf_first_sentence": 0.835,
+      "llm_rate_before_tts": 12.5,
+      "llm_rate_during_tts": 10.0,
+      "prompt_tokens": 1095,
+      "completion_tokens": 18,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 193,
+        "audible_count": 1,
+        "longest_ms": 191
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_1",
+      "transcript": "We want to buy a family house near a good primary school.",
+      "reply": "Sure, that sounds like a good fit. What timeline are you working with?",
+      "stt_ms": 1827,
+      "llm_first_token_ms": 395,
+      "llm_first_sentence_ms": 1253,
+      "tts_first_audio_ms": 624,
+      "reply_start_ms": 3906,
+      "tts_rtf_first_sentence": 1.375,
+      "llm_rate_before_tts": 10.5,
+      "llm_rate_during_tts": 2.2,
+      "prompt_tokens": 935,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 1218,
+        "audible_count": 5,
+        "longest_ms": 362
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_2",
+      "transcript": "Our budget really depends on the price of the house.",
+      "reply": "Got it. Do you have any specific budget in mind?",
+      "stt_ms": 1545,
+      "llm_first_token_ms": 401,
+      "llm_first_sentence_ms": 596,
+      "tts_first_audio_ms": 305,
+      "reply_start_ms": 2646,
+      "tts_rtf_first_sentence": 1.189,
+      "llm_rate_before_tts": 15.4,
+      "llm_rate_during_tts": 11.6,
+      "prompt_tokens": 972,
+      "completion_tokens": 13,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 381,
+        "audible_count": 2,
+        "longest_ms": 222
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_3",
+      "transcript": "My wife and I will make the final decision together.",
+      "reply": "Absolutely, that's perfect. Is there anything else you'd like to add?",
+      "stt_ms": 1531,
+      "llm_first_token_ms": 488,
+      "llm_first_sentence_ms": 869,
+      "tts_first_audio_ms": 610,
+      "reply_start_ms": 3210,
+      "tts_rtf_first_sentence": 1.002,
+      "llm_rate_before_tts": 15.7,
+      "llm_rate_during_tts": 6.9,
+      "prompt_tokens": 1005,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 325,
+        "audible_count": 1,
+        "longest_ms": 217
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_4",
+      "transcript": "We would like to move in some time before the end of June.",
+      "reply": "Got it. Thank you for your time, Alex. If you're interested, we can arrange a call back for you. Is that convenient?",
+      "stt_ms": 1959,
+      "llm_first_token_ms": 616,
+      "llm_first_sentence_ms": 806,
+      "tts_first_audio_ms": 238,
+      "reply_start_ms": 3203,
+      "tts_rtf_first_sentence": 1.992,
+      "llm_rate_before_tts": 15.8,
+      "llm_rate_during_tts": 9.5,
+      "prompt_tokens": 1045,
+      "completion_tokens": 30,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 1080,
+        "audible_count": 6,
+        "longest_ms": 259
+       },
+       "between_sentences": {
+        "total_ms": 391,
+        "audible_count": 1,
+        "longest_ms": 391
+       }
+      }
+     },
+     {
+      "wav": "s3_5",
+      "transcript": "Could one of your specialists call me back tomorrow morning?",
+      "reply": "Of course, that would be great. Could you please confirm the day and time?",
+      "stt_ms": 1617,
+      "llm_first_token_ms": 516,
+      "llm_first_sentence_ms": 1023,
+      "tts_first_audio_ms": 492,
+      "reply_start_ms": 3332,
+      "tts_rtf_first_sentence": 1.032,
+      "llm_rate_before_tts": 15.8,
+      "llm_rate_during_tts": 6.1,
+      "prompt_tokens": 1095,
+      "completion_tokens": 18,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 306,
+        "audible_count": 2,
+        "longest_ms": 207
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     }
+    ]
+   },
+   "llm4-tts1-stt4": {
+    "description": "after (chosen: LLM 4, Pocket TTS 1, Whisper 4)",
+    "env": "LLAMA_ARG_THREADS=4 POCKET_TTS_THREADS=1 WHISPER__CPU_THREADS=4",
+    "rounds": [
+     "llm4-tts1-stt4:r1",
+     "llm4-tts1-stt4:r2"
+    ],
+    "turns": 10,
+    "reply_start_ms": {
+     "median": 3022,
+     "p90": 3564,
+     "max": 4082
+    },
+    "stt_ms_median": 1631,
+    "llm_first_token_ms_median": 462,
+    "llm_first_sentence_ms_median": 919,
+    "tts_first_audio_ms_median": 254,
+    "tts_rtf_median": 0.69,
+    "tts_rtf_max": 1.1,
+    "sentences_slower_than_real_time": "3 of 24",
+    "llm_pieces_per_s_before_voice_median": 14,
+    "llm_pieces_per_s_while_voice_speaks_median": 8,
+    "stutters_inside_sentences": {
+     "audible_over_50ms": 0,
+     "total_ms": 4,
+     "turns_affected": 0
+    },
+    "pauses_between_sentences": {
+     "turns_with_audible_pause": 3,
+     "median_ms": 0,
+     "max_ms": 173
+    },
+    "per_turn": [
+     {
+      "wav": "s3_1",
+      "transcript": "We want to buy a family house near a good primary school.",
+      "reply": "Sure, that sounds like a good fit. What timeline are you working with?",
+      "stt_ms": 1826,
+      "llm_first_token_ms": 722,
+      "llm_first_sentence_ms": 1785,
+      "tts_first_audio_ms": 270,
+      "reply_start_ms": 4082,
+      "tts_rtf_first_sentence": 0.769,
+      "llm_rate_before_tts": 8.5,
+      "llm_rate_during_tts": 8.8,
+      "prompt_tokens": 935,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_2",
+      "transcript": "Our budget really depends on the price of the house.",
+      "reply": "Got it. Do you have any specific budget in mind?",
+      "stt_ms": 1562,
+      "llm_first_token_ms": 415,
+      "llm_first_sentence_ms": 635,
+      "tts_first_audio_ms": 223,
+      "reply_start_ms": 2620,
+      "tts_rtf_first_sentence": 1.041,
+      "llm_rate_before_tts": 13.7,
+      "llm_rate_during_tts": 7.5,
+      "prompt_tokens": 972,
+      "completion_tokens": 13,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 36,
+        "audible_count": 0,
+        "longest_ms": 36
+       }
+      }
+     },
+     {
+      "wav": "s3_3",
+      "transcript": "My wife and I will make the final decision together.",
+      "reply": "Absolutely, that's perfect. Is there anything else you'd like to add?",
+      "stt_ms": 1514,
+      "llm_first_token_ms": 511,
+      "llm_first_sentence_ms": 895,
+      "tts_first_audio_ms": 311,
+      "reply_start_ms": 2920,
+      "tts_rtf_first_sentence": 0.906,
+      "llm_rate_before_tts": 15.6,
+      "llm_rate_during_tts": 9.3,
+      "prompt_tokens": 1005,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_4",
+      "transcript": "We would like to move in some time before the end of June.",
+      "reply": "Got it. Thank you for your time, Alex. If you're interested, we can arrange a call back for you. Is that convenient?",
+      "stt_ms": 2123,
+      "llm_first_token_ms": 490,
+      "llm_first_sentence_ms": 686,
+      "tts_first_audio_ms": 255,
+      "reply_start_ms": 3265,
+      "tts_rtf_first_sentence": 1.098,
+      "llm_rate_before_tts": 15.3,
+      "llm_rate_during_tts": 8.3,
+      "prompt_tokens": 1045,
+      "completion_tokens": 30,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 173,
+        "audible_count": 2,
+        "longest_ms": 108
+       }
+      }
+     },
+     {
+      "wav": "s3_5",
+      "transcript": "Could one of your specialists call me back tomorrow morning?",
+      "reply": "Of course, that would be great. Could you please confirm the day and time?",
+      "stt_ms": 1671,
+      "llm_first_token_ms": 451,
+      "llm_first_sentence_ms": 980,
+      "tts_first_audio_ms": 254,
+      "reply_start_ms": 3105,
+      "tts_rtf_first_sentence": 0.867,
+      "llm_rate_before_tts": 15.1,
+      "llm_rate_during_tts": 6.1,
+      "prompt_tokens": 1095,
+      "completion_tokens": 18,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 1,
+        "audible_count": 0,
+        "longest_ms": 1
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_1",
+      "transcript": "We want to buy a family house near a good primary school.",
+      "reply": "Sure, that sounds like a good fit. What timeline are you working with?",
+      "stt_ms": 1960,
+      "llm_first_token_ms": 419,
+      "llm_first_sentence_ms": 1078,
+      "tts_first_audio_ms": 269,
+      "reply_start_ms": 3507,
+      "tts_rtf_first_sentence": 0.654,
+      "llm_rate_before_tts": 13.7,
+      "llm_rate_during_tts": 9.4,
+      "prompt_tokens": 935,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 3,
+        "audible_count": 0,
+        "longest_ms": 3
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_2",
+      "transcript": "Our budget really depends on the price of the house.",
+      "reply": "Got it. Do you have any specific budget in mind?",
+      "stt_ms": 1544,
+      "llm_first_token_ms": 399,
+      "llm_first_sentence_ms": 594,
+      "tts_first_audio_ms": 238,
+      "reply_start_ms": 2576,
+      "tts_rtf_first_sentence": 0.971,
+      "llm_rate_before_tts": 15.4,
+      "llm_rate_during_tts": 8.4,
+      "prompt_tokens": 972,
+      "completion_tokens": 13,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 102,
+        "audible_count": 1,
+        "longest_ms": 102
+       }
+      }
+     },
+     {
+      "wav": "s3_3",
+      "transcript": "My wife and I will make the final decision together.",
+      "reply": "Absolutely, that's perfect. Is there anything else you'd like to add?",
+      "stt_ms": 1589,
+      "llm_first_token_ms": 438,
+      "llm_first_sentence_ms": 943,
+      "tts_first_audio_ms": 263,
+      "reply_start_ms": 2996,
+      "tts_rtf_first_sentence": 0.915,
+      "llm_rate_before_tts": 11.9,
+      "llm_rate_during_tts": 5.3,
+      "prompt_tokens": 1005,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_4",
+      "transcript": "We would like to move in some time before the end of June.",
+      "reply": "Got it. Thank you for your time, Alex. If you're interested, we can arrange a call back for you. Is that convenient?",
+      "stt_ms": 1789,
+      "llm_first_token_ms": 531,
+      "llm_first_sentence_ms": 746,
+      "tts_first_audio_ms": 242,
+      "reply_start_ms": 2978,
+      "tts_rtf_first_sentence": 1.025,
+      "llm_rate_before_tts": 13.9,
+      "llm_rate_during_tts": 8.2,
+      "prompt_tokens": 1045,
+      "completion_tokens": 30,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 135,
+        "audible_count": 2,
+        "longest_ms": 76
+       }
+      }
+     },
+     {
+      "wav": "s3_5",
+      "transcript": "Could one of your specialists call me back tomorrow morning?",
+      "reply": "Of course, that would be great. Could you please confirm the day and time?",
+      "stt_ms": 1591,
+      "llm_first_token_ms": 473,
+      "llm_first_sentence_ms": 1006,
+      "tts_first_audio_ms": 249,
+      "reply_start_ms": 3047,
+      "tts_rtf_first_sentence": 0.806,
+      "llm_rate_before_tts": 15.0,
+      "llm_rate_during_tts": 10.8,
+      "prompt_tokens": 1095,
+      "completion_tokens": 18,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     }
+    ]
+   },
+   "llm5-tts1-stt4": {
+    "description": "LLM 5, Pocket TTS 1, Whisper 4",
+    "env": "LLAMA_ARG_THREADS=5 POCKET_TTS_THREADS=1 WHISPER__CPU_THREADS=4",
+    "rounds": [
+     "llm5-tts1-stt4:r1",
+     "llm5-tts1-stt4:r2"
+    ],
+    "turns": 10,
+    "reply_start_ms": {
+     "median": 2962,
+     "p90": 4278,
+     "max": 7142
+    },
+    "stt_ms_median": 1728,
+    "llm_first_token_ms_median": 427,
+    "llm_first_sentence_ms_median": 799,
+    "tts_first_audio_ms_median": 265,
+    "tts_rtf_median": 0.74,
+    "tts_rtf_max": 1.59,
+    "sentences_slower_than_real_time": "5 of 20",
+    "llm_pieces_per_s_before_voice_median": 11,
+    "llm_pieces_per_s_while_voice_speaks_median": 6,
+    "stutters_inside_sentences": {
+     "audible_over_50ms": 8,
+     "total_ms": 978,
+     "turns_affected": 4
+    },
+    "pauses_between_sentences": {
+     "turns_with_audible_pause": 8,
+     "median_ms": 430,
+     "max_ms": 2964
+    },
+    "per_turn": [
+     {
+      "wav": "s3_1",
+      "transcript": "We want to buy a family house near a good primary school.",
+      "reply": "Sure, that sounds like a good fit. What timeline are you working with?",
+      "stt_ms": 1726,
+      "llm_first_token_ms": 1717,
+      "llm_first_sentence_ms": 4813,
+      "tts_first_audio_ms": 402,
+      "reply_start_ms": 7142,
+      "tts_rtf_first_sentence": 1.204,
+      "llm_rate_before_tts": 2.9,
+      "llm_rate_during_tts": 4.3,
+      "prompt_tokens": 935,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 187,
+        "audible_count": 2,
+        "longest_ms": 59
+       },
+       "between_sentences": {
+        "total_ms": 361,
+        "audible_count": 1,
+        "longest_ms": 361
+       }
+      }
+     },
+     {
+      "wav": "s3_2",
+      "transcript": "Our budget really depends on the price of the house.",
+      "reply": "Got it. Do you have any specific budget in mind?",
+      "stt_ms": 1777,
+      "llm_first_token_ms": 429,
+      "llm_first_sentence_ms": 774,
+      "tts_first_audio_ms": 261,
+      "reply_start_ms": 3012,
+      "tts_rtf_first_sentence": 1.593,
+      "llm_rate_before_tts": 8.7,
+      "llm_rate_during_tts": 4.3,
+      "prompt_tokens": 972,
+      "completion_tokens": 13,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 388,
+        "audible_count": 3,
+        "longest_ms": 182
+       },
+       "between_sentences": {
+        "total_ms": 835,
+        "audible_count": 1,
+        "longest_ms": 835
+       }
+      }
+     },
+     {
+      "wav": "s3_3",
+      "transcript": "My wife and I will make the final decision together.",
+      "reply": "Got it. Who else is involved in the decision?",
+      "stt_ms": 1805,
+      "llm_first_token_ms": 731,
+      "llm_first_sentence_ms": 1634,
+      "tts_first_audio_ms": 320,
+      "reply_start_ms": 3960,
+      "tts_rtf_first_sentence": 1.145,
+      "llm_rate_before_tts": 3.3,
+      "llm_rate_during_tts": 9.0,
+      "prompt_tokens": 1005,
+      "completion_tokens": 12,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 139,
+        "audible_count": 1,
+        "longest_ms": 139
+       }
+      }
+     },
+     {
+      "wav": "s3_4",
+      "transcript": "We would like to move in some time before the end of June.",
+      "reply": "Great. Is there anything else you'd like to add before we wrap up?",
+      "stt_ms": 1897,
+      "llm_first_token_ms": 420,
+      "llm_first_sentence_ms": 543,
+      "tts_first_audio_ms": 272,
+      "reply_start_ms": 2913,
+      "tts_rtf_first_sentence": 1.389,
+      "llm_rate_before_tts": 16.2,
+      "llm_rate_during_tts": 3.3,
+      "prompt_tokens": 1040,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 272,
+        "audible_count": 2,
+        "longest_ms": 126
+       },
+       "between_sentences": {
+        "total_ms": 2964,
+        "audible_count": 1,
+        "longest_ms": 2964
+       }
+      }
+     },
+     {
+      "wav": "s3_5",
+      "transcript": "Could one of your specialists call me back tomorrow morning?",
+      "reply": "Of course, Alex. Could you please confirm the day and time you'd like to speak with a specialist?",
+      "stt_ms": 1616,
+      "llm_first_token_ms": 516,
+      "llm_first_sentence_ms": 1116,
+      "tts_first_audio_ms": 249,
+      "reply_start_ms": 3181,
+      "tts_rtf_first_sentence": 1.093,
+      "llm_rate_before_tts": 8.3,
+      "llm_rate_during_tts": 5.7,
+      "prompt_tokens": 1077,
+      "completion_tokens": 23,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 131,
+        "audible_count": 1,
+        "longest_ms": 115
+       },
+       "between_sentences": {
+        "total_ms": 1010,
+        "audible_count": 1,
+        "longest_ms": 1010
+       }
+      }
+     },
+     {
+      "wav": "s3_1",
+      "transcript": "We want to buy a family house near a good primary school.",
+      "reply": "Sure, that sounds like a good fit. What timeline are you working with?",
+      "stt_ms": 1735,
+      "llm_first_token_ms": 441,
+      "llm_first_sentence_ms": 1094,
+      "tts_first_audio_ms": 304,
+      "reply_start_ms": 3335,
+      "tts_rtf_first_sentence": 0.762,
+      "llm_rate_before_tts": 13.8,
+      "llm_rate_during_tts": 8.4,
+      "prompt_tokens": 935,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_2",
+      "transcript": "Our budget really depends on the price of the house.",
+      "reply": "Got it. Do you have any specific budget in mind?",
+      "stt_ms": 1557,
+      "llm_first_token_ms": 353,
+      "llm_first_sentence_ms": 546,
+      "tts_first_audio_ms": 223,
+      "reply_start_ms": 2527,
+      "tts_rtf_first_sentence": 0.882,
+      "llm_rate_before_tts": 15.5,
+      "llm_rate_during_tts": 6.5,
+      "prompt_tokens": 972,
+      "completion_tokens": 13,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 198,
+        "audible_count": 1,
+        "longest_ms": 198
+       }
+      }
+     },
+     {
+      "wav": "s3_3",
+      "transcript": "My wife and I will make the final decision together.",
+      "reply": "Got it. Who else is involved in the decision?",
+      "stt_ms": 1601,
+      "llm_first_token_ms": 358,
+      "llm_first_sentence_ms": 824,
+      "tts_first_audio_ms": 269,
+      "reply_start_ms": 2894,
+      "tts_rtf_first_sentence": 0.972,
+      "llm_rate_before_tts": 6.4,
+      "llm_rate_during_tts": 11.1,
+      "prompt_tokens": 1005,
+      "completion_tokens": 12,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_4",
+      "transcript": "We would like to move in some time before the end of June.",
+      "reply": "Great. Is there anything else you'd like to add before we wrap up?",
+      "stt_ms": 1731,
+      "llm_first_token_ms": 425,
+      "llm_first_sentence_ms": 560,
+      "tts_first_audio_ms": 239,
+      "reply_start_ms": 2731,
+      "tts_rtf_first_sentence": 0.867,
+      "llm_rate_before_tts": 14.9,
+      "llm_rate_during_tts": 9.4,
+      "prompt_tokens": 1040,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 499,
+        "audible_count": 1,
+        "longest_ms": 499
+       }
+      }
+     },
+     {
+      "wav": "s3_5",
+      "transcript": "Could one of your specialists call me back tomorrow morning?",
+      "reply": "Of course, Alex. Could you please confirm the day and time you'd like to speak with a specialist?",
+      "stt_ms": 1662,
+      "llm_first_token_ms": 375,
+      "llm_first_sentence_ms": 734,
+      "tts_first_audio_ms": 254,
+      "reply_start_ms": 2850,
+      "tts_rtf_first_sentence": 0.844,
+      "llm_rate_before_tts": 13.9,
+      "llm_rate_during_tts": 4.9,
+      "prompt_tokens": 1077,
+      "completion_tokens": 23,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 1818,
+        "audible_count": 1,
+        "longest_ms": 1818
+       }
+      }
+     }
+    ]
+   },
+   "llm-1-tts2-stt4": {
+    "description": "LLM 6, Pocket TTS 2, Whisper 4",
+    "env": "LLAMA_ARG_THREADS=-1 POCKET_TTS_THREADS=2 WHISPER__CPU_THREADS=4",
+    "rounds": [
+     "llm-1-tts2-stt4:r1"
+    ],
+    "turns": 5,
+    "reply_start_ms": {
+     "median": 5194,
+     "p90": 6102,
+     "max": 6416
+    },
+    "stt_ms_median": 1749,
+    "llm_first_token_ms_median": 1766,
+    "llm_first_sentence_ms_median": 1957,
+    "tts_first_audio_ms_median": 429,
+    "tts_rtf_median": 1.08,
+    "tts_rtf_max": 1.73,
+    "sentences_slower_than_real_time": "5 of 10",
+    "llm_pieces_per_s_before_voice_median": 9,
+    "llm_pieces_per_s_while_voice_speaks_median": 2,
+    "stutters_inside_sentences": {
+     "audible_over_50ms": 17,
+     "total_ms": 2964,
+     "turns_affected": 5
+    },
+    "pauses_between_sentences": {
+     "turns_with_audible_pause": 5,
+     "median_ms": 673,
+     "max_ms": 1667
+    },
+    "per_turn": [
+     {
+      "wav": "s3_1",
+      "transcript": "We want to buy a family house near a good primary school.",
+      "reply": "Sure, that sounds like a good fit. What timeline are you working with?",
+      "stt_ms": 1749,
+      "llm_first_token_ms": 467,
+      "llm_first_sentence_ms": 1515,
+      "tts_first_audio_ms": 276,
+      "reply_start_ms": 3741,
+      "tts_rtf_first_sentence": 1.542,
+      "llm_rate_before_tts": 8.6,
+      "llm_rate_during_tts": 1.4,
+      "prompt_tokens": 935,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 1069,
+        "audible_count": 6,
+        "longest_ms": 279
+       },
+       "between_sentences": {
+        "total_ms": 671,
+        "audible_count": 1,
+        "longest_ms": 671
+       }
+      }
+     },
+     {
+      "wav": "s3_2",
+      "transcript": "Our budget really depends on the price of the house.",
+      "reply": "Got it. Do you have any specific budget in mind?",
+      "stt_ms": 1527,
+      "llm_first_token_ms": 2727,
+      "llm_first_sentence_ms": 3038,
+      "tts_first_audio_ms": 429,
+      "reply_start_ms": 5194,
+      "tts_rtf_first_sentence": 1.733,
+      "llm_rate_before_tts": 9.7,
+      "llm_rate_during_tts": 2.2,
+      "prompt_tokens": 972,
+      "completion_tokens": 13,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 454,
+        "audible_count": 2,
+        "longest_ms": 318
+       },
+       "between_sentences": {
+        "total_ms": 1667,
+        "audible_count": 1,
+        "longest_ms": 1667
+       }
+      }
+     },
+     {
+      "wav": "s3_3",
+      "transcript": "My wife and I will make the final decision together.",
+      "reply": "Absolutely, that's great. Is there anything else you'd like to add?",
+      "stt_ms": 1514,
+      "llm_first_token_ms": 653,
+      "llm_first_sentence_ms": 1341,
+      "tts_first_audio_ms": 448,
+      "reply_start_ms": 3502,
+      "tts_rtf_first_sentence": 1.404,
+      "llm_rate_before_tts": 8.7,
+      "llm_rate_during_tts": 2.5,
+      "prompt_tokens": 1005,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 553,
+        "audible_count": 2,
+        "longest_ms": 254
+       },
+       "between_sentences": {
+        "total_ms": 540,
+        "audible_count": 1,
+        "longest_ms": 540
+       }
+      }
+     },
+     {
+      "wav": "s3_4",
+      "transcript": "We would like to move in some time before the end of June.",
+      "reply": "Got it. Is there anything else you'd like to add?",
+      "stt_ms": 2846,
+      "llm_first_token_ms": 1766,
+      "llm_first_sentence_ms": 1957,
+      "tts_first_audio_ms": 629,
+      "reply_start_ms": 5632,
+      "tts_rtf_first_sentence": 1.546,
+      "llm_rate_before_tts": 15.7,
+      "llm_rate_during_tts": 9.1,
+      "prompt_tokens": 1045,
+      "completion_tokens": 14,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 338,
+        "audible_count": 2,
+        "longest_ms": 253
+       },
+       "between_sentences": {
+        "total_ms": 673,
+        "audible_count": 1,
+        "longest_ms": 673
+       }
+      }
+     },
+     {
+      "wav": "s3_5",
+      "transcript": "Could one of your specialists call me back tomorrow morning?",
+      "reply": "Of course, Alex. Could you please confirm the day and time you'd like to be contacted?",
+      "stt_ms": 1770,
+      "llm_first_token_ms": 2010,
+      "llm_first_sentence_ms": 4205,
+      "tts_first_audio_ms": 240,
+      "reply_start_ms": 6416,
+      "tts_rtf_first_sentence": 1.446,
+      "llm_rate_before_tts": 2.3,
+      "llm_rate_during_tts": 3.9,
+      "prompt_tokens": 1079,
+      "completion_tokens": 21,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 550,
+        "audible_count": 5,
+        "longest_ms": 160
+       },
+       "between_sentences": {
+        "total_ms": 1609,
+        "audible_count": 1,
+        "longest_ms": 1609
+       }
+      }
+     }
+    ]
+   },
+   "llm3-tts1-stt4": {
+    "description": "LLM 3, Pocket TTS 1, Whisper 4",
+    "env": "LLAMA_ARG_THREADS=3 POCKET_TTS_THREADS=1 WHISPER__CPU_THREADS=4",
+    "rounds": [
+     "llm3-tts1-stt4:r2",
+     "llm3-tts1-stt4:r3"
+    ],
+    "turns": 10,
+    "reply_start_ms": {
+     "median": 3126,
+     "p90": 3646,
+     "max": 5193
+    },
+    "stt_ms_median": 1742,
+    "llm_first_token_ms_median": 635,
+    "llm_first_sentence_ms_median": 1010,
+    "tts_first_audio_ms_median": 245,
+    "tts_rtf_median": 0.71,
+    "tts_rtf_max": 1.82,
+    "sentences_slower_than_real_time": "4 of 26",
+    "llm_pieces_per_s_before_voice_median": 14,
+    "llm_pieces_per_s_while_voice_speaks_median": 9,
+    "stutters_inside_sentences": {
+     "audible_over_50ms": 7,
+     "total_ms": 1041,
+     "turns_affected": 2
+    },
+    "pauses_between_sentences": {
+     "turns_with_audible_pause": 6,
+     "median_ms": 159,
+     "max_ms": 1825
+    },
+    "per_turn": [
+     {
+      "wav": "s3_1",
+      "transcript": "We want to buy a family house near a good primary school.",
+      "reply": "Sure, that sounds like a good fit. What timeline are you working with?",
+      "stt_ms": 1635,
+      "llm_first_token_ms": 468,
+      "llm_first_sentence_ms": 1044,
+      "tts_first_audio_ms": 238,
+      "reply_start_ms": 3118,
+      "tts_rtf_first_sentence": 0.668,
+      "llm_rate_before_tts": 15.6,
+      "llm_rate_during_tts": 8.7,
+      "prompt_tokens": 935,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_2",
+      "transcript": "Our budget really depends on the price of the house.",
+      "reply": "Got it. Do you have anyone in mind who might be interested in the house?",
+      "stt_ms": 1562,
+      "llm_first_token_ms": 620,
+      "llm_first_sentence_ms": 855,
+      "tts_first_audio_ms": 316,
+      "reply_start_ms": 2933,
+      "tts_rtf_first_sentence": 1.358,
+      "llm_rate_before_tts": 12.8,
+      "llm_rate_during_tts": 7.0,
+      "prompt_tokens": 972,
+      "completion_tokens": 18,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 108,
+        "audible_count": 0,
+        "longest_ms": 49
+       },
+       "between_sentences": {
+        "total_ms": 696,
+        "audible_count": 1,
+        "longest_ms": 696
+       }
+      }
+     },
+     {
+      "wav": "s3_3",
+      "transcript": "My wife and I will make the final decision together.",
+      "reply": "Great. We can help you find the perfect house. If you're interested, we can arrange a viewing after the call. Is there anything else you'd like to know?",
+      "stt_ms": 1612,
+      "llm_first_token_ms": 542,
+      "llm_first_sentence_ms": 671,
+      "tts_first_audio_ms": 205,
+      "reply_start_ms": 2688,
+      "tts_rtf_first_sentence": 0.95,
+      "llm_rate_before_tts": 15.5,
+      "llm_rate_during_tts": 9.4,
+      "prompt_tokens": 1010,
+      "completion_tokens": 36,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 90,
+        "audible_count": 1,
+        "longest_ms": 90
+       }
+      }
+     },
+     {
+      "wav": "s3_4",
+      "transcript": "We would like to move in some time before the end of June.",
+      "reply": "Got it. We can help you find a house that's ready for you to move into by the end of June. Is there anything else you'd like to know?",
+      "stt_ms": 1740,
+      "llm_first_token_ms": 579,
+      "llm_first_sentence_ms": 794,
+      "tts_first_audio_ms": 222,
+      "reply_start_ms": 2956,
+      "tts_rtf_first_sentence": 0.987,
+      "llm_rate_before_tts": 14.0,
+      "llm_rate_during_tts": 8.7,
+      "prompt_tokens": 1069,
+      "completion_tokens": 35,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 6,
+        "audible_count": 0,
+        "longest_ms": 6
+       },
+       "between_sentences": {
+        "total_ms": 1578,
+        "audible_count": 1,
+        "longest_ms": 1578
+       }
+      }
+     },
+     {
+      "wav": "s3_5",
+      "transcript": "Could one of your specialists call me back tomorrow morning?",
+      "reply": "Sure, we can arrange that. Could you please confirm the day and time you'd like to speak with a specialist?",
+      "stt_ms": 1532,
+      "llm_first_token_ms": 705,
+      "llm_first_sentence_ms": 1160,
+      "tts_first_audio_ms": 229,
+      "reply_start_ms": 3121,
+      "tts_rtf_first_sentence": 0.904,
+      "llm_rate_before_tts": 15.4,
+      "llm_rate_during_tts": 9.1,
+      "prompt_tokens": 1124,
+      "completion_tokens": 25,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_1",
+      "transcript": "We want to buy a family house near a good primary school.",
+      "reply": "Sure, that sounds like a good fit. What timeline are you working with?",
+      "stt_ms": 1756,
+      "llm_first_token_ms": 450,
+      "llm_first_sentence_ms": 1067,
+      "tts_first_audio_ms": 235,
+      "reply_start_ms": 3258,
+      "tts_rtf_first_sentence": 0.703,
+      "llm_rate_before_tts": 14.6,
+      "llm_rate_during_tts": 8.9,
+      "prompt_tokens": 935,
+      "completion_tokens": 17,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     },
+     {
+      "wav": "s3_2",
+      "transcript": "Our budget really depends on the price of the house.",
+      "reply": "Got it. Do you have anyone in mind who might be interested in the house?",
+      "stt_ms": 2603,
+      "llm_first_token_ms": 906,
+      "llm_first_sentence_ms": 2001,
+      "tts_first_audio_ms": 389,
+      "reply_start_ms": 5193,
+      "tts_rtf_first_sentence": 1.526,
+      "llm_rate_before_tts": 2.7,
+      "llm_rate_during_tts": 7.6,
+      "prompt_tokens": 972,
+      "completion_tokens": 18,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 248,
+        "audible_count": 1,
+        "longest_ms": 82
+       },
+       "between_sentences": {
+        "total_ms": 588,
+        "audible_count": 1,
+        "longest_ms": 588
+       }
+      }
+     },
+     {
+      "wav": "s3_3",
+      "transcript": "My wife and I will make the final decision together.",
+      "reply": "Great. We can help you find the perfect house. If you're interested, we can arrange a viewing after the call. Is there anything else you'd like to know?",
+      "stt_ms": 1814,
+      "llm_first_token_ms": 686,
+      "llm_first_sentence_ms": 864,
+      "tts_first_audio_ms": 252,
+      "reply_start_ms": 3131,
+      "tts_rtf_first_sentence": 1.168,
+      "llm_rate_before_tts": 11.2,
+      "llm_rate_during_tts": 8.4,
+      "prompt_tokens": 1010,
+      "completion_tokens": 36,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 40,
+        "audible_count": 0,
+        "longest_ms": 26
+       },
+       "between_sentences": {
+        "total_ms": 228,
+        "audible_count": 1,
+        "longest_ms": 228
+       }
+      }
+     },
+     {
+      "wav": "s3_4",
+      "transcript": "We would like to move in some time before the end of June.",
+      "reply": "Got it. We can help you find a house that's ready for you to move into by the end of June. Is there anything else you'd like to know?",
+      "stt_ms": 1987,
+      "llm_first_token_ms": 757,
+      "llm_first_sentence_ms": 977,
+      "tts_first_audio_ms": 291,
+      "reply_start_ms": 3456,
+      "tts_rtf_first_sentence": 1.818,
+      "llm_rate_before_tts": 13.6,
+      "llm_rate_during_tts": 6.5,
+      "prompt_tokens": 1069,
+      "completion_tokens": 35,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 639,
+        "audible_count": 6,
+        "longest_ms": 122
+       },
+       "between_sentences": {
+        "total_ms": 1825,
+        "audible_count": 1,
+        "longest_ms": 1825
+       }
+      }
+     },
+     {
+      "wav": "s3_5",
+      "transcript": "Could one of your specialists call me back tomorrow morning?",
+      "reply": "Sure, we can arrange that. Could you please confirm the day and time you'd like to speak with a specialist?",
+      "stt_ms": 1745,
+      "llm_first_token_ms": 650,
+      "llm_first_sentence_ms": 1270,
+      "tts_first_audio_ms": 259,
+      "reply_start_ms": 3474,
+      "tts_rtf_first_sentence": 0.871,
+      "llm_rate_before_tts": 11.3,
+      "llm_rate_during_tts": 8.8,
+      "prompt_tokens": 1124,
+      "completion_tokens": 25,
+      "stalls": {
+       "inside_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       },
+       "between_sentences": {
+        "total_ms": 0,
+        "audible_count": 0,
+        "longest_ms": 0
+       }
+      }
+     }
+    ]
+   }
+  },
+  "pocket_tts_alone_12_words": {
+   "llm-1-tts1-stt4": {
+    "first_audio_ms_median_per_round": [
+     230,
+     181
+    ],
+    "rtf_median_per_round": [
+     0.611,
+     0.586
+    ]
+   },
+   "llm4-tts2-stt4": {
+    "first_audio_ms_median_per_round": [
+     155,
+     161
+    ],
+    "rtf_median_per_round": [
+     0.56,
+     0.534
+    ]
+   },
+   "llm4-tts1-stt4": {
+    "first_audio_ms_median_per_round": [
+     182,
+     179
+    ],
+    "rtf_median_per_round": [
+     0.565,
+     0.561
+    ]
+   },
+   "llm5-tts1-stt4": {
+    "first_audio_ms_median_per_round": [
+     196,
+     168
+    ],
+    "rtf_median_per_round": [
+     0.644,
+     0.55
+    ]
+   },
+   "llm-1-tts2-stt4": {
+    "first_audio_ms_median_per_round": [
+     140
+    ],
+    "rtf_median_per_round": [
+     0.552
+    ]
+   },
+   "llm3-tts1-stt4": {
+    "first_audio_ms_median_per_round": [
+     173,
+     222
+    ],
+    "rtf_median_per_round": [
+     0.569,
+     0.693
+    ]
+   }
+  },
+  "excluded_runs": {
+   "llm-1-tts1-stt4:r3": "a scripted test call (voice-service run 7) started during the run",
+   "llm4-tts1-stt4:r3": "a model server was restarted by other work mid-run (Server disconnected); no data"
+  },
+  "conclusion": "LLM 4 / Pocket TTS 1 / Whisper 4 is best: reply start median 3022 ms (p90 3564) vs 3528 ms (p90 4974) with the old defaults; no audible stutter in 10 turns; an audible pause between sentences in 3 of 10 turns, at most 173 ms (old defaults: 9 of 10 turns, median 548 ms, up to 3.5 s). Pocket TTS with 2 threads stuttered in every turn; 5 or 6 LLM threads made the voice stutter or pause. Applied as compose defaults LOCAL_LLM_THREADS=4 (LLAMA_ARG_THREADS), LOCAL_TTS_THREADS=1 (POCKET_TTS_THREADS), LOCAL_STT_THREADS=4 (WHISPER__CPU_THREADS)."
+ },
+ "memory_pressure": {
+  "observation": "With the voice stack, the three model servers and the dev servers on 12 GB, Windows had 0.5-0.9 GB available and paged the WSL2 VM (Pages Input/sec 1,000-12,000 while the model generated; vmmemWSL private 5.5-5.7 GB, working set 3.6-4.0 GB). Generation fell to 0.3-1.0 tokens/s (llama-server eval 963-3,587 ms per token) and a scripted call during that time (run 4) answered after 12-37 s. Restarting local-llm (fresh memory) restored 9-14 tokens/s. Dropping the VM page cache (privileged container: sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory) raised Windows' available memory from 0.5 to 1.4-1.6 GB."
+ },
+ "task3_whisper_models": {
+  "wavs": "made by Pocket TTS (alba), 16 kHz, padded 0.8 s before and 0.7 s after; five of 2.5-3.0 s and two of 4.5-5.2 s of speech; 94 words, no digits",
+  "base_by_threads_first_pass_not_interleaved": {
+   "stt4:Systran/faster-whisper-base": {
+    "median_ms_by_length": {
+     "3s": 1819.5,
+     "5s": 3085.6
+    },
+    "word_error_rate": 0.0,
+    "runs": 5
+   },
+   "stt6:Systran/faster-whisper-base": {
+    "median_ms_by_length": {
+     "3s": 2433.6,
+     "5s": 2786.8
+    },
+    "word_error_rate": 0.0,
+    "runs": 5
+   },
+   "stt2:Systran/faster-whisper-base": {
+    "median_ms_by_length": {
+     "3s": 1362.9,
+     "5s": 1939.2
+    },
+    "word_error_rate": 0.0,
+    "runs": 5
+   }
+  },
+  "base_threads_4_second_pass": {
+   "t4:r1:Systran/faster-whisper-base": {
+    "median_ms_by_length": {
+     "3s": 1992.5,
+     "5s": 2485.7
+    },
+    "word_error_rate": 0.0,
+    "runs": 3
+   }
+  },
+  "english_only_models": "NOT MEASURED. Systran/faster-whisper-base.en and Systran/faster-whisper-tiny.en were downloaded, but after the benchmark unloaded a model with DELETE /api/ps/{model} the speech server stopped answering transcriptions (requests hung over 60 s, no model load in its log), and the run was stopped for lack of time.",
+  "conclusion": "base made 0 word errors in 94 words at 2, 4 and 6 threads. Thread timings were not interleaved and varied up to 2x between runs (median for 3 s clips: 2 threads 1.36 s, 4 threads 1.82-1.99 s, 6 threads 2.43 s): not clear evidence, so WHISPER__CPU_THREADS stays 4 and the preset STT model stays Systran/faster-whisper-base."
+ },
+ "estimate_per_reply": {
+  "benchmark_reply_start_ms_median": {
+   "before": 3528,
+   "after": 3022
+  },
+  "real_call_extra": "about 0.3-0.5 s more in a real call: the voice service plays only once 0.5 s of audio has arrived, plus its own work",
+  "expected_real_call": "about 3.4-3.6 s for a 3 s sentence with Whisper and Pocket TTS on this CPU after the first reply, from 5.6 s median in the browser calls. Not yet confirmed with a real call on the new settings."
+ }
+}
