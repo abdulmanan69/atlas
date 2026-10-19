@@ -31,6 +31,8 @@ through the transactional outbox for outbound webhooks.
 Each completed call writes one entry on the lead's timeline, updates
 `last_contacted_at`, and — when the person asked not to be contacted — sets
 `do_not_call` and revokes consent, which blocks every future call to that lead.
+Browser test calls are the exception (see below): they touch nothing outside their own
+record.
 
 ## Simulated vs live
 
@@ -56,10 +58,11 @@ Each completed call writes one entry on the lead's timeline, updates
    answers `202`, and queues `process_runtime_run`, which re-fetches the run from the
    voice service and applies it. If the queue is unavailable the event is processed
    inline within a bounded time.
-3. A reconciliation job runs every two minutes: live calls still open 90 s after they
-   started are re-fetched; calls still open after two hours with no result are closed
-   as `failed` / `no_result` (a later real result still replaces that). Simulated calls
-   whose completion job was lost are completed by the same job.
+3. A reconciliation job runs every two minutes: live and browser test calls still open
+   90 s after they started are re-fetched; live calls still open after two hours with no
+   result are closed as `failed` / `no_result`, test calls still open after 90 minutes
+   as `canceled` / `not_completed` (a later real result still replaces either).
+   Simulated calls whose completion job was lost are completed by the same job.
 
 ### Inbound calls
 
@@ -71,6 +74,33 @@ a lead (`first_name` "Inbound caller", `source` `inbound_call`, tag `inbound`, d
 pipeline stage) with a timeline entry. A withheld or unparseable number still produces
 the call record, just without a lead. Assigning phone numbers to agents happens in the
 telephony setup, not here.
+
+### Browser test calls
+
+"Start test call" on an agent (`POST /agents/{id}/test-session`) creates a call with
+`mode=test`, `direction=inbound` (the person calls in from the browser, which is also
+how the voice service records it), the published agent version, the lead whose details
+filled the variables (if one was picked), and state `in_progress`. The response carries
+its `call_id`. The id travels in the session context as `atlas_call_id`, so the result
+arrives exactly like a live call's: the completion webhook (which the voice service
+sends for browser sessions too) and the worker fill in the state, duration, transcript,
+recording and response times (`latency`, source `runtime`) within seconds of hanging up.
+
+* The browser reports the end with `POST /agents/{id}/test-calls/{call_id}/end`
+  (`{"connected": bool}`). A call that never connected (microphone blocked, network)
+  is closed at once as `canceled` / `not_connected`; a connected one is re-fetched
+  20 s later, which covers deployments where the webhook is not configured.
+  Without either signal, reconciliation finishes the call within about 2–4 minutes of
+  it ending, or closes it after 90 minutes. A real result always replaces a closure.
+* No side effects: no lead timeline entry, `last_contacted_at` and consent are left
+  alone (an opt-out said during a test does not mark the lead do-not-call), no
+  `call.started` / `call.completed` outbound webhook events, and the call is left out
+  of `GET /leads/{id}/calls`. Campaign statistics only count campaign calls, so test
+  calls never appear there.
+* Analytics: excluded from every figure of `GET /analytics/calls-overview`;
+  `mode_split.test` reports how many there were.
+* `GET /calls?mode=test` lists them; the web app labels them "Test" and notes on the
+  detail page that no phone call was made.
 
 ## Transcripts and recordings
 

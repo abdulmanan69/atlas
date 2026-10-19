@@ -236,6 +236,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/{agent_id}/test-calls/{call_id}/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Report that a browser test call ended (closes one that never connected) */
+        post: operations["end_test_call_api_v1_agents__agent_id__test_calls__call_id__end_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/{agent_id}/test-session": {
         parameters: {
             query?: never;
@@ -2043,7 +2060,7 @@ export interface components {
             qualified: number;
             /**
              * Response P50 Ms
-             * @description Median response time over every measured turn of this agent's real calls (simulated calls excluded); null when nothing was measured
+             * @description Median response time over every measured turn of this agent's real calls (simulated and browser test calls excluded); null when nothing was measured
              */
             response_p50_ms?: number | null;
         };
@@ -2838,7 +2855,10 @@ export interface components {
              */
             date: string;
         };
-        /** CallsOverview */
+        /**
+         * CallsOverview
+         * @description Figures over the calls in scope. Browser test calls are never in scope.
+         */
         CallsOverview: {
             /**
              * Answer Rate
@@ -2896,7 +2916,7 @@ export interface components {
             range_days: number;
             /**
              * Response P50 Ms
-             * @description Median time from the person finishing speaking to the agent starting to speak, over every measured turn of real calls in scope (simulated calls never count); null when nothing was measured
+             * @description Median time from the person finishing speaking to the agent starting to speak, over every measured turn of real calls in scope (simulated and browser test calls never count); null when nothing was measured
              */
             response_p50_ms?: number | null;
             /**
@@ -4316,7 +4336,7 @@ export interface components {
             simulated: number;
             /**
              * Test
-             * @description Browser test calls from the agent editor
+             * @description Browser test calls from the agent editor in the range. Reported for reference only: they are excluded from every other figure in this overview
              */
             test: number;
         };
@@ -5144,8 +5164,22 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** TestCallEnd */
+        TestCallEnd: {
+            /**
+             * Connected
+             * @description Whether the browser ever had a live audio connection to the agent. False closes the call at once as canceled; true fetches the result shortly
+             */
+            connected: boolean;
+        };
         /** TestSession */
         TestSession: {
+            /**
+             * Call Id
+             * Format: uuid
+             * @description The call record for this browser test call (mode test). It gets the transcript and response times once the conversation ends: GET /calls/{id}
+             */
+            call_id: string;
             /** Expires In Seconds */
             expires_in_seconds: number;
             /** Ice Servers */
@@ -6499,6 +6533,69 @@ export interface operations {
             };
         };
     };
+    end_test_call_api_v1_agents__agent_id__test_calls__call_id__end_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+                call_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestCallEnd"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallOut"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     test_session_api_v1_agents__agent_id__test_session_post: {
         parameters: {
             query?: never;
@@ -7503,6 +7600,7 @@ export interface operations {
                 range_days?: number;
                 agent_id?: string | null;
                 campaign_id?: string | null;
+                /** @description Only calls of this mode. Test calls never count, so mode=test leaves every figure empty except mode_split.test */
                 mode?: components["schemas"]["CallMode"] | null;
             };
             header?: never;

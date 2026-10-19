@@ -23,7 +23,7 @@ import {
   type StateUpdatedEvent,
 } from "ag-grid-community";
 import { AgGridReact, type CustomCellRendererProps } from "ag-grid-react";
-import { ArrowDownLeft, ArrowUpRight, ChevronDown, Loader2 } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, ChevronDown, Loader2, Mic } from "lucide-react";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 
@@ -34,7 +34,7 @@ import { Badge, Skeleton } from "@/components/ui/primitives";
 import {
   BLOCK_SIZE,
   createCallsDatasource,
-  DIRECTION_LABEL,
+  directionLabel,
   MODE_BADGE,
   OPTIONAL_COLUMNS,
   outcomeLabel,
@@ -74,6 +74,7 @@ function WhenCell({ data }: CellProps) {
 
 function LeadCell({ data }: CellProps) {
   if (!data) return null;
+  const test = data.mode === "test";
   const phone = data.direction === "inbound" ? data.from_phone_e164 : data.to_phone_e164;
   const name = data.lead_name ?? null;
   return (
@@ -83,9 +84,13 @@ function LeadCell({ data }: CellProps) {
           {name ?? phone ?? "Lead"}
         </Link>
       ) : (
-        <span className="truncate font-semibold text-muted">{name ?? "Unknown caller"}</span>
+        <span className="truncate font-semibold text-muted">{name ?? (test ? "Browser test call" : "Unknown caller")}</span>
       )}
-      <span className="truncate font-mono text-[12px] text-muted">{phone ?? "—"}</span>
+      {test ? (
+        <span className="truncate text-[12px] text-muted">{data.lead_id ? "Variables only, not contacted" : "Sample variables"}</span>
+      ) : (
+        <span className="truncate font-mono text-[12px] text-muted">{phone ?? "—"}</span>
+      )}
     </div>
   );
 }
@@ -104,11 +109,11 @@ function AgentCell({ data, names }: CellProps & { names?: Map<string, string> })
 
 function DirectionCell({ data }: CellProps) {
   if (!data) return null;
-  const Icon = data.direction === "inbound" ? ArrowDownLeft : ArrowUpRight;
+  const Icon = data.mode === "test" ? Mic : data.direction === "inbound" ? ArrowDownLeft : ArrowUpRight;
   return (
     <span className="inline-flex items-center gap-1.5 text-[12.5px] text-ink-2">
       <Icon className="size-3.5 text-muted" aria-hidden />
-      {DIRECTION_LABEL[data.direction]}
+      {directionLabel(data)}
     </span>
   );
 }

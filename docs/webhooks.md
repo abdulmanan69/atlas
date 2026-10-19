@@ -81,7 +81,7 @@ with an API key if you need them.
 | `lead.created` | `lead_id`, `first_name`, `last_name`, `company`, `stage`, `stage_id`, `owner_user_id`, `source`, `tags`, `qualification_status`, `do_not_call` |
 | `lead.updated` | the fields above plus `changed_fields` (list of names) |
 | `lead.stage_changed` | `lead_id`, `from_stage`, `to_stage`, `from_stage_id`, `to_stage_id` |
-| `call.started`, `call.completed` | call identifiers, lead id, outcome and captured fields |
+| `call.started`, `call.completed` | call identifiers, lead id, `mode` (`live` or `simulated`), outcome and captured fields. Browser test calls from the agent editor are never sent |
 | `campaign.started`, `campaign.completed` | campaign identifiers and counts |
 | `ping` | sent by the **test** action: `endpoint_id`, `message` |
 

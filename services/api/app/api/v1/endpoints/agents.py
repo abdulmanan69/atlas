@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query, status
 
 from app.api.v1.deps import DB, AgentsManage, AgentsRead
 from app.models.voice import Agent
+from app.schemas.calls import CallOut
 from app.schemas.common import ERROR_RESPONSES
 from app.schemas.voice import (
     AgentConfigSave,
@@ -20,10 +21,12 @@ from app.schemas.voice import (
     CompiledPrompt,
     FlowValidation,
     PublishRequest,
+    TestCallEnd,
     TestSession,
     TestSessionRequest,
 )
 from app.services import agents as service
+from app.services import calls as call_service
 
 router = APIRouter(prefix="/agents", tags=["Agents"], responses=ERROR_RESPONSES)
 
@@ -194,3 +197,17 @@ async def test_session(
     agent_id: uuid.UUID, data: TestSessionRequest, ctx: AgentsManage, db: DB
 ) -> TestSession:
     return await service.test_session(db, ctx, agent_id, data.lead_id)
+
+
+@router.post(
+    "/{agent_id}/test-calls/{call_id}/end",
+    response_model=CallOut,
+    summary="Report that a browser test call ended (closes one that never connected)",
+)
+async def end_test_call(
+    agent_id: uuid.UUID, call_id: uuid.UUID, data: TestCallEnd, ctx: AgentsManage, db: DB
+) -> CallOut:
+    call = await call_service.end_test_call(
+        db, ctx, agent_id=agent_id, call_id=call_id, connected=data.connected
+    )
+    return CallOut.model_validate(call)

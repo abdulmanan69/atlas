@@ -88,3 +88,44 @@ Paths are relative to `vendor/voice-runtime/api/`.
   credentials, then reads the object with a bare client and proxies it; storage URLs
   never reach tenants. Recording upload can be disabled runtime-side
   (`constants.py:131-133`), in which case `recording_url` stays empty.
+
+## Browser test calls (2026-10-19)
+
+Test calls from the agent editor are recorded as calls with `mode=test`, so a person
+trying an agent sees the transcript and the per-turn response times under Calls.
+
+**Verified runtime facts** (paths relative to `vendor/voice-runtime/api/`):
+
+* `POST /public/embed/init` creates the run immediately, with `call_type=inbound` and an
+  initial context of the sanitized `context_variables` plus `provider` and
+  `direction="inbound"` (`routes/public_embed.py:367-404`). `atlas_call_id` is not a
+  reserved key (`services/workflow/initial_context.py:10-21`), so it survives.
+* The session expires one hour after init (`routes/public_embed.py:427`); a call lasts
+  at most 1200 s (`schemas/workflow_configurations.py:23`).
+* Browser voice sessions run through `run_pipeline_smallwebrtc`
+  (`routes/webrtc_signaling.py:708`), whose end-of-call handler is the same as for phone
+  calls: it saves `logs.realtime_feedback_events`, sets `is_completed=True`
+  (`services/pipecat/event_handlers.py:550`) and queues the completion job (`:612`),
+  which executes the workflow's webhook nodes (`tasks/run_integrations.py:230, 305`).
+  **The completion webhook therefore fires for browser test calls too.**
+* The pipeline starts only when the browser sends its offer. A session that never
+  connects leaves a run that is never completed.
+
+**Decision.**
+
+1. `test_session` creates the call (`direction=inbound`: the person calls in, as the
+   runtime records it) before it starts the session and passes its id as
+   `atlas_call_id`, so the webhook path of this ADR finds and completes it. If the
+   session cannot start, the request's transaction rolls back and no record remains.
+2. The browser reports the end (`POST /agents/{id}/test-calls/{call_id}/end`). Never
+   connected: closed at once as `canceled` / `not_connected`. Connected: the run is
+   re-fetched after 20 s, a fallback for deployments without the webhook credential.
+   Reconciliation re-checks open test calls like live ones (after 90 s, every two
+   minutes) and closes one still open after 90 minutes (session lifetime + longest call
+   + margin) as `canceled` / `not_completed`. A late real result replaces any closure.
+3. Test calls have no effect outside their own record: no lead timeline entry, no
+   `last_contacted_at`, no opt-out/do-not-call change, no outbound webhook events
+   (skipping is safer than labelling, since subscribers may act on `call.completed`
+   without checking the mode), excluded from `GET /leads/{id}/calls` and from every
+   analytics figure (only `mode_split.test` counts them). Campaign statistics and
+   limits only count calls that carry the campaign's id, which test calls never do.

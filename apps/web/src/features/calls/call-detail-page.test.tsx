@@ -133,6 +133,26 @@ describe("CallDetailPage", () => {
     expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
   });
 
+  it("marks a browser test call as not a real phone call", async () => {
+    stubApi({ mode: "test", direction: "inbound", lead_id: null, lead_name: null, to_phone_e164: null, outcome: null });
+    renderPage();
+    expect(await screen.findByRole("heading", { name: "Browser test call" })).toBeInTheDocument();
+    const note = screen.getByRole("note");
+    expect(note).toHaveTextContent("Browser test call — not a real phone call.");
+    expect(note).not.toHaveTextContent("the lead was not contacted");
+    expect(screen.getByText("Test")).toBeInTheDocument();
+    expect(screen.getByText("Browser")).toBeInTheDocument();
+    expect(screen.queryByText("Simulated")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Open lead/ })).not.toBeInTheDocument();
+  });
+
+  it("says the lead only filled the variables of a test call", async () => {
+    stubApi({ mode: "test", direction: "inbound", to_phone_e164: null });
+    renderPage();
+    expect(await screen.findByRole("heading", { name: "Hina Khan" })).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent("The lead's details filled the variables; the lead was not contacted.");
+  });
+
   it("shows a not-found state for an unknown call", async () => {
     stubApi();
     renderPage("missing");

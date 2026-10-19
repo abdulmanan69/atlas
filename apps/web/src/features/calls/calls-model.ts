@@ -41,10 +41,19 @@ export const MODE_BADGE: Record<CallMode, { label: string; tone: Tone; descripti
     tone: "neutral",
     description: "A dry run: no phone call was placed. The outcome and transcript are synthetic and clearly labelled.",
   },
-  test: { label: "Test", tone: "accent", description: "A browser test call from the agent editor." },
+  test: {
+    label: "Test",
+    tone: "accent",
+    description: "A browser test call from the agent editor: no phone call was placed and no lead was contacted. Never counted in reports.",
+  },
 };
 
 export const DIRECTION_LABEL: Record<CallDirection, string> = { outbound: "Outbound", inbound: "Inbound" };
+
+/** "Browser" for a test call (the tester talked through the microphone), otherwise the direction. */
+export function directionLabel(call: Pick<Call, "mode" | "direction">): string {
+  return call.mode === "test" ? "Browser" : DIRECTION_LABEL[call.direction];
+}
 
 const OUTCOME_TONES: Record<string, Tone> = {
   qualified: "success",
@@ -72,7 +81,7 @@ export function outcomeLabel(outcome: string | null | undefined): string {
 
 /* URL state */
 
-export type ModeChoice = "all" | "live" | "simulated";
+export type ModeChoice = "all" | CallMode;
 
 export interface CallsUrlState {
   from: string | null;
@@ -88,6 +97,7 @@ export interface CallsUrlState {
 
 const isState = (v: string | null): v is CallState => v !== null && (CALL_STATES as string[]).includes(v);
 const isDirection = (v: string | null): v is CallDirection => v === "outbound" || v === "inbound";
+const isMode = (v: string | null): v is CallMode => v === "live" || v === "simulated" || v === "test";
 const isIso = (v: string | null): v is string => v !== null && !Number.isNaN(new Date(v).getTime());
 
 export function readCallsUrl(params: URLSearchParams): CallsUrlState {
@@ -104,7 +114,7 @@ export function readCallsUrl(params: URLSearchParams): CallsUrlState {
     lead: params.get("lead") || null,
     state: isState(state) ? state : null,
     outcome: params.get("outcome") || null,
-    mode: mode === "live" || mode === "simulated" ? mode : "all",
+    mode: isMode(mode) ? mode : "all",
     direction: isDirection(direction) ? direction : null,
   };
 }

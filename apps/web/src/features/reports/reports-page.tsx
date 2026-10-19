@@ -288,35 +288,38 @@ const RESPONSE_TONE = { good: "text-success", warn: "text-warn", bad: "text-dang
 
 function ModeCard({ data }: { data: CallsOverview | undefined }) {
   const split = data?.mode_split;
-  const total = split ? split.live + split.simulated + split.test : 0;
-  const rows: { key: keyof NonNullable<typeof split>; bar: string }[] = [
+  // Browser test calls are never part of the report; they are only mentioned below.
+  const total = split ? split.live + split.simulated : 0;
+  const rows: { key: "live" | "simulated"; bar: string }[] = [
     { key: "live", bar: "bg-success" },
     { key: "simulated", bar: "bg-line-strong" },
-    { key: "test", bar: "bg-accent" },
   ];
   return (
     <Card>
       <CardHeader title="Live vs simulated" description="All calls in the range, by mode" />
       <ul className="flex flex-col gap-3 px-4 py-4">
         {split
-          ? rows
-              .filter((r) => r.key !== "test" || split.test > 0)
-              .map((r) => (
-                <li key={r.key}>
-                  <div className="flex items-baseline justify-between text-[12.5px]">
-                    <span className="flex items-center gap-2">
-                      <Badge tone={MODE_BADGE[r.key].tone}>{MODE_BADGE[r.key].label}</Badge>
-                      <span className="text-[12px] text-muted">{formatPercent(rate(split[r.key], total))}</span>
-                    </span>
-                    <span className="font-mono text-ink-2">{formatNumber(split[r.key])}</span>
-                  </div>
-                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-surface-2">
-                    <div className={cn("h-full rounded-full", r.bar)} style={{ width: `${total ? (split[r.key] / total) * 100 : 0}%` }} />
-                  </div>
-                </li>
-              ))
+          ? rows.map((r) => (
+              <li key={r.key}>
+                <div className="flex items-baseline justify-between text-[12.5px]">
+                  <span className="flex items-center gap-2">
+                    <Badge tone={MODE_BADGE[r.key].tone}>{MODE_BADGE[r.key].label}</Badge>
+                    <span className="text-[12px] text-muted">{formatPercent(rate(split[r.key], total))}</span>
+                  </span>
+                  <span className="font-mono text-ink-2">{formatNumber(split[r.key])}</span>
+                </div>
+                <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-surface-2">
+                  <div className={cn("h-full rounded-full", r.bar)} style={{ width: `${total ? (split[r.key] / total) * 100 : 0}%` }} />
+                </div>
+              </li>
+            ))
           : Array.from({ length: 2 }, (_, i) => <Skeleton key={i} className="h-7" />)}
         {split ? <li className="text-[12px] text-muted">{MODE_BADGE.simulated.description}</li> : null}
+        {split && split.test > 0 ? (
+          <li className="text-[12px] text-muted">
+            {formatNumber(split.test)} browser test {split.test === 1 ? "call" : "calls"} from the agent editor {split.test === 1 ? "is" : "are"} left out of every figure on this page.
+          </li>
+        ) : null}
       </ul>
     </Card>
   );

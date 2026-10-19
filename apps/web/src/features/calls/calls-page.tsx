@@ -62,7 +62,7 @@ export default function CallsPage() {
     <>
       <PageHeader
         title="Calls"
-        description="Every conversation your agents had or tried to have, newest first."
+        description="Every conversation your agents had or tried to have, newest first, including browser test calls."
         actions={
           canCall ? (
             <Button variant="primary" onClick={() => setCalling(true)}>
@@ -141,6 +141,7 @@ export default function CallsPage() {
               { value: "all", label: "All" },
               { value: "live", label: "Live" },
               { value: "simulated", label: "Simulated" },
+              { value: "test", label: "Test" },
             ]}
           />
           {url.lead ? (

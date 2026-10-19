@@ -38,7 +38,10 @@ def _call(org: uuid.UUID, **fields: Any) -> Call:
 
 
 async def _seed(org_id: str) -> dict[str, str]:
-    """Two agents, one campaign and nine calls covering every state, outcome and mode."""
+    """Two agents, one campaign and ten calls covering every state, outcome and mode.
+
+    The browser test call would move every figure if it were counted; it must not be.
+    """
     org = uuid.UUID(org_id)
     now = datetime.now(UTC)
     async with get_sessionmaker()() as db, db.begin():
@@ -100,7 +103,19 @@ async def _seed(org_id: str) -> dict[str, str]:
                 # Setter, ad hoc calls.
                 _call(org, agent_id=b, state=CallState.BUSY),
                 _call(org, agent_id=b, state=CallState.QUEUED),
-                _call(org, agent_id=b, mode=CallMode.TEST, state=CallState.FAILED),
+                _call(org, agent_id=b, state=CallState.FAILED),
+                # Browser test call: excluded from every figure (only the mode split).
+                _call(
+                    org,
+                    agent_id=b,
+                    direction=CallDirection.INBOUND,
+                    mode=CallMode.TEST,
+                    state=CallState.COMPLETED,
+                    outcome="qualified",
+                    duration_seconds=500,
+                    estimated_cost=9,
+                    opted_out=True,
+                ),
                 # Inbound call from an unknown number: no agent, no campaign.
                 _call(
                     org,
@@ -169,7 +184,7 @@ async def test_metrics_over_a_mixed_history(client: httpx.AsyncClient, owner: Ac
     assert o["total_duration_seconds"] == 180
     assert o["estimated_cost"] == 0.6
     assert o["opted_out"] == 1
-    assert o["mode_split"] == {"live": 2, "simulated": 5, "test": 1}
+    assert o["mode_split"] == {"live": 2, "simulated": 6, "test": 1}
 
     assert len(o["daily"]) == 30
     assert sum(d["attempted"] for d in o["daily"]) == 7

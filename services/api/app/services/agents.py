@@ -46,6 +46,7 @@ from app.schemas.voice import (
 )
 from app.services import actions as action_service
 from app.services import audit, llm_warmup
+from app.services import calls as call_service
 from app.services import knowledge as knowledge_service
 from app.services import leads as lead_service
 from app.services.flows import compose_prompt, validate_flow
@@ -770,18 +771,22 @@ async def test_session(
         raise InvalidStateTransitionError("Archived agents cannot be tested")
     if not agent.runtime_workflow_id or agent.published_version is None:
         raise InvalidStateTransitionError("Publish the agent before starting a test call")
-    variables = (
-        lead_variables(await lead_service.get_lead(db, ctx, lead_id))
-        if lead_id
-        else dict(SAMPLE_VARIABLES)
-    )
+    lead = await lead_service.get_lead(db, ctx, lead_id) if lead_id else None
+    variables = lead_variables(lead) if lead is not None else dict(SAMPLE_VARIABLES)
     origin = settings.web_app_origin.rstrip("/")
     domain = urlparse(origin).netloc
-    context = {**variables, "atlas_call_id": "", "atlas_test": "true"}
+    # Recorded under Calls (mode "test") with transcript and response times. The id
+    # rides in the session context so the completion webhook finds the record; if the
+    # session cannot start, the request rolls back and the record is never committed.
+    call = await call_service.create_test_call(
+        db, ctx, agent, lead_id=lead.id if lead is not None else None
+    )
+    context = {**variables, "atlas_call_id": str(call.id), "atlas_test": "true"}
     async with runtime_client(db, ctx.org_id) as client:
         token = await client.ensure_embed_token(agent.runtime_workflow_id, [domain])
         session = await client.start_embed_session(token, origin=origin, context=context)
         ice = await client.turn_servers(session.session_token)
+    call_service.mark_test_call_started(db, call, session.workflow_run_id)
     # Self-hosted models only: read the prompt while the browser connects (background).
     llm_warmup.schedule_published_warmup(ctx.org_id, agent.id, agent.published_version, context)
     public = urlparse(settings.voice_runtime_public_url)
@@ -794,7 +799,7 @@ async def test_session(
         actor_user_id=ctx.user_id,
         resource_type="agent",
         resource_id=agent.id,
-        changes={"lead_id": str(lead_id) if lead_id else None},
+        changes={"lead_id": str(lead_id) if lead_id else None, "call_id": str(call.id)},
         ip=ctx.meta.ip,
         user_agent=ctx.meta.user_agent,
     )
@@ -807,6 +812,7 @@ async def test_session(
         ice_servers=servers,
         expires_in_seconds=TEST_SESSION_SECONDS,
         variables=variables,
+        call_id=call.id,
     )
 
 

@@ -3,6 +3,7 @@ import { waitFor } from "@testing-library/react";
 import {
   blockToQuery,
   createCallsDatasource,
+  directionLabel,
   filtersActive,
   flattenUsage,
   outcomeLabel,
@@ -58,6 +59,17 @@ describe("URL state → API filters", () => {
     expect(filtersActive(u)).toBe(false);
     expect(filtersActive({ ...u, mode: "live" })).toBe(true);
     expect(filtersActive({ ...u, lead: "l1" })).toBe(true);
+  });
+
+  it("filters browser test calls and labels them by where they came from", () => {
+    const u = readCallsUrl(new URLSearchParams({ mode: "test" }));
+    expect(u.mode).toBe("test");
+    expect(urlToFilters(u)).toEqual({ mode: "test" });
+    expect(filtersActive(u)).toBe(true);
+    expect(readCallsUrl(new URLSearchParams({ mode: "loud" })).mode).toBe("all");
+    expect(directionLabel({ mode: "test", direction: "inbound" })).toBe("Browser");
+    expect(directionLabel({ mode: "live", direction: "inbound" })).toBe("Inbound");
+    expect(directionLabel({ mode: "simulated", direction: "outbound" })).toBe("Outbound");
   });
 
   it("builds local-day preset ranges", () => {

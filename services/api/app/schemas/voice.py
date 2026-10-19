@@ -576,3 +576,18 @@ class TestSession(APIModel):
     ice_servers: list[IceServer]
     expires_in_seconds: int
     variables: dict[str, str]
+    call_id: uuid.UUID = Field(
+        description=(
+            "The call record for this browser test call (mode test). It gets the "
+            "transcript and response times once the conversation ends: GET /calls/{id}"
+        )
+    )
+
+
+class TestCallEnd(APIModel):
+    connected: bool = Field(
+        description=(
+            "Whether the browser ever had a live audio connection to the agent. False "
+            "closes the call at once as canceled; true fetches the result shortly"
+        )
+    )

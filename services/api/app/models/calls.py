@@ -36,13 +36,16 @@ __all__ = ["Call", "CallDirection", "CallEvent", "CallMode", "CallState"]
 
 class CallDirection(StrEnum):
     OUTBOUND = "outbound"
-    INBOUND = "inbound"
+    INBOUND = "inbound"  # also browser test calls: the person calls in to the agent
 
 
 class CallMode(StrEnum):
     LIVE = "live"
     SIMULATED = "simulated"  # dry runs: no phone call is placed, outcome is synthetic
-    TEST = "test"  # browser test call from the agent editor
+    # Browser test call from the agent editor: real conversation with the published
+    # agent over the microphone, no phone call. Never counted in analytics, campaign
+    # stats or lead history, and never sent to outbound webhooks.
+    TEST = "test"
 
 
 class CallState(StrEnum):

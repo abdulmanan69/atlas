@@ -1,11 +1,12 @@
-import { useMutation } from "@tanstack/react-query";
-import { Mic, MicOff, Phone, PhoneOff } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { ExternalLink, Mic, MicOff, Phone, PhoneOff } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
+import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { Card, CardHeader, Label } from "@/components/ui/primitives";
-import { useLeads } from "@/features/queries";
+import { qk, useLeads, useOrgId } from "@/features/queries";
 import { api, errorMessage, unwrap } from "@/lib/api";
 import { fullName } from "@/lib/format";
 import { BrowserCall, type CallState } from "@/lib/webrtc";
@@ -61,6 +62,14 @@ const STATE_TEXT: Record<CallState, string> = {
   failed: "The call could not continue.",
 };
 
+/**
+ * Tells the API how a test call ended so its record under Calls is closed or synced.
+ * Fire-and-forget: the record is completed by the voice service's report anyway.
+ */
+function reportEnd(agentId: string, callId: string, connected: boolean): Promise<unknown> {
+  return api.POST("/api/v1/agents/{agent_id}/test-calls/{call_id}/end", { params: { path: { agent_id: agentId, call_id: callId } }, body: { connected } }).catch(() => undefined);
+}
+
 export function TestCallPanel({ agentId, published }: { agentId: string; published: boolean }) {
   const [state, setState] = useState<CallState>("idle");
   const [detail, setDetail] = useState<string | null>(null);
@@ -73,6 +82,10 @@ export function TestCallPanel({ agentId, published }: { agentId: string; publish
   const [now, setNow] = useState(Date.now());
   const call = useRef<BrowserCall | null>(null);
   const audio = useRef<HTMLAudioElement>(null);
+  // The test call's record under Calls; reported once when the browser call ends.
+  const [callId, setCallId] = useState<string | null>(null);
+  const qc = useQueryClient();
+  const orgId = useOrgId();
   const leads = useLeads({ page_size: 50, sort: "-updated_at" });
   const micLevel = useLevel(state === "live" && !muted ? local : null);
   const agentLevel = useLevel(state === "live" ? remote : null);
@@ -89,14 +102,31 @@ export function TestCallPanel({ agentId, published }: { agentId: string; publish
 
   const start = useMutation({
     mutationFn: () => unwrap(api.POST("/api/v1/agents/{agent_id}/test-session", { params: { path: { agent_id: agentId } }, body: { lead_id: leadId || null } })),
+    onMutate: () => setCallId(null),
     onSuccess: (session) => {
       setDetail(null);
       setMuted(false);
+      setStarted(null);
+      setCallId(session.call_id);
+      const refreshCalls = () => {
+        void qc.invalidateQueries({ queryKey: ["org", orgId, "calls"] });
+        void qc.invalidateQueries({ queryKey: qk.call(orgId, session.call_id) });
+      };
+      refreshCalls();
+      let connected = false;
+      let reported = false;
       call.current = new BrowserCall(session, {
         onState: (s, d) => {
           setState(s);
           if (d) setDetail(d);
-          if (s === "live") setStarted(Date.now());
+          if (s === "live") {
+            connected = true;
+            setStarted(Date.now());
+          }
+          if ((s === "ended" || s === "failed") && !reported) {
+            reported = true;
+            void reportEnd(agentId, session.call_id, connected).then(refreshCalls);
+          }
         },
         onLocalStream: setLocal,
         onRemoteStream: setRemote,
@@ -178,6 +208,26 @@ export function TestCallPanel({ agentId, published }: { agentId: string; publish
             </Button>
           )}
         </div>
+        {callId && state !== "idle" ? (
+          <div className="flex flex-col gap-0.5">
+            <Link
+              to={`/calls/${callId}`}
+              // While the call runs, open the record beside it: leaving this page would end the call.
+              {...(active ? { target: "_blank", rel: "noreferrer" } : {})}
+              className="inline-flex items-center gap-1.5 self-start text-[12.5px] font-medium text-accent hover:underline"
+            >
+              <ExternalLink className="size-3.5" aria-hidden /> View call details
+              {active ? <span className="sr-only"> (opens in a new tab)</span> : null}
+            </Link>
+            <p className="text-[12px] text-muted">
+              {active
+                ? "Recorded under Calls as a test call."
+                : started !== null
+                  ? "The transcript and response times appear there a few seconds after the call ends."
+                  : "It never connected, so there is no conversation to review."}
+            </p>
+          </div>
+        ) : null}
         {!published ? <p className="text-[12px] text-muted">Publish the agent first. Test calls always use the published version.</p> : null}
         <audio ref={audio} autoPlay hidden />
       </div>

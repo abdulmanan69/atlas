@@ -4,6 +4,10 @@ This module is the single place that decides whether a real call may be placed.
 Other services (campaigns, agents) call `start_outbound_call`; the runtime webhook
 and reconciliation call `apply_runtime_result`. It also owns the tenant-facing read
 side: history, detail, events, transcripts and recordings.
+
+Browser test calls (mode `test`, ADR 0003) share the result path with live calls but
+have no side effects outside their own record: no lead timeline entry, no
+last-contacted or opt-out changes, no outbound webhook events.
 """
 
 from __future__ import annotations
@@ -51,6 +55,13 @@ MAX_TRANSCRIPT_BYTES = 2 * 1024 * 1024
 STALE_AFTER = timedelta(seconds=90)
 GIVE_UP_AFTER = timedelta(hours=2)
 SIMULATED_STUCK_AFTER = timedelta(minutes=2)
+# A browser test session can be joined for 60 minutes and a call lasts at most 20
+# (the runtime's max_call_duration cap), so a test call still open after this never
+# connected or lost its result; it is closed as canceled.
+TEST_GIVE_UP_AFTER = timedelta(minutes=90)
+# After the browser reports a connected test call ended, its run is re-fetched once
+# after this delay (a fallback for deployments where the completion webhook is off).
+TEST_SYNC_DELAY_SECONDS = 20
 RECONCILE_BATCH = 200
 _RECONCILE_LOCK_KEY = 0x41544C43  # one reconciliation pass at a time across workers
 
@@ -143,6 +154,17 @@ def _event_data(call: Call) -> dict[str, Any]:
     }
 
 
+async def _emit(db: AsyncSession, call: Call, event_type: str, data: dict[str, Any]) -> None:
+    """Queue an outbound webhook event about a call.
+
+    Browser test calls are never sent: a subscriber that updates its own CRM on
+    `call.completed` must not mistake a microphone test for contact with a person.
+    """
+    if call.mode == CallMode.TEST:
+        return
+    await events.emit(db, call.organization_id, event_type, data)
+
+
 def _completed_data(call: Call) -> dict[str, Any]:
     return {
         **_event_data(call),
@@ -164,7 +186,15 @@ async def _fail(db: AsyncSession, call: Call, code: str, message: str) -> None:
         return
     lead = await db.get(Lead, call.lead_id) if call.lead_id else None
     await _record_on_lead(db, call, lead, actor=ActorType.SYSTEM)
-    await events.emit(db, call.organization_id, "call.completed", _completed_data(call))
+    await _emit(db, call, "call.completed", _completed_data(call))
+
+
+def _close_test_call(db: AsyncSession, call: Call, code: str, message: str) -> None:
+    """Close a browser test call that produced no result. A late real result still wins."""
+    call.error_code = code
+    call.error_message = message[:500]
+    call.ended_at = call.ended_at or datetime.now(UTC)
+    _set_state(db, call, CallState.CANCELED, reason=code)
 
 
 # ------------------------------------------------------------------ placing calls
@@ -239,7 +269,7 @@ async def start_outbound_call(db: AsyncSession, req: CallRequest, *, live: bool)
     call.runtime_run_id = str(triggered.workflow_run_id)
     call.started_at = datetime.now(UTC)
     _set_state(db, call, CallState.DIALING)
-    await events.emit(db, req.organization_id, "call.started", _event_data(call))
+    await _emit(db, call, "call.started", _event_data(call))
     # Self-hosted models only: read the agent's prompt while the phone rings (background).
     llm_warmup.schedule_published_warmup(
         req.organization_id, req.agent.id, req.agent.published_version, context
@@ -307,6 +337,98 @@ async def schedule_simulated_completion(
         return False
 
 
+# ------------------------------------------------------------------ browser test calls
+
+
+async def create_test_call(
+    db: AsyncSession, ctx: TenantContext, agent: Agent, *, lead_id: uuid.UUID | None
+) -> Call:
+    """Record a browser test call before its session starts.
+
+    The call id travels in the session's context as `atlas_call_id`, so the runtime's
+    completion webhook finds this record. If starting the session fails, the request's
+    transaction rolls back and the record goes with it. A lead, when given, only fills
+    the prompt's variables: it is linked for reference and never contacted.
+    """
+    call = Call(
+        organization_id=ctx.org_id,
+        lead_id=lead_id,
+        agent_id=agent.id,
+        agent_version=agent.published_version,
+        direction=CallDirection.INBOUND,  # the person calls in, from the browser
+        mode=CallMode.TEST,
+        state=CallState.QUEUED,
+        initiated_by_user_id=ctx.user_id,
+        runtime_workflow_id=agent.runtime_workflow_id,
+    )
+    db.add(call)
+    await db.flush()
+    _event(
+        db,
+        call,
+        "created",
+        {
+            "direction": call.direction.value,
+            "mode": call.mode.value,
+            "lead_id": str(lead_id) if lead_id else None,
+        },
+    )
+    return call
+
+
+def mark_test_call_started(db: AsyncSession, call: Call, runtime_run_id: int) -> None:
+    """The browser session exists: the call is in progress until its result arrives."""
+    call.runtime_run_id = str(runtime_run_id)
+    call.started_at = datetime.now(UTC)
+    _set_state(db, call, CallState.IN_PROGRESS, reason="test_session")
+
+
+async def end_test_call(
+    db: AsyncSession,
+    ctx: TenantContext,
+    *,
+    agent_id: uuid.UUID,
+    call_id: uuid.UUID,
+    connected: bool,
+) -> Call:
+    """The browser reports that a test call ended.
+
+    Never connected: closed at once as canceled (`not_connected`), since no result
+    will ever come. Connected: the run is re-fetched shortly, in case the completion
+    webhook is not configured. Either way a real result that arrives later replaces
+    whatever is on record. Idempotent; a finished call is returned unchanged.
+    """
+    call = (
+        await db.execute(
+            _scoped(ctx.org_id).where(
+                Call.id == call_id, Call.agent_id == agent_id, Call.mode == CallMode.TEST
+            )
+        )
+    ).scalar_one_or_none()
+    if call is None:
+        raise NotFoundError("Test call not found")
+    if call.state in TERMINAL_STATES:
+        return call
+    if not connected:
+        _close_test_call(db, call, "not_connected", "The browser never connected to the agent")
+    elif call.runtime_run_id and call.runtime_workflow_id:
+        try:
+            await jobs.enqueue(
+                "process_runtime_run",
+                str(call.organization_id),
+                str(call.id),
+                call.runtime_workflow_id,
+                call.runtime_run_id,
+                job_id=f"test-call-ended:{call.id}",
+                defer_by=TEST_SYNC_DELAY_SECONDS,
+            )
+        except jobs.QueueUnavailableError:
+            log.warning("test_call_sync_not_scheduled", extra={"call_id": str(call.id)})
+    await db.flush()
+    await db.refresh(call)
+    return call
+
+
 # ------------------------------------------------------------------ results
 
 
@@ -343,11 +465,8 @@ async def complete_simulated_call(db: AsyncSession, call_id: uuid.UUID) -> Call 
         else None
     )
     call.result_synced_at = now
-    await events.emit(
-        db,
-        call.organization_id,
-        "call.started",
-        {**_event_data(call), "state": CallState.IN_PROGRESS.value},
+    await _emit(
+        db, call, "call.started", {**_event_data(call), "state": CallState.IN_PROGRESS.value}
     )
     _set_state(
         db,
@@ -367,7 +486,7 @@ async def complete_simulated_call(db: AsyncSession, call_id: uuid.UUID) -> Call 
         },
     )
     await _record_on_lead(db, call, lead, actor=ActorType.SYSTEM)
-    await events.emit(db, call.organization_id, "call.completed", _completed_data(call))
+    await _emit(db, call, "call.completed", _completed_data(call))
     return call
 
 
@@ -415,7 +534,7 @@ async def apply_runtime_result(
         if call.state in (CallState.QUEUED, CallState.DIALING):
             call.started_at = call.started_at or now
             _set_state(db, call, CallState.IN_PROGRESS, reason=source)
-            await events.emit(db, call.organization_id, "call.started", _event_data(call))
+            await _emit(db, call, "call.started", _event_data(call))
         return call
 
     duration = usage.get("call_duration_seconds") or cost.get("call_duration_seconds")
@@ -470,15 +589,19 @@ async def apply_runtime_result(
     )
     lead = await db.get(Lead, call.lead_id) if call.lead_id else None
     await _record_on_lead(db, call, lead, actor=actor)
-    await events.emit(db, call.organization_id, "call.completed", _completed_data(call))
+    await _emit(db, call, "call.completed", _completed_data(call))
     return call
 
 
 async def _record_on_lead(
     db: AsyncSession, call: Call, lead: Lead | None, *, actor: ActorType
 ) -> None:
-    """Timeline entry, last-contacted, and the opt-out guarantee."""
-    if lead is None:
+    """Timeline entry, last-contacted, and the opt-out guarantee.
+
+    Not for browser test calls: the lead only supplied the variables and was never
+    contacted, so its history, last-contacted time and consent stay untouched.
+    """
+    if lead is None or call.mode == CallMode.TEST:
         return
     if call.state == CallState.COMPLETED:
         lead.last_contacted_at = call.ended_at
@@ -541,7 +664,8 @@ async def process_runtime_run(
     """Fetch a run from the runtime (the authoritative source) and apply it to its call.
 
     Inbound calls the platform has not seen yet get a call record (and a lead) here.
-    Returns None when the run is not a call ATLAS tracks (e.g. a browser test session).
+    Returns None when the run is not a call ATLAS tracks (e.g. a browser test session
+    whose record is missing; test calls are normally found by their own ids).
     """
     async with runtime_client(db, organization_id) as client:
         run = await client.get_run(workflow_id, run_id)
@@ -572,7 +696,9 @@ async def _call_for_unknown_run(
 ) -> Call | None:
     initial = run.initial_context or {}
     if str(initial.get("atlas_test", "")).lower() == "true":
-        return None  # browser test session from the agent editor: not a call record
+        # A browser test session without a record of its own (started before test calls
+        # were recorded): never turned into a call, and never into an inbound one.
+        return None
     # Verified: inbound telephony stamps direction="inbound" on initial_context and
     # call_type on the run (routes/telephony.py, `_create_inbound_workflow_run`).
     if run.call_type != "inbound" and initial.get("direction") != "inbound":
@@ -646,7 +772,7 @@ async def ensure_inbound_call(
         _event(db, call, "lead_matched", {"lead_id": str(lead.id), "created": created})
     else:
         _event(db, call, "lead_unmatched", {"reason": "caller number unavailable or invalid"})
-    await events.emit(db, organization_id, "call.started", _event_data(call))
+    await _emit(db, call, "call.started", _event_data(call))
     return call
 
 
@@ -722,10 +848,12 @@ async def sync_from_runtime(
 async def reconcile_open_calls(db: AsyncSession, *, now: datetime | None = None) -> dict[str, int]:
     """Catch up calls whose completion never reached us (lost webhook, runtime outage).
 
-    Live calls open longer than STALE_AFTER are re-fetched; those still open after
-    GIVE_UP_AFTER with no result are closed as failed (`no_result`). Simulated calls
-    whose completion job was lost are completed here. Runs inside one transaction with
-    a per-call savepoint, so one bad record cannot block the rest.
+    Live and browser test calls open longer than STALE_AFTER are re-fetched. Live calls
+    still open after GIVE_UP_AFTER with no result are closed as failed (`no_result`);
+    test calls still open after TEST_GIVE_UP_AFTER are closed as canceled
+    (`not_completed`), as they most likely never connected. Simulated calls whose
+    completion job was lost are completed here. Runs inside one transaction with a
+    per-call savepoint, so one bad record cannot block the rest.
     """
     now = now or datetime.now(UTC)
     counts = {
@@ -746,7 +874,7 @@ async def reconcile_open_calls(db: AsyncSession, *, now: datetime | None = None)
             await db.execute(
                 select(Call)
                 .where(
-                    Call.mode == CallMode.LIVE,
+                    Call.mode.in_((CallMode.LIVE, CallMode.TEST)),
                     Call.state.in_((CallState.DIALING, CallState.IN_PROGRESS)),
                     func.coalesce(Call.started_at, Call.created_at) < now - STALE_AFTER,
                 )
@@ -777,7 +905,17 @@ async def reconcile_open_calls(db: AsyncSession, *, now: datetime | None = None)
                             "call_reconcile_rejected",
                             extra={"call_id": str(call.id), "status": exc.runtime_status},
                         )
-                if call.state not in TERMINAL_STATES and opened_at < now - GIVE_UP_AFTER:
+                if call.state in TERMINAL_STATES:
+                    pass
+                elif call.mode == CallMode.TEST:
+                    if opened_at < now - TEST_GIVE_UP_AFTER:
+                        _close_test_call(
+                            db,
+                            call,
+                            "not_completed",
+                            "The test call ended without a result; it may never have connected",
+                        )
+                elif opened_at < now - GIVE_UP_AFTER:
                     await _fail(
                         db,
                         call,
@@ -877,7 +1015,11 @@ async def list_lead_calls(
     )
     if not exists:
         raise NotFoundError("Lead not found")
-    return await list_calls(db, ctx, CallFilters(lead_id=lead_id), page, page_size)
+    # Browser test calls only borrowed the lead's details; the lead was never contacted.
+    base = _apply_filters(_scoped(ctx.org_id), CallFilters(lead_id=lead_id)).where(
+        Call.mode != CallMode.TEST
+    )
+    return await page_scalars(db, base.order_by(Call.created_at.desc(), Call.id), page, page_size)
 
 
 async def get_call(db: AsyncSession, ctx: TenantContext, call_id: uuid.UUID) -> Call:

@@ -1,4 +1,8 @@
-"""CRM and call analytics from persisted data. Every metric is defined in its field description."""
+"""CRM and call analytics from persisted data. Every metric is defined in its field description.
+
+Browser test calls (mode test) never count in any call figure; `mode_split.test` only
+reports how many there were.
+"""
 
 from __future__ import annotations
 
@@ -205,7 +209,7 @@ class AgentCallStats(APIModel):
         default=None,
         description=(
             "Median response time over every measured turn of this agent's real calls "
-            "(simulated calls excluded); null when nothing was measured"
+            "(simulated and browser test calls excluded); null when nothing was measured"
         ),
     )
 
@@ -221,10 +225,17 @@ class CampaignCallStats(APIModel):
 class ModeSplit(APIModel):
     live: int = Field(description="Real phone calls")
     simulated: int = Field(description="Dry runs: nothing left the platform")
-    test: int = Field(description="Browser test calls from the agent editor")
+    test: int = Field(
+        description=(
+            "Browser test calls from the agent editor in the range. Reported for reference "
+            "only: they are excluded from every other figure in this overview"
+        )
+    )
 
 
 class CallsOverview(APIModel):
+    """Figures over the calls in scope. Browser test calls are never in scope."""
+
     range_days: int
     totals: CallTotals
     answer_rate: float | None = Field(
@@ -256,8 +267,8 @@ class CallsOverview(APIModel):
         default=None,
         description=(
             "Median time from the person finishing speaking to the agent starting to speak, "
-            "over every measured turn of real calls in scope (simulated calls never count); "
-            "null when nothing was measured"
+            "over every measured turn of real calls in scope (simulated and browser test calls "
+            "never count); null when nothing was measured"
         ),
     )
     response_p95_ms: int | None = Field(
@@ -317,7 +328,15 @@ async def calls_overview(
     range_days: Annotated[int, Query(ge=1, le=365)] = 30,
     agent_id: uuid.UUID | None = None,
     campaign_id: uuid.UUID | None = None,
-    mode: CallMode | None = None,
+    mode: Annotated[
+        CallMode | None,
+        Query(
+            description=(
+                "Only calls of this mode. Test calls never count, so mode=test leaves every "
+                "figure empty except mode_split.test"
+            )
+        ),
+    ] = None,
 ) -> CallsOverview:
     org = ctx.org_id
     now = datetime.now(UTC)
@@ -329,7 +348,12 @@ async def calls_overview(
         conditions.append(Call.campaign_id == campaign_id)
     if mode is not None:
         conditions.append(Call.mode == mode)
-    scope = and_(*conditions)
+    # A browser test call is someone trying an agent out, not a call to a person: it
+    # stays out of every KPI. Only the mode split reports how many there were.
+    test_calls = int(
+        await db.scalar(select(func.count()).where(*conditions, Call.mode == CallMode.TEST)) or 0
+    )
+    scope = and_(*conditions, Call.mode != CallMode.TEST)
     terminal = Call.state.in_(TERMINAL_STATES)
     answered = Call.state == CallState.COMPLETED
     qualified = and_(answered, Call.outcome == "qualified")
@@ -352,7 +376,6 @@ async def calls_overview(
                 func.count().filter(Call.opted_out.is_(True)),
                 func.count().filter(Call.mode == CallMode.LIVE),
                 func.count().filter(Call.mode == CallMode.SIMULATED),
-                func.count().filter(Call.mode == CallMode.TEST),
             ).where(scope)
         )
     ).one()
@@ -372,7 +395,6 @@ async def calls_overview(
         n_opted_out,
         n_live,
         n_simulated,
-        n_test,
     ) = totals
 
     tz = ZoneInfo(ctx.organization.timezone)
@@ -506,7 +528,7 @@ async def calls_overview(
             )
             for cid, name, att, ans, q in campaign_rows
         ],
-        mode_split=ModeSplit(live=int(n_live), simulated=int(n_simulated), test=int(n_test)),
+        mode_split=ModeSplit(live=int(n_live), simulated=int(n_simulated), test=test_calls),
         response_p50_ms=_ms(latency_row[0]),
         response_p95_ms=_ms(latency_row[1]),
         measured_calls=measured_calls,

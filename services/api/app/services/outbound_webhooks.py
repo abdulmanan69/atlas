@@ -49,8 +49,10 @@ EVENT_CATALOG: dict[str, str] = {
     "lead.created": "A lead was created (manually, by import, or through the API).",
     "lead.updated": "Lead fields changed. `data.changed_fields` lists which.",
     "lead.stage_changed": "A lead moved to another pipeline stage.",
-    "call.started": "An AI agent call started.",
-    "call.completed": "A call ended; includes outcome and captured fields.",
+    "call.started": "An AI agent call started. Browser test calls are not sent.",
+    "call.completed": (
+        "A call ended; includes outcome and captured fields. Browser test calls are not sent."
+    ),
     "campaign.started": "A campaign started dialing.",
     "campaign.completed": "A campaign finished all its leads.",
     WILDCARD_EVENT: "Every event type, including ones added later.",
