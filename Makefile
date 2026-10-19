@@ -2,10 +2,16 @@
 API := services/api
 WEB := apps/web
 
-.PHONY: help infra local-ai-up local-tts-up local-stt-up local-ai-models local-ai-warm local-ai-bench local-ai-down voice-up voice-down voice-logs up down dev-api dev-web worker migrate migration seed test lint format typecheck check build
+.PHONY: help demo demo-stop infra local-ai-up local-tts-up local-stt-up local-ai-models local-ai-warm local-ai-bench local-ai-down e2e-call voice-up voice-down voice-logs up down dev-api dev-web worker migrate migration seed test lint format typecheck check build
 
 help:
 	@grep -E '^[a-z-]+:' Makefile | cut -d: -f1 | tr '\n' ' '; echo
+
+demo:             ## One command: set up and start the self-hosted demo (docs/university-demo.md)
+	bash infra/scripts/setup_local_demo.sh $(ARGS)
+
+demo-stop:        ## Stop what `make demo` started (processes and containers)
+	bash infra/scripts/setup_local_demo.sh --stop
 
 infra:            ## Start postgres + redis
 	docker compose up -d postgres redis
@@ -33,6 +39,9 @@ local-ai-bench:   ## Measure local STT/TTS/LLM latency (needs about 3.5 GB free 
 
 local-ai-down:    ## Stop the self-hosted model containers (frees their RAM)
 	docker compose --profile local-ai stop local-llm local-speech local-tts local-stt
+
+e2e-call:         ## Scripted test call through the whole voice stack (docs/testing-voice.md); ARGS="--runs 2"
+	python3 infra/scripts/e2e_test_call.py $(ARGS)
 
 voice-down:
 	docker compose --profile voice stop voice-runtime voice-storage voice-db

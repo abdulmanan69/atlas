@@ -48,6 +48,7 @@ uv run uvicorn app.main:app --reload --port 8080
 * API docs: <http://localhost:8080/docs> (Swagger) · <http://localhost:8080/redoc>
 * Health: <http://localhost:8080/api/v1/health/ready>
 * Worker: `uv run arq app.workers.main.WorkerSettings`
+* Self-hosted voice demo on another PC, fully offline, in one command (`.\make.ps1 demo`): [docs/university-demo.md](docs/university-demo.md)
 
 Web app (second terminal):
 
