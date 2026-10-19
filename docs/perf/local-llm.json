@@ -1,0 +1,48 @@
+{
+  "meta": {
+    "machine": "Intel64 Family 6 Model 158 Stepping 10, GenuineIntel",
+    "cpus": 6,
+    "date": "2026-10-19",
+    "runs": 3,
+    "stt_source": "skipped",
+    "tts_sentence": "Thanks for calling, I can help book an appointment for tomorrow morning."
+  },
+  "results": [
+    {
+      "kind": "llm",
+      "target": "Ollama",
+      "model": "qwen2.5:1.5b",
+      "status": "ok",
+      "error": null,
+      "runs": 3,
+      "metrics": {
+        "ttft_ms": 78.14589998451993,
+        "total_ms": 4803.590599971358,
+        "tokens": 47.0,
+        "tokens_per_s": 10.132379341258734
+      },
+      "samples": {
+        "ttft_ms": [
+          70.1874999795109,
+          108.6553999921307,
+          78.14589998451993
+        ],
+        "total_ms": [
+          5202.249599969946,
+          3061.9570999988355,
+          4803.590599971358
+        ],
+        "tokens": [
+          53.0,
+          42.0,
+          47.0
+        ],
+        "tokens_per_s": [
+          10.132379341258734,
+          13.882767209292203,
+          9.734533556202262
+        ]
+      }
+    }
+  ]
+}

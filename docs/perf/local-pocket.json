@@ -1,0 +1,48 @@
+{
+  "meta": {
+    "machine": "Intel64 Family 6 Model 158 Stepping 10, GenuineIntel",
+    "cpus": 6,
+    "date": "2026-10-19",
+    "runs": 3,
+    "stt_source": "skipped",
+    "tts_sentence": "Thanks for calling, I can help book an appointment for tomorrow morning."
+  },
+  "results": [
+    {
+      "kind": "tts",
+      "target": "Pocket TTS",
+      "model": "pocket-tts",
+      "status": "ok",
+      "error": null,
+      "runs": 3,
+      "metrics": {
+        "ttfb_ms": 241.66870000772178,
+        "total_ms": 2490.9027999965474,
+        "audio_s": 3.44,
+        "rtf": 0.7240996511617871
+      },
+      "samples": {
+        "ttfb_ms": [
+          164.14000000804663,
+          312.52199999289587,
+          241.66870000772178
+        ],
+        "total_ms": [
+          1937.305799976457,
+          2490.9027999965474,
+          2557.629899994936
+        ],
+        "audio_s": [
+          3.44,
+          3.44,
+          3.36
+        ],
+        "rtf": [
+          0.5631702906908305,
+          0.7240996511617871,
+          0.7611993749984929
+        ]
+      }
+    }
+  ]
+}

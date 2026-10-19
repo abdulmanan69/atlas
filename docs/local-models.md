@@ -54,11 +54,51 @@ publicly. On the host they listen only on `127.0.0.1` (ports 11434, 8001 and 800
 
 ## How fast is it
 
-**Not measured yet.** The benchmark needs about 3.5 GB of free RAM to run the model
-containers next to the development servers. The development machine (Intel i5-8500T,
-6 cores, 12 GB RAM, no GPU) had 0.7–1.6 GB free when this page was written, so nothing was
-started and there are no numbers here. This page will only show numbers measured on real
-hardware.
+Measured on the development machine on 2026-10-19: Intel i5-8500T (6 cores, 2018), 12 GB
+RAM, no GPU, one model container running at a time, median of 3 runs after a warm-up. Raw
+results are in `docs/perf/local-*.json`.
+
+| Stage | Model | Measured | Memory used |
+|---|---|---|---|
+| Speech-to-text | `Systran/faster-whisper-base` (int8) | **2.0 s** to transcribe 5 s of speech (0.40× real time) | shared with Kokoro, under 1.75 GB |
+| Voice | Kokoro `speaches-ai/Kokoro-82M-v1.0-ONNX` | **1,826 ms** to first audio, 1,831 ms total for 3.9 s of audio | (same container) |
+| Voice | **Pocket TTS** (`pocket-tts`, voice `alba`) | **212 ms** to first audio, 2,203 ms total for 3.4 s of audio | 1.1 GB |
+| Language model, later turns | `qwen2.5:1.5b`, 714-token agent prompt already cached | **~300 ms** to first token (276–336 ms), 14.5 tokens/s | 2.2 GB |
+| Language model, first reply of a call | same, prompt not yet cached | **~6.1 s** to first token (5.8–6.4 s) | (same) |
+
+What this means for one reply on this CPU, after the caller stops talking:
+
+| Part | With Pocket TTS | With Kokoro |
+|---|---|---|
+| Speech-to-text, for a 5 s sentence | 2.0 s | 2.0 s |
+| Language model to its first sentence (≈10 tokens), later turns | 1.0 s | 1.0 s |
+| Voice to first audio | 0.2 s | 1.8 s |
+| **Reply starts after** | **≈ 3.2 s** | **≈ 4.8 s** |
+
+Three findings:
+
+- **Pocket TTS is about 8.6× faster to first audio than Kokoro here** (212 vs 1,826 ms).
+  Kokoro on this server sends a short sentence only once it is fully generated; Pocket TTS
+  streams frame by frame. Use Pocket TTS for English agents.
+- **The first reply of every call is slow (~6 s) on CPU.** The language model has to read
+  the whole agent prompt once; afterwards it is cached and each turn only reads the new
+  words (~0.3 s). The greeting is spoken before the first model reply, which hides part of
+  this. Keep prompts short (the flow editor's token meter warns above 1,500 tokens), and
+  see "Warming the prompt" below.
+- **Speech-to-text is now the largest delay.** Self-hosted Whisper waits for the caller to
+  finish and then transcribes everything (0.4× real time). Hosted streaming speech-to-text
+  transcribes while the caller is still talking, which is why hosted stacks answer in
+  under a second.
+
+A faster CPU, a GPU or hosted speech-to-text changes these numbers a lot; re-run the
+benchmark on the machine you deploy to.
+
+### Warming the prompt (not built yet)
+
+Ollama keeps the last prompt it read in memory. Sending the agent's system prompt to the
+model while the phone is ringing would make the first reply as fast as later ones
+(~0.3 s instead of ~6 s on this CPU). ATLAS does not do this yet; it is the next
+self-hosted latency improvement worth building.
 
 To measure on your machine:
 
@@ -101,8 +141,8 @@ Both run on CPU, stream audio, and answer the same OpenAI-style speech request.
 | Code license | Apache 2.0 (speech server: MIT) | MIT |
 | Languages | English and several others, by voice | English, French, German, Portuguese, Italian, Spanish, Dutch (one language per server) |
 | Voices | Built-in voice packs (`af_heart` …) | 27 built-in voices; ATLAS allows only those licensed for commercial use (below) |
-| Streaming | Yes, in phrase-sized chunks | Yes, frame by frame (12.5 frames per second) |
-| Vendor-stated speed | — | ~200 ms to first audio, ~6× real time on a MacBook Air M4, uses 2 CPU cores (not measured by ATLAS) |
+| Streaming | Phrase-sized chunks; a short sentence arrives in one piece (measured: first audio ≈ total) | Yes, frame by frame (12.5 frames per second) |
+| Measured here (i5-8500T) | 1,826 ms to first audio | 212 ms to first audio (Kyutai states ~200 ms on a MacBook Air M4) |
 | Memory limit in compose | shared 1.75 GB with Whisper | 1.5 GB |
 
 **Which to pick:** Kokoro is the default because it is already in the speech server and
@@ -207,7 +247,7 @@ calls can use `Systran/faster-whisper-base.en`.
 
 | Where the models run | What callers notice |
 |---|---|
-| This kind of CPU (4–8 cores, no GPU) | Fine for building and testing agents. Expect pauses of a second or more before replies; too slow for production calls. Measure with the benchmark. |
+| This kind of CPU (4–8 cores, no GPU) | Fine for building and testing agents. Measured here: replies start about 3.2 s after the caller stops (Pocket TTS), about 6 s for the first reply of a call. Too slow for production calls. |
 | A GPU server (for example one 24 GB GPU running an 8B model, Whisper and a voice) | Production-grade replies with fully self-hosted data. |
 | Hosted providers with streaming speech-to-text and end-of-turn detection | Usually the fastest replies; audio leaves your network. |
 
