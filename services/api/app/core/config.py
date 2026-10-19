@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     voice_runtime_callback_url: str = "http://host.docker.internal:8080"
     voice_runtime_timeout_seconds: float = 20.0
     voice_runtime_tenant_email_domain: str = "tenants.atlas.internal"
+    # Shared secret for the voice service's platform-wide metrics endpoint (pipeline
+    # health panel, ADR 0006). Must equal the runtime's devops secret; empty = panel off.
+    voice_runtime_metrics_secret: SecretStr = SecretStr("")
     # Keep the runtime's vendor-hosted trial models. Off: call data only goes to
     # providers a tenant configures explicitly.
     voice_allow_hosted_trial_models: bool = False

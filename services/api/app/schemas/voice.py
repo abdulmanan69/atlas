@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
@@ -280,6 +281,16 @@ class FlowIssue(APIModel):
     id: str = Field(description="Node or path id; empty for flow-level issues")
     field: str | None = None
     message: str
+    code: str | None = Field(
+        default=None,
+        description="Machine-readable kind for some issues, e.g. prompt_long, global_rules_long",
+    )
+    estimated_tokens: int | None = Field(
+        default=None, description="prompt_long / global_rules_long: estimated prompt tokens"
+    )
+    budget: int | None = Field(
+        default=None, description="prompt_long / global_rules_long: the token budget exceeded"
+    )
 
 
 class FlowValidation(APIModel):
@@ -319,7 +330,54 @@ class AmbientSettings(APIModel):
     volume: float = Field(default=0.3, ge=0, le=1)
 
 
+ResponseSpeed = Literal["snappy", "balanced", "patient", "custom"]
+_TURN_FIELDS = (
+    "turn_start",
+    "turn_start_min_words",
+    "turn_stop",
+    "smart_turn_stop_seconds",
+    "idle_timeout_seconds",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SpeedPreset:
+    """Turn-taking values one response-speed preset compiles to (ADR 0006)."""
+
+    turn_start: Literal["default", "min_words"]
+    turn_start_min_words: int
+    turn_stop: Literal["transcription", "turn_analyzer"]
+    smart_turn_stop_seconds: float
+    idle_timeout_seconds: int
+
+
+RESPONSE_SPEED_PRESETS: dict[str, SpeedPreset] = {
+    "snappy": SpeedPreset("min_words", 1, "transcription", 0.8, 8),
+    "balanced": SpeedPreset("min_words", 2, "transcription", 1.5, 10),
+    "patient": SpeedPreset("default", 2, "turn_analyzer", 2.5, 15),
+}
+
+
 class CallSettings(APIModel):
+    response_speed: ResponseSpeed = Field(
+        default="balanced",
+        description=(
+            "How quickly the agent takes its turn. Presets set the turn-taking fields below; "
+            "'custom' uses them as given. Settings saved before presets existed (turn fields "
+            "present, no response_speed) are read as 'custom'."
+        ),
+    )
+    context_compaction: bool = Field(
+        default=True,
+        description="Summarise older conversation so long calls keep answering quickly",
+    )
+    tts_cache: bool = Field(
+        default=False,
+        description=(
+            "Reuse synthesised audio for repeated phrases. Only takes effect with a "
+            "text-to-speech provider that supports it (see the latency guide)"
+        ),
+    )
     max_call_seconds: int = Field(default=300, ge=30, le=1200)
     idle_timeout_seconds: int = Field(
         default=10, ge=3, le=60, description="Hang up after this long without the person talking"
@@ -335,6 +393,27 @@ class CallSettings(APIModel):
     )
     voicemail: VoicemailSettings = Field(default_factory=VoicemailSettings)
     ambient: AmbientSettings = Field(default_factory=AmbientSettings)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_is_custom(cls, value: Any) -> Any:
+        if (
+            isinstance(value, dict)
+            and "response_speed" not in value
+            and any(f in value for f in _TURN_FIELDS)
+        ):
+            return {**value, "response_speed": "custom"}
+        return value
+
+    @model_validator(mode="after")
+    def _apply_preset(self) -> CallSettings:
+        preset = RESPONSE_SPEED_PRESETS.get(self.response_speed)
+        if preset is not None:
+            # Assign through __dict__: validate_assignment is off and this keeps the
+            # stored fields equal to what is compiled, so the UI shows the effect.
+            for name in _TURN_FIELDS:
+                self.__dict__[name] = getattr(preset, name)
+        return self
 
     @field_validator("key_terms")
     @classmethod

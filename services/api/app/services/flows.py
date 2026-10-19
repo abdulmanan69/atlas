@@ -7,6 +7,7 @@ or path it belongs to and the field to fix, so the editor can jump straight to i
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from collections.abc import Mapping
 
@@ -23,19 +24,75 @@ from app.schemas.voice import (
     path_function_name,
 )
 
+# Prompt budgets (ADR 0006): every token of the system prompt is re-read by the model on
+# every turn, so long prompts slow each reply. Estimated at ~4 characters per token.
+PROMPT_TOKEN_BUDGET = 1500
+GLOBAL_RULES_TOKEN_BUDGET = 800
+CHARS_PER_TOKEN = 4
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token count for English-like text (about four characters per token)."""
+    stripped = text.strip()
+    return math.ceil(len(stripped) / CHARS_PER_TOKEN) if stripped else 0
+
 
 def _issue(target: IssueTarget, id_: str, field: str | None, message: str) -> FlowIssue:
     return FlowIssue(target=target, id=id_, field=field, message=message)
 
 
+def _budget_warnings(flow: FlowDefinition, global_rules: str | None) -> list[FlowIssue]:
+    out: list[FlowIssue] = []
+    for n in flow.nodes:
+        tokens = estimate_tokens(n.prompt)
+        if tokens > PROMPT_TOKEN_BUDGET:
+            out.append(
+                FlowIssue(
+                    target="node",
+                    id=n.id,
+                    field="prompt",
+                    code="prompt_long",
+                    estimated_tokens=tokens,
+                    budget=PROMPT_TOKEN_BUDGET,
+                    message=(
+                        f"Long prompt (about {tokens} tokens, budget {PROMPT_TOKEN_BUDGET}): "
+                        "the agent re-reads it every turn, which slows replies. Move "
+                        "reference material into a knowledge document."
+                    ),
+                )
+            )
+    rules_tokens = estimate_tokens(global_rules or "")
+    if rules_tokens > GLOBAL_RULES_TOKEN_BUDGET:
+        out.append(
+            FlowIssue(
+                target="flow",
+                id="",
+                field="global_rules",
+                code="global_rules_long",
+                estimated_tokens=rules_tokens,
+                budget=GLOBAL_RULES_TOKEN_BUDGET,
+                message=(
+                    f"Long global rules (about {rules_tokens} tokens, budget "
+                    f"{GLOBAL_RULES_TOKEN_BUDGET}): they are added to every step's prompt, "
+                    "so each reply takes longer. Keep only rules that apply everywhere."
+                ),
+            )
+        )
+    return out
+
+
 def validate_flow(
-    flow: FlowDefinition, action_function_names: Mapping[str, str] | None = None
+    flow: FlowDefinition,
+    action_function_names: Mapping[str, str] | None = None,
+    *,
+    global_rules: str | None = None,
 ) -> FlowValidation:
     """Check a flow against the rules a publishable conversation must satisfy.
 
     `action_function_names` maps an action id to the function name the model calls for
     it, so a path cannot shadow an action attached to the same node (the runtime rejects
-    that collision too; checking here gives the author the ATLAS ids).
+    that collision too; checking here gives the author the ATLAS ids). Prompt-budget
+    warnings (`prompt_long`, `global_rules_long`) never block publishing.
     """
     errors: list[FlowIssue] = []
     warnings: list[FlowIssue] = []
@@ -160,6 +217,7 @@ def validate_flow(
                 )
             )
 
+    warnings.extend(_budget_warnings(flow, global_rules))
     return FlowValidation(valid=not errors, errors=errors, warnings=warnings)
 
 

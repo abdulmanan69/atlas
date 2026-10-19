@@ -103,6 +103,9 @@ class WorkflowRun(_Payload):
     cost_info: dict[str, Any] | None = None
     initial_context: dict[str, Any] | None = None
     gathered_context: dict[str, Any] | None = None
+    # Saved at call end; includes `realtime_feedback_events`, the per-turn event stream
+    # (routes/workflow.py:1502, services/pipecat/event_handlers.py:524-528).
+    logs: dict[str, Any] | None = None
 
 
 class EmbedSession(_Payload):

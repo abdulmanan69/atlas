@@ -66,9 +66,9 @@ class Call(UUIDPrimaryKey, Timestamps, TenantScoped, Base):
     __table_args__ = (
         Index("ix_calls_org_created", "organization_id", "created_at"),
         Index("ix_calls_org_state", "organization_id", "state"),
-        Index("ix_calls_org_lead", "organization_id", "lead_id"),
+        Index("ix_calls_org_lead_created", "organization_id", "lead_id", "created_at"),
         Index("ix_calls_org_agent", "organization_id", "agent_id"),
-        Index("ix_calls_org_campaign", "organization_id", "campaign_id"),
+        Index("ix_calls_org_campaign_state", "organization_id", "campaign_id", "state"),
         Index(
             "uq_calls_runtime_run",
             "runtime_run_id",
@@ -112,6 +112,9 @@ class Call(UUIDPrimaryKey, Timestamps, TenantScoped, Base):
         JSONB, nullable=False, default=dict, server_default="{}"
     )
     estimated_cost: Mapped[float | None] = mapped_column(Numeric(10, 4))
+    # Per-turn response times parsed from the runtime's event log (ADR 0006):
+    # {"summary": {...}, "turns": [...]}; null when nothing was measured.
+    latency: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     error_code: Mapped[str | None] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(String(500))
     # Runtime mapping (internal)

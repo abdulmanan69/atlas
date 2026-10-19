@@ -189,6 +189,7 @@ async def test_metrics_over_a_mixed_history(client: httpx.AsyncClient, owner: Ac
             "answered": 3,
             "qualified": 1,
             "avg_duration_seconds": 60.0,
+            "response_p50_ms": None,
         },
         {
             "agent_id": ids["setter"],
@@ -197,6 +198,7 @@ async def test_metrics_over_a_mixed_history(client: httpx.AsyncClient, owner: Ac
             "answered": 0,
             "qualified": 0,
             "avg_duration_seconds": None,
+            "response_p50_ms": None,
         },
         {
             "agent_id": None,
@@ -205,6 +207,7 @@ async def test_metrics_over_a_mixed_history(client: httpx.AsyncClient, owner: Ac
             "answered": 0,
             "qualified": 0,
             "avg_duration_seconds": None,
+            "response_p50_ms": None,
         },
     ]
     assert o["by_campaign"] == [

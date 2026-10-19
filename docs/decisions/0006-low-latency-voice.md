@@ -1,6 +1,6 @@
 # ADR 0006 — Low-latency voice: measure every turn, then tune
 
-**Status:** accepted · 2026-10-19 · implementation in Milestone 6b (latency) — not started
+**Status:** accepted · 2026-10-19 · implemented (Milestone 6b)
 
 ## Context
 Callers judge an AI agent by how fast it answers. The runtime pipeline is
@@ -21,7 +21,7 @@ first (nothing is claimed that was not measured), then presets and guidance.
 | `rtf-ttfb-metric` payload: `ttfb_seconds, processor ("<Vendor>STTService#3" style), model, kind ("stt"\|"llm"\|"tts"; missing → "llm")`. Classify by suffix `...STTSERVICE/...TTSSERVICE/...LLMSERVICE`, never substring-first (every STT name contains "TTS"). | `realtime_feedback_events.py:110-131`, `observability/call_events/metrics.py:1-30` |
 | `rtf-function-call-start/end` payload: `function_name, tool_call_id, arguments?/result?`. Match by `tool_call_id`. `retrieve_from_knowledge_base` is the knowledge tool; ATLAS actions use their own names. | `realtime_feedback_events.py:69-108`, `tools/knowledge_base.py:349` |
 | Runtime's "response latency" = time from user silence until the bot starts speaking (`dograh_response_latency{kind="user_to_bot"}`); `rtf-latency-measured` carries the per-turn value. | `observability/pipeline_metrics.py:40-55`, `call_events/recorder.py:455-465` |
-| Per-workflow knobs (`workflow_configurations`): `turn_start_strategy default\|min_words` (+`turn_start_min_words`), `turn_stop_strategy transcription\|turn_analyzer` (+`smart_turn_stop_secs`), `max_user_idle_timeout`, `context_compaction_enabled` (default false), `tts_cache_enabled` (MiniMax TTS only), `transcript_configuration.include_end_timestamps`. VAD stop is fixed at 0.2 s. | `schemas/workflow_configurations.py:125-172`, `run_pipeline.py:181, 205-260, 701-704` |
+| Per-workflow knobs (`workflow_configurations`): `turn_start_strategy default\|min_words` (+`turn_start_min_words`), `turn_stop_strategy transcription\|turn_analyzer` (+`smart_turn_stop_secs`), `max_user_idle_timeout`, `context_compaction_enabled` (default false), `tts_cache_enabled` (no TTS provider uses it in v1.49: `service_factory.py:757`; ATLAS keeps the switch disabled), `transcript_configuration.include_end_timestamps`. VAD stop is fixed at 0.2 s. | `schemas/workflow_configurations.py:125-172`, `run_pipeline.py:181, 205-260, 701-704` |
 | STT services with built-in end-of-turn (Deepgram Flux, Cartesia turns, the vendor-managed STT) make `turn_stop_strategy: transcription` the fast path; otherwise `turn_analyzer` runs a local smart-turn model with `smart_turn_stop_secs`. | `service_factory.py:283-290`, `run_pipeline.py:247-256` |
 | LLM fallback on the model configuration: `llm_fallback: {version: 1, rules: [{condition: {type: "no_output", after_ms 100–10000} \| {type: "error"}, target: LLMConfig}]}` (≤ 2 rules). | `schemas/llm_fallback.py`, `schemas/ai_model_configuration.py:18` |
 | Prometheus at `GET /metrics` per runtime worker, enabled by `ENABLE_PROMETHEUS_METRICS=true`, guarded by header `X-Dograh-Devops-Secret` = env `DOGRAH_DEVOPS_SECRET` (503 when unset). Histograms `dograh_ai_latency{service,model,kind,conversation_type}` and `dograh_response_latency{kind="user_to_bot"}`, seconds, buckets to 60 s. **Process-wide, all tenants.** | `routes/main.py:155-262`, `observability/metrics.py:30-80`, `constants.py:78-80` |

@@ -67,11 +67,13 @@ Hosted providers first (configured through the runtime), then local inference
 (OpenAI-compatible LLM endpoint, Whisper STT, local TTS) with health checks and a setup
 guide sized for CPU-only hardware.
 
-## Milestone 6b — Low-latency voice ⬜ (next up)
+## Milestone 6b — Low-latency voice ✅
 Design done and verified against the runtime source: `docs/decisions/0006-low-latency-voice.md`
 (per-turn latency from run `logs.realtime_feedback_events`, response-speed presets, fast-stack
 guidance, pipeline health, prompt budget, local-model benchmark, platform speed). Four
-workstreams listed in the ADR; none started.
+workstreams delivered: per-call latency, speed presets, guide and pipeline health (API +
+web), Pocket TTS server and local benchmark (not yet measured: needs 3.5 GB free RAM),
+API indexes/gzip/Server-Timing and nav prefetch (`docs/perf/`).
 
 ## Milestone 7 — Analytics and integrations ✅
 - ✅ Tenant API keys (hashed, role-capped, rate-limited, audited) with `X-API-Key` auth

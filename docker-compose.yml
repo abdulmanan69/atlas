@@ -169,7 +169,10 @@ services:
       # ATLAS owns campaigns; the Asterisk bridge is only needed for SIP via ARI.
       ENABLE_ARI_MANAGER: "false"
       ENABLE_CAMPAIGN_ORCHESTRATOR: "false"
-      ENABLE_PROMETHEUS_METRICS: "false"
+      # Process-wide latency histograms for ATLAS's pipeline health panel (ADR 0006).
+      # /metrics answers 503 until ATLAS_VOICE_RUNTIME_METRICS_SECRET is set.
+      ENABLE_PROMETHEUS_METRICS: "true"
+      DOGRAH_DEVOPS_SECRET: ${ATLAS_VOICE_RUNTIME_METRICS_SECRET:-}
       FORWARDED_ALLOW_IPS: "*"
       OSS_JWT_SECRET: ${ATLAS_VOICE_RUNTIME_JWT_SECRET:?set ATLAS_VOICE_RUNTIME_JWT_SECRET in .env}
       # Enterprise default: no third-party product analytics leave the deployment.
@@ -195,17 +198,29 @@ services:
     restart: unless-stopped
 
   # ------------------------------------------------------------- local AI models
-  # Optional self-hosted models (CPU). Start with: make local-ai-up
+  # Optional self-hosted models (CPU). Start with: make local-ai-up (+ make local-tts-up)
   # In ATLAS add a "Self-hosted models" connection with base URL
   #   http://local-llm:11434/v1     (language model)
-  #   http://local-speech:8000/v1   (speech-to-text and voice)
+  #   http://local-speech:8000/v1   (speech-to-text and Kokoro voice)
+  #   http://local-tts:8000/v1      (Pocket TTS voice, optional)
+  # Every setting below is tuned for reply latency on CPU; see docs/local-models.md.
   local-llm:
     profiles: ["local-ai"]
     image: ollama/ollama:0.40.6
     environment:
-      OLLAMA_KEEP_ALIVE: "30m"
+      # Keep the model in memory: a cold load adds seconds to the first reply.
+      # Negative = never unload. Set LOCAL_LLM_KEEP_ALIVE=30m to free RAM when idle.
+      OLLAMA_KEEP_ALIVE: "${LOCAL_LLM_KEEP_ALIVE:--1}"
+      # One request at a time gets all CPU cores; parallel slots split them.
       OLLAMA_NUM_PARALLEL: "1"
       OLLAMA_MAX_LOADED_MODELS: "1"
+      # Phone prompts are short; a fixed 4k window bounds RAM (scales with NUM_PARALLEL).
+      OLLAMA_CONTEXT_LENGTH: "4096"
+      # CPU backend supports it (default is "auto"); forced on. Saves memory as context grows,
+      # little effect on speed at phone-call context sizes.
+      OLLAMA_FLASH_ATTENTION: "1"
+      # Local only: no remote inference or web search.
+      OLLAMA_NO_CLOUD: "1"
     ports:
       - "127.0.0.1:11434:11434"
     volumes:
@@ -220,10 +235,15 @@ services:
     profiles: ["local-ai"]
     image: ghcr.io/speaches-ai/speaches:0.8.3-cpu
     environment:
-      # Faster on CPU; small accuracy cost.
+      # int8 weights: faster on CPU, small accuracy cost.
       WHISPER__COMPUTE_TYPE: int8
-      STT_MODEL_TTL: "-1"
-      TTS_MODEL_TTL: "-1"
+      # Threads for Whisper; STT and the LLM run one after the other in a turn.
+      WHISPER__CPU_THREADS: "4"
+      # Never unload models (-1). In this version the Whisper TTL also applies to Kokoro.
+      WHISPER__TTL: "-1"
+      # No Gradio UI: less memory, faster start.
+      ENABLE_UI: "false"
+      LOG_LEVEL: info
     ports:
       - "127.0.0.1:8001:8000"
     volumes:
@@ -234,9 +254,30 @@ services:
           memory: 1792m
     restart: unless-stopped
 
+  # Kyutai Pocket TTS behind an OpenAI-compatible /v1/audio/speech (built locally from
+  # infra/docker/pocket-tts). Weights download on first start (about 0.3 GB) into the volume.
+  local-tts:
+    profiles: ["local-ai"]
+    build:
+      context: infra/docker/pocket-tts
+    image: atlas/local-tts:pocket-tts-3.3.0
+    environment:
+      POCKET_TTS_LANGUAGE: english
+      POCKET_TTS_DEFAULT_VOICE: alba
+    ports:
+      - "127.0.0.1:8002:8000"
+    volumes:
+      - local_tts_models:/home/app/.cache
+    deploy:
+      resources:
+        limits:
+          memory: 1536m
+    restart: unless-stopped
+
 volumes:
   local_llm_models:
   local_speech_models:
+  local_tts_models:
   pg_data:
   redis_data:
   voice_db_data:

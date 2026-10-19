@@ -16,6 +16,7 @@ from app.models.calls import Call, CallDirection, CallMode, CallState
 from app.models.crm import Lead
 from app.schemas.calls import CallDetail, CallEventOut, CallOut, CallStart, CallTranscript
 from app.schemas.common import ERROR_RESPONSES, Page
+from app.schemas.latency import CallLatencyDetail
 from app.services import calls as service
 
 router = APIRouter(tags=["Calls"], responses=ERROR_RESPONSES)
@@ -114,6 +115,18 @@ async def get_call(call_id: uuid.UUID, ctx: CallsRead, db: DB) -> CallDetail:
 )
 async def call_events(call_id: uuid.UUID, ctx: CallsRead, db: DB) -> list[CallEventOut]:
     return [CallEventOut.model_validate(e) for e in await service.list_events(db, ctx, call_id)]
+
+
+@router.get(
+    "/calls/{call_id}/latency",
+    response_model=CallLatencyDetail,
+    summary="Response times per turn (404 when the call was not measured)",
+)
+async def call_latency(call_id: uuid.UUID, ctx: CallsRead, db: DB) -> CallLatencyDetail:
+    stored = await service.get_latency(db, ctx, call_id)
+    return CallLatencyDetail.model_validate(
+        {"summary": stored["summary"], "turns": stored.get("turns") or []}
+    )
 
 
 @router.get(

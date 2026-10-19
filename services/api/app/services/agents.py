@@ -510,7 +510,7 @@ async def validate_config(
     """Local rules plus checks against attached actions and documents."""
     flow = effective_flow(config)
     names, documents = await _attached(db, ctx, flow)
-    result = validate_flow(flow, names)
+    result = validate_flow(flow, names, global_rules=config.global_rules)
     for n in flow.nodes:
         if any(a not in names for a in n.action_ids):
             result.errors.append(
@@ -581,6 +581,9 @@ def _publish_details(config: AgentConfig, issues: list[FlowIssue]) -> list[dict[
     out: list[dict[str, Any]] = []
     for issue in issues:
         row: dict[str, Any] = issue.model_dump()
+        for optional in ("code", "estimated_tokens", "budget"):  # prompt-budget fields only
+            if row.get(optional) is None:
+                row.pop(optional, None)
         section, field = "Agent", issue.field or ""
         if issue.target == "node" and (node := nodes.get(issue.id)):
             section = {"start": "Start", "step": "Step", "end": "End"}[node.kind] + f": {node.name}"

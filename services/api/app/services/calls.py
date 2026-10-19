@@ -22,6 +22,7 @@ from app.core.config import get_settings
 from app.core.exceptions import NotFoundError, PermissionDeniedError, ValidationFailedError
 from app.core.permissions import Permission
 from app.core.phone import InvalidPhoneError, normalize_phone
+from app.db.pagination import page_scalars
 from app.integrations.voice_runtime import artifacts
 from app.integrations.voice_runtime.client import (
     RuntimeCapacityError,
@@ -35,6 +36,7 @@ from app.models.crm import Activity, ActivityType, ActorType, ConsentStatus, Lea
 from app.models.identity import Organization
 from app.models.voice import Agent, AgentStatus
 from app.services import audit, events, jobs
+from app.services import latency as latency_parser
 from app.services import leads as lead_service
 from app.services.runtime_accounts import runtime_client
 
@@ -329,6 +331,13 @@ async def complete_simulated_call(db: AsyncSession, call_id: uuid.UUID) -> Call 
     call.captured = result.captured
     call.transcript = result.transcript or None
     call.opted_out = result.opted_out
+    call.latency = (
+        latency_parser.simulated(
+            str(call.id), duration_seconds=result.duration_seconds, started_at=call.started_at
+        )
+        if result.answered
+        else None
+    )
     call.result_synced_at = now
     await events.emit(
         db,
@@ -437,6 +446,8 @@ async def apply_runtime_result(
     call.runtime_transcript_key = run.get("transcript_url")
     call.runtime_recording_key = run.get("recording_url")
     call.recording_available = bool(run.get("recording_url"))
+    # Per-turn response times from the saved event log (ADR 0006); never fails the sync.
+    call.latency = latency_parser.from_run_logs(run.get("logs"))
     call.result_synced_at = now
     _set_state(db, call, state, reason=source)
     _event(
@@ -450,6 +461,7 @@ async def apply_runtime_result(
             "duration_seconds": call.duration_seconds,
             "recording_available": call.recording_available,
             "transcript_available": bool(call.runtime_transcript_key),
+            "latency_measured": call.latency is not None,
         },
     )
     lead = await db.get(Lead, call.lead_id) if call.lead_id else None
@@ -849,13 +861,7 @@ async def list_calls(
     db: AsyncSession, ctx: TenantContext, f: CallFilters, page: int, page_size: int
 ) -> tuple[list[Call], int]:
     base = _apply_filters(_scoped(ctx.org_id), f)
-    total = int(await db.scalar(select(func.count()).select_from(base.subquery())) or 0)
-    rows = await db.execute(
-        base.order_by(Call.created_at.desc(), Call.id)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    )
-    return list(rows.scalars().all()), total
+    return await page_scalars(db, base.order_by(Call.created_at.desc(), Call.id), page, page_size)
 
 
 async def list_lead_calls(
@@ -875,6 +881,14 @@ async def get_call(db: AsyncSession, ctx: TenantContext, call_id: uuid.UUID) -> 
     if call is None:
         raise NotFoundError("Call not found")
     return call
+
+
+async def get_latency(db: AsyncSession, ctx: TenantContext, call_id: uuid.UUID) -> dict[str, Any]:
+    """The stored per-turn latency of a call (tenant-scoped); 404 when not measured."""
+    call = await get_call(db, ctx, call_id)
+    if not isinstance(call.latency, dict) or not isinstance(call.latency.get("summary"), dict):
+        raise NotFoundError("No response times were measured for this call")
+    return call.latency
 
 
 async def list_events(db: AsyncSession, ctx: TenantContext, call_id: uuid.UUID) -> list[CallEvent]:

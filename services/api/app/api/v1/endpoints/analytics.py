@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Query
 from pydantic import Field
-from sqlalchemy import and_, desc, func, select
+from sqlalchemy import ColumnElement, Integer, and_, case, column, desc, func, literal, select, true
+from sqlalchemy.dialects.postgresql import JSONB
 
 from app.api.v1.deps import DB, AnalyticsRead
 from app.models.calls import TERMINAL_STATES, Call, CallMode, CallState
@@ -200,6 +201,13 @@ class AgentCallStats(APIModel):
     avg_duration_seconds: float | None = Field(
         description="Mean duration of answered calls; null when none were answered"
     )
+    response_p50_ms: int | None = Field(
+        default=None,
+        description=(
+            "Median response time over every measured turn of this agent's real calls "
+            "(simulated calls excluded); null when nothing was measured"
+        ),
+    )
 
 
 class CampaignCallStats(APIModel):
@@ -244,6 +252,20 @@ class CallsOverview(APIModel):
         description="Calls placed by a campaign, most attempted first"
     )
     mode_split: ModeSplit
+    response_p50_ms: int | None = Field(
+        default=None,
+        description=(
+            "Median time from the person finishing speaking to the agent starting to speak, "
+            "over every measured turn of real calls in scope (simulated calls never count); "
+            "null when nothing was measured"
+        ),
+    )
+    response_p95_ms: int | None = Field(
+        default=None, description="95th percentile of the same turns; null when none"
+    )
+    measured_calls: int = Field(
+        default=0, description="Real calls in scope with at least one measured turn"
+    )
 
 
 def _ratio(numerator: int, denominator: int) -> float | None:
@@ -252,6 +274,36 @@ def _ratio(numerator: int, denominator: int) -> float | None:
 
 def _avg(value: float | None) -> float | None:
     return round(float(value), 1) if value is not None else None
+
+
+def _real_latency(scope: ColumnElement[bool]) -> ColumnElement[bool]:
+    """Calls whose latency was measured by the voice service (never dry runs)."""
+    return and_(
+        scope,
+        Call.mode != CallMode.SIMULATED,
+        Call.latency["summary"]["source"].astext == "runtime",
+    )
+
+
+def _turn_responses() -> tuple[Any, ColumnElement[int]]:
+    """A lateral set of each call's turns and the turn's response_ms (null if absent)."""
+    turns_json = case(
+        (func.jsonb_typeof(Call.latency["turns"]) == "array", Call.latency["turns"]),
+        else_=literal("[]", JSONB),
+    )
+    turns = func.jsonb_array_elements(turns_json).table_valued(column("value", JSONB)).lateral("t")
+    value = turns.c.value
+    response = case(
+        (
+            func.jsonb_typeof(value["response_ms"]) == "number",
+            value["response_ms"].astext.cast(Integer),
+        )
+    )
+    return turns, response
+
+
+def _ms(value: float | None) -> int | None:
+    return round(float(value)) if value is not None else None
 
 
 @router.get(
@@ -365,6 +417,40 @@ async def calls_overview(
         )
     ).all()
 
+    real = _real_latency(scope)
+    turns, response = _turn_responses()
+    latency_row = (
+        await db.execute(
+            select(
+                func.percentile_cont(0.5).within_group(response),
+                func.percentile_cont(0.95).within_group(response),
+            )
+            .select_from(Call)
+            .join(turns, true())
+            .where(real, response.is_not(None))
+        )
+    ).one()
+    measured_calls = int(
+        await db.scalar(
+            select(func.count()).where(
+                real, Call.latency["summary"]["measured_turns"].as_integer() > 0
+            )
+        )
+        or 0
+    )
+    agent_latency = {
+        aid: _ms(p50)
+        for aid, p50 in (
+            await db.execute(
+                select(Call.agent_id, func.percentile_cont(0.5).within_group(response))
+                .select_from(Call)
+                .join(turns, true())
+                .where(real, response.is_not(None))
+                .group_by(Call.agent_id)
+            )
+        ).all()
+    }
+
     campaign_rows = (
         await db.execute(
             select(
@@ -410,6 +496,7 @@ async def calls_overview(
                 answered=int(ans),
                 qualified=int(q),
                 avg_duration_seconds=_avg(avg),
+                response_p50_ms=agent_latency.get(aid),
             )
             for aid, name, att, ans, q, avg in agent_rows
         ],
@@ -420,4 +507,7 @@ async def calls_overview(
             for cid, name, att, ans, q in campaign_rows
         ],
         mode_split=ModeSplit(live=int(n_live), simulated=int(n_simulated), test=int(n_test)),
+        response_p50_ms=_ms(latency_row[0]),
+        response_p95_ms=_ms(latency_row[1]),
+        measured_calls=measured_calls,
     )

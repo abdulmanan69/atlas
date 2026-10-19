@@ -34,6 +34,7 @@ from app.models.crm import Activity, ActivityType, ActorType, Lead, PipelineStag
 from app.models.identity import Membership, Organization, User
 from app.models.voice import Agent, AgentDirection, AgentStatus, AgentVersion, SyncStatus
 from app.schemas.identity import OrganizationCreate
+from app.services.latency import simulated as simulated_latency
 from app.services.organizations import create_organization
 
 DEMO_EMAIL = "demo@example.com"
@@ -232,6 +233,16 @@ async def _seed_voice(db: AsyncSession, org: Organization, user: User, rng: rand
             transcript=result.transcript or None,
             initiated_by_user_id=user.id,
             result_synced_at=call_time + timedelta(seconds=result.duration_seconds + 5),
+            # Synthetic, labelled source "simulated": never counted in real averages.
+            latency=(
+                simulated_latency(
+                    f"demo-{lead.id}",
+                    duration_seconds=result.duration_seconds,
+                    started_at=call_time,
+                )
+                if result.answered
+                else None
+            ),
         )
         call.created_at = call_time
         db.add(call)

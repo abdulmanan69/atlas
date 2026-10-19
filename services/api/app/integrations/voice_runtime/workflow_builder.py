@@ -402,6 +402,12 @@ def build_configurations(
         "turn_stop_strategy": cs.turn_stop,
         "smart_turn_stop_secs": cs.smart_turn_stop_seconds,
         "dictionary": ", ".join(cs.key_terms),
+        # ADR 0006: summarising older turns keeps long calls fast; the speech cache only
+        # takes effect for TTS providers that implement it (runtime ignores it otherwise).
+        "context_compaction_enabled": cs.context_compaction,
+        "tts_cache_enabled": cs.tts_cache,
+        # Always on: transcripts carry start-end times per line (run_pipeline.py:701-704).
+        "transcript_configuration": {"include_end_timestamps": True},
         "ambient_noise_configuration": {
             "enabled": cs.ambient.enabled,
             "volume": cs.ambient.volume,

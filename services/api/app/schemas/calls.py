@@ -10,6 +10,7 @@ from pydantic import Field, model_validator
 
 from app.models.calls import Call, CallDirection, CallMode, CallState
 from app.schemas.common import APIModel
+from app.schemas.latency import LatencySummary
 
 
 class CallStart(APIModel):
@@ -29,6 +30,16 @@ def _transcript_available(call: Call) -> bool:
     if call.transcript:
         return True
     return call.mode != CallMode.SIMULATED and bool(call.runtime_transcript_key)
+
+
+def _latency_summary(call: Call) -> LatencySummary | None:
+    raw = (call.latency or {}).get("summary") if isinstance(call.latency, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return LatencySummary.model_validate(raw)
+    except ValueError:
+        return None
 
 
 class CallOut(APIModel):
@@ -69,6 +80,8 @@ class CallOut(APIModel):
             data = {name: getattr(value, name) for name in cls.model_fields if hasattr(value, name)}
             data["transcript_available"] = _transcript_available(value)
             data["captured_count"] = len(value.captured or {})
+            if "latency_summary" in cls.model_fields:
+                data["latency_summary"] = _latency_summary(value)
             return data
         return value
 
@@ -78,6 +91,13 @@ class CallDetail(CallOut):
     summary: str | None
     usage: dict[str, Any] = Field(description="Model and call usage reported for the call")
     estimated_cost: float | None = Field(description="Estimated cost, when known")
+    latency_summary: LatencySummary | None = Field(
+        default=None,
+        description=(
+            "Response times measured on the call (or synthetic for a dry run); null when not "
+            "measured. Per-turn detail: GET /calls/{id}/latency"
+        ),
+    )
 
 
 class CallTranscript(APIModel):
