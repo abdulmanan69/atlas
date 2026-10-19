@@ -211,18 +211,42 @@ export const OPTIONAL_COLUMNS: { colId: string; label: string }[] = [
 
 /* Transcript */
 
-export type TranscriptTurn = { role: "agent" | "person" | "note"; speaker: string | null; text: string };
+export type TranscriptTurn = {
+  role: "agent" | "person" | "note";
+  speaker: string | null;
+  text: string;
+  /** Seconds from the start of the conversation, when the transcript carries times. */
+  offset?: number | null;
+};
 export type ParsedTranscript = { kind: "turns"; turns: TranscriptTurn[] } | { kind: "plain"; text: string };
 
 const SPEAKER_LINE = /^\s*([A-Za-z][\w .'-]{0,39}):\s?(.*)$/;
+/** `[2026-10-19T16:50:50.565+00:00 → 2026-10-19T16:50:52.894+00:00] user: Yes.` (end optional). */
+const TIMED_LINE = /^\s*\[([^\]\s→]+)(?:\s*(?:→|->)\s*([^\]\s]+))?\]\s*([A-Za-z][\w .'-]{0,39}):\s?(.*)$/;
+const AGENT_ROLES = /^(agent|assistant|bot)$/i;
+
+/** One utterance, with each repeated line kept once (the voice service can log a phrase twice). */
+function dedupeLines(text: string): string {
+  const out: string[] = [];
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (t && out[out.length - 1]?.toLowerCase() !== t.toLowerCase()) out.push(t);
+  }
+  return out.join("\n");
+}
 
 /**
- * Lines prefixed `Agent:` are the agent's turns and any other `Name:` prefix is the
- * person's. Unprefixed lines continue the previous turn, or stand alone as notes (for
- * example the `[SIMULATED CALL]` marker). Text without any `Agent:` line is left as is.
+ * Two formats are recognised:
+ * - Voice-service transcripts: `[start → end] assistant|user: text`, with continuation lines.
+ *   Lines are put back in time order (the service can write a reply before the words it
+ *   answered) and each turn carries its offset from the first line.
+ * - Simulated transcripts: `Agent:` for the agent, any other `Name:` for the person;
+ *   unprefixed lines continue the previous turn or stand alone as notes.
+ * Anything else is shown as plain text.
  */
 export function parseTranscript(text: string): ParsedTranscript {
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  if (lines.some((l) => TIMED_LINE.test(l))) return parseTimed(lines);
   if (!lines.some((l) => /^\s*agent:/i.test(l))) return { kind: "plain", text };
   const turns: TranscriptTurn[] = [];
   for (const raw of lines) {
@@ -241,6 +265,44 @@ export function parseTranscript(text: string): ParsedTranscript {
   return { kind: "turns", turns };
 }
 
+function parseTimed(lines: string[]): ParsedTranscript {
+  const items: { at: number; seq: number; role: "agent" | "person"; text: string }[] = [];
+  for (const raw of lines) {
+    if (!raw.trim()) continue;
+    const m = TIMED_LINE.exec(raw);
+    if (m) {
+      const at = Date.parse(m[1]!);
+      items.push({
+        at: Number.isNaN(at) ? Number.POSITIVE_INFINITY : at,
+        seq: items.length,
+        role: AGENT_ROLES.test(m[3]!.trim()) ? "agent" : "person",
+        text: m[4]!.trim(),
+      });
+    } else if (items.length) {
+      const last = items[items.length - 1]!;
+      last.text = last.text ? `${last.text}\n${raw.trim()}` : raw.trim();
+    }
+  }
+  items.sort((a, b) => a.at - b.at || a.seq - b.seq);
+  const first = items.find((i) => Number.isFinite(i.at));
+  const start = first ? first.at : null;
+  const turns: TranscriptTurn[] = items
+    .map((i) => ({
+      role: i.role,
+      speaker: i.role === "agent" ? "Agent" : "Caller",
+      text: dedupeLines(i.text),
+      offset: start !== null && Number.isFinite(i.at) ? Math.max(0, (i.at - start) / 1000) : null,
+    }))
+    .filter((t) => t.text);
+  return turns.length ? { kind: "turns", turns } : { kind: "plain", text: lines.join("\n") };
+}
+
+/** 75 → `1:15`. */
+export function formatOffset(seconds: number): string {
+  const s = Math.floor(seconds);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
 /** `state_changed` → `State changed`. */
 export function eventLabel(type: string): string {
   const words = type.replace(/[_.-]+/g, " ").trim();
@@ -248,18 +310,75 @@ export function eventLabel(type: string): string {
 }
 
 /** Flattens a usage/cost object into `key.sub → value` rows for a definition list (two levels). */
-export function flattenUsage(value: Record<string, unknown>, prefix = ""): { key: string; value: string }[] {
-  const rows: { key: string; value: string }[] = [];
-  for (const [k, v] of Object.entries(value)) {
-    const key = prefix ? `${prefix}.${k}` : k;
-    if (v && typeof v === "object" && !Array.isArray(v)) {
-      if (prefix) rows.push({ key, value: JSON.stringify(v) });
-      else rows.push(...flattenUsage(v as Record<string, unknown>, key));
-    } else if (v === null || v === undefined) {
-      rows.push({ key, value: "—" });
+export type UsageRow = { label: string; model: string | null; value: string };
+
+const USAGE_KIND: Record<string, string> = { llm: "Language model", stt: "Speech-to-text", tts: "Voice" };
+/** Processor classes of self-hosted model servers; they have no per-use charge. */
+const SELF_HOSTED_PROCESSOR = /^Speaches/i;
+
+function round(n: number, digits = 1): string {
+  return n.toLocaleString(undefined, { maximumFractionDigits: digits });
+}
+
+/** `SpeachesLLMService#3|||qwen2.5:1.5b` → model `qwen2.5:1.5b`, and whether it is self-hosted. */
+function splitUsageKey(key: string): { model: string | null; selfHosted: boolean } {
+  const [processor = "", model = ""] = key.split("|||");
+  const fallback = processor.includes("Service") ? null : processor.trim() || null;
+  return { model: model.trim() || fallback, selfHosted: SELF_HOSTED_PROCESSOR.test(processor) };
+}
+
+function describe(kind: string, v: unknown): string {
+  if (typeof v === "number") {
+    if (kind === "stt") return `${round(v)} s of audio transcribed`;
+    if (kind === "tts") return `${round(v, 0)} characters spoken`;
+    return round(v, 2);
+  }
+  if (v && typeof v === "object") {
+    const t = v as Record<string, unknown>;
+    const n = (k: string) => (typeof t[k] === "number" ? (t[k] as number) : null);
+    const total = n("total_tokens");
+    const prompt = n("prompt_tokens");
+    const completion = n("completion_tokens");
+    const cached = n("cache_read_input_tokens");
+    if (total !== null || prompt !== null || completion !== null) {
+      const parts = [
+        prompt !== null ? `${round(prompt, 0)} in` : null,
+        completion !== null ? `${round(completion, 0)} out` : null,
+        cached ? `${round(cached, 0)} reused from cache` : null,
+      ].filter(Boolean);
+      const sum = total ?? (prompt ?? 0) + (completion ?? 0);
+      return `${round(sum, 0)} tokens${parts.length ? ` (${parts.join(", ")})` : ""}`;
+    }
+    const known = Object.entries(t).filter(([, x]) => typeof x === "number" || typeof x === "string");
+    return known.length
+      ? known.map(([k, x]) => `${k.replace(/_/g, " ")}: ${typeof x === "number" ? round(x, 2) : String(x)}`).join(", ")
+      : "—";
+  }
+  return v === null || v === undefined ? "—" : String(v);
+}
+
+/**
+ * The voice service reports usage as `{llm|stt|tts: {"<processor>|||<model>": value}}` plus
+ * `call_duration_seconds`. Shown as one plain row per model; internal processor names and
+ * the duration (shown elsewhere) are left out. Unknown top-level keys still get a row.
+ */
+export function summarizeUsage(usage: Record<string, unknown> | null | undefined): { rows: UsageRow[]; selfHostedOnly: boolean } {
+  const rows: UsageRow[] = [];
+  let any = false;
+  let allSelfHosted = true;
+  for (const [kind, value] of Object.entries(usage ?? {})) {
+    if (kind === "call_duration_seconds") continue;
+    const label = USAGE_KIND[kind] ?? kind.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+    if (value && typeof value === "object" && !Array.isArray(value) && kind in USAGE_KIND) {
+      for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+        const { model, selfHosted } = splitUsageKey(key);
+        any = true;
+        allSelfHosted = allSelfHosted && selfHosted;
+        rows.push({ label, model, value: describe(kind, v) });
+      }
     } else {
-      rows.push({ key, value: typeof v === "number" ? String(Math.round(v * 1000) / 1000) : Array.isArray(v) ? v.join(", ") : String(v) });
+      rows.push({ label, model: null, value: describe(kind, value) });
     }
   }
-  return rows;
+  return { rows, selfHostedOnly: any && allSelfHosted };
 }

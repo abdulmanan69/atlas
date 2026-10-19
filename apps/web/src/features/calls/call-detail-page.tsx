@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { EmptyState, ErrorState } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Badge, Card, CardHeader, Skeleton, Tooltip } from "@/components/ui/primitives";
-import { directionLabel, eventLabel, flattenUsage, MODE_BADGE, outcomeLabel, outcomeTone, parseTranscript, STATE_BADGE, TERMINAL_STATES } from "@/features/calls/calls-model";
+import { directionLabel, eventLabel, formatOffset, MODE_BADGE, outcomeLabel, outcomeTone, parseTranscript, STATE_BADGE, summarizeUsage, TERMINAL_STATES } from "@/features/calls/calls-model";
 import { ResponseTimesCard } from "@/features/calls/response-times-card";
 import { qk, useAgentNames, useCall, useCallEvents, useOrgId, type CallDetail } from "@/features/queries";
 import { api, errorMessage, unwrap } from "@/lib/api";
@@ -232,7 +232,12 @@ function Transcript({ text }: { text: string }) {
               {t.role === "agent" ? <Bot className="size-3.5" /> : <User className="size-3.5" />}
             </span>
             <div className={cn("min-w-0 rounded-lg px-3 py-2", t.role === "agent" ? "bg-accent-soft/60" : "bg-surface-2")}>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">{t.role === "agent" ? "Agent" : t.speaker}</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+                {t.role === "agent" ? "Agent" : t.speaker}
+                {t.offset !== undefined && t.offset !== null ? (
+                  <span className="ml-1.5 font-mono font-normal normal-case tracking-normal text-faint">{formatOffset(t.offset)}</span>
+                ) : null}
+              </p>
               <p className="mt-0.5 whitespace-pre-wrap text-[13px] text-ink">{t.text}</p>
             </div>
           </li>
@@ -409,20 +414,26 @@ function CapturedCard({ captured }: { captured: Record<string, unknown> }) {
 }
 
 function UsageCard({ call }: { call: CallDetail }) {
-  const rows = flattenUsage(call.usage);
+  const { rows, selfHostedOnly } = summarizeUsage(call.usage);
+  const noCost = call.estimated_cost === null;
   return (
     <Card>
       <CardHeader title="Cost & usage" description="As reported by the voice service" />
       <dl className="divide-y divide-line">
         <Row label="Estimated cost">
-          <span className={cn("font-mono", call.estimated_cost === null ? "text-faint" : "text-ink")}>{formatCost(call.estimated_cost)}</span>
+          {noCost && selfHostedOnly ? (
+            <span className="text-ink-2">No usage charge: every model ran on your own servers</span>
+          ) : (
+            <span className={cn("font-mono", noCost ? "text-faint" : "text-ink")}>{noCost ? "Not reported" : formatCost(call.estimated_cost)}</span>
+          )}
         </Row>
         <Row label="Duration">
           <span className="font-mono">{formatDuration(call.duration_seconds)}</span>
         </Row>
-        {rows.map((r) => (
-          <Row key={r.key} label={r.key}>
-            <span className="break-words font-mono text-[12.5px] text-ink-2">{r.value}</span>
+        {rows.map((r, i) => (
+          <Row key={`${r.label}-${r.model ?? ""}-${i}`} label={r.label}>
+            {r.model ? <span className="block break-all font-mono text-[12px] text-ink">{r.model}</span> : null}
+            <span className="block text-[12.5px] text-ink-2">{r.value}</span>
           </Row>
         ))}
       </dl>

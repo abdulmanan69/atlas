@@ -5,12 +5,13 @@ import {
   createCallsDatasource,
   directionLabel,
   filtersActive,
-  flattenUsage,
+  formatOffset,
   outcomeLabel,
   outcomeTone,
   parseTranscript,
   presetRange,
   readCallsUrl,
+  summarizeUsage,
   urlToFilters,
   type CallPage,
 } from "@/features/calls/calls-model";
@@ -129,16 +130,69 @@ describe("badges and formatting", () => {
     expect(formatDuration(undefined)).toBe("—");
   });
 
-  it("flattens usage objects two levels deep", () => {
-    expect(flattenUsage({ call_duration_seconds: 42.123, llm: { "gpt-4.1-mini": { prompt_tokens: 900 } }, stt: {}, note: null })).toEqual([
-      { key: "call_duration_seconds", value: "42.123" },
-      { key: "llm.gpt-4.1-mini", value: '{"prompt_tokens":900}' },
-      { key: "note", value: "—" },
+  it("summarises voice-service usage per model without internal names", () => {
+    const usage = {
+      llm: {
+        "SpeachesLLMService#2|||qwen2.5:1.5b": {
+          total_tokens: 972,
+          prompt_tokens: 903,
+          completion_tokens: 69,
+          cache_read_input_tokens: 888,
+          reasoning_tokens: null,
+        },
+      },
+      stt: { "SpeachesSTTService|||Systran/faster-whisper-base": 15.739 },
+      tts: { "SpeachesTTSService|||pocket-tts": 604 },
+      call_duration_seconds: 64,
+    };
+    const { rows, selfHostedOnly } = summarizeUsage(usage);
+    expect(selfHostedOnly).toBe(true);
+    expect(rows).toEqual([
+      { label: "Language model", model: "qwen2.5:1.5b", value: "972 tokens (903 in, 69 out, 888 reused from cache)" },
+      { label: "Speech-to-text", model: "Systran/faster-whisper-base", value: "15.7 s of audio transcribed" },
+      { label: "Voice", model: "pocket-tts", value: "604 characters spoken" },
     ]);
+    expect(rows.some((r) => /Service|\|\|\|/.test(`${r.label}${r.model}${r.value}`))).toBe(false);
+  });
+
+  it("marks hosted usage as chargeable and keeps unknown keys readable", () => {
+    const { rows, selfHostedOnly } = summarizeUsage({
+      llm: { "OpenAILLMService#1|||gpt-4.1-mini": { prompt_tokens: 900 } },
+      extra_minutes: 2,
+    });
+    expect(selfHostedOnly).toBe(false);
+    expect(rows).toEqual([
+      { label: "Language model", model: "gpt-4.1-mini", value: "900 tokens (900 in)" },
+      { label: "Extra minutes", model: null, value: "2" },
+    ]);
+    expect(summarizeUsage(null)).toEqual({ rows: [], selfHostedOnly: false });
   });
 });
 
 describe("parseTranscript", () => {
+  it("reads voice-service transcripts: time order, offsets, roles and repeated lines", () => {
+    const text = [
+      "[2026-10-19T16:50:35.758+00:00] assistant: Hi Alex, this is Sarah.",
+      "[2026-10-19T16:50:50.565+00:00 → 2026-10-19T16:50:52.894+00:00] user: Yes.",
+      "[2026-10-19T16:51:09.448+00:00 → 2026-10-19T16:51:14.829+00:00] user: Something else",
+      "Something else",
+      // The service wrote this reply before the words it answered.
+      "[2026-10-19T16:51:31.261+00:00 → 2026-10-19T16:51:31.840+00:00] assistant: Got it. How long is the timeline?",
+      "[2026-10-19T16:51:23.366+00:00 → 2026-10-19T16:51:29.850+00:00] user: for years.",
+      "In this, I do not plan to do it.",
+    ].join("\n");
+    const parsed = parseTranscript(text);
+    expect(parsed.kind).toBe("turns");
+    if (parsed.kind !== "turns") return;
+    expect(parsed.turns.map((t) => [t.role, t.speaker, t.text, t.offset !== null && t.offset !== undefined ? formatOffset(t.offset) : null])).toEqual([
+      ["agent", "Agent", "Hi Alex, this is Sarah.", "0:00"],
+      ["person", "Caller", "Yes.", "0:14"],
+      ["person", "Caller", "Something else", "0:33"],
+      ["person", "Caller", "for years.\nIn this, I do not plan to do it.", "0:47"],
+      ["agent", "Agent", "Got it. How long is the timeline?", "0:55"],
+    ]);
+  });
+
   it("splits Agent:/Name: lines into turns and keeps markers as notes", () => {
     const parsed = parseTranscript("[SIMULATED CALL]\nAgent: Hi Hina, is now a good time?\nHina: Sure.\nIt is quiet here.\nAgent: Great.\n");
     expect(parsed.kind).toBe("turns");
