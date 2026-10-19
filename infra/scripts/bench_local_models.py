@@ -1,0 +1,326 @@
+"""Benchmark the self-hosted models of the `local-ai` Docker profile.
+
+Measures, on this machine:
+  * STT  - time to transcribe a 5 s WAV (OpenAI-style POST /v1/audio/transcriptions)
+  * TTS  - time to first audio byte and total time for a 12-word sentence, streamed as PCM
+           (POST /v1/audio/speech, the call the voice runtime makes)
+  * LLM  - time to first token and tokens/s for about 60 tokens (POST /v1/chat/completions,
+           stream: true)
+
+Every measurement does one warm-up call, then N timed runs (default 3) and reports the
+median. Targets that are not running are reported as unavailable, not as failures.
+
+Run from the API project so httpx is available:
+  cd services/api && uv run python ../../infra/scripts/bench_local_models.py
+  ... --json > bench.json                  machine-readable output
+  ... --warm-only                          just load every model into memory
+  ... --skip pocket --llm-model llama3.2:1b
+"""
+
+from __future__ import annotations
+
+import argparse
+import io
+import json
+import os
+import platform
+import statistics
+import sys
+import time
+import wave
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
+
+import httpx
+
+TTS_SENTENCE = "Thanks for calling, I can help book an appointment for tomorrow morning."  # 12 words
+STT_SOURCE_TEXT = (
+    "Hi, I would like to move my appointment from Tuesday to Thursday afternoon, if that works."
+)
+LLM_PROMPT = (
+    "You are a phone receptionist for a dental clinic. In about forty words, tell the caller "
+    "which days are free next week and ask which one suits them."
+)
+STT_SECONDS = 5.0
+STT_RATE = 16000
+
+
+@dataclass
+class Result:
+    kind: str  # stt | tts | llm
+    target: str
+    model: str
+    status: str = "ok"  # ok | unavailable | error
+    error: str | None = None
+    runs: int = 0
+    metrics: dict[str, float] = field(default_factory=dict)  # medians
+    samples: dict[str, list[float]] = field(default_factory=dict)
+
+
+def _median_runs(fn: Callable[[], dict[str, float]], runs: int) -> tuple[dict, dict]:
+    fn()  # warm-up, not counted
+    samples: dict[str, list[float]] = {}
+    for _ in range(runs):
+        for k, v in fn().items():
+            samples.setdefault(k, []).append(v)
+    return {k: statistics.median(v) for k, v in samples.items()}, samples
+
+
+def _measure(result: Result, fn: Callable[[], dict[str, float]], runs: int) -> Result:
+    try:
+        result.metrics, result.samples = _median_runs(fn, runs)
+        result.runs = runs
+    except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+        result.status, result.error = "unavailable", f"not reachable ({exc.__class__.__name__})"
+    except Exception as exc:  # report and continue with the other targets
+        result.status, result.error = "error", f"{exc.__class__.__name__}: {exc}"[:300]
+    return result
+
+
+def _auth(key: str | None) -> dict[str, str]:
+    return {"Authorization": f"Bearer {key or 'none'}"}
+
+
+# ------------------------------------------------------------------------------ TTS
+def tts_once(client: httpx.Client, base_url: str, model: str, voice: str, text: str,
+             key: str | None = None) -> dict[str, float]:
+    body = {"model": model, "input": text, "voice": voice, "response_format": "pcm"}
+    start = time.perf_counter()
+    first = None
+    total_bytes = 0
+    with client.stream("POST", f"{base_url}/audio/speech", json=body, headers=_auth(key)) as r:
+        if r.status_code != 200:
+            raise RuntimeError(f"HTTP {r.status_code}: {r.read().decode(errors='replace')[:200]}")
+        for chunk in r.iter_bytes():
+            if chunk and first is None:
+                first = time.perf_counter()
+            total_bytes += len(chunk)
+    end = time.perf_counter()
+    if first is None or total_bytes == 0:
+        raise RuntimeError("empty audio")
+    audio_s = total_bytes / 2 / 24000  # 16-bit mono 24 kHz, what the runtime expects
+    return {
+        "ttfb_ms": (first - start) * 1000,
+        "total_ms": (end - start) * 1000,
+        "audio_s": audio_s,
+        "rtf": (end - start) / audio_s,  # < 1 means faster than real time
+    }
+
+
+# ------------------------------------------------------------------------------ STT
+def make_stt_wav(client: httpx.Client, args: argparse.Namespace) -> tuple[bytes, str]:
+    """A 5 s, 16 kHz mono WAV: a file from --stt-wav, else speech made by Kokoro, else a tone."""
+    if args.stt_wav:
+        with open(args.stt_wav, "rb") as f:
+            return f.read(), f"file {os.path.basename(args.stt_wav)}"
+    pcm = b""
+    source = "synthetic tone (no speech: timing only)"
+    try:
+        body = {"model": args.kokoro_model, "input": STT_SOURCE_TEXT, "voice": args.kokoro_voice,
+                "response_format": "pcm", "sample_rate": STT_RATE}
+        r = client.post(f"{args.speech_url}/audio/speech", json=body, timeout=120)
+        if r.status_code == 200 and r.content:
+            pcm, source = r.content, "speech generated by Kokoro"
+    except httpx.HTTPError:
+        pass
+    want = int(STT_SECONDS * STT_RATE) * 2
+    if not pcm:
+        import math
+        pcm = b"".join(
+            int(8000 * math.sin(2 * math.pi * 220 * i / STT_RATE)).to_bytes(2, "little", signed=True)
+            for i in range(want // 2)
+        )
+    pcm = (pcm + b"\x00" * want)[:want]
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(STT_RATE)
+        w.writeframes(pcm)
+    return buf.getvalue(), source
+
+
+def stt_once(client: httpx.Client, base_url: str, model: str, wav: bytes,
+             language: str | None) -> dict[str, float]:
+    data = {"model": model, "response_format": "json"}
+    if language:
+        data["language"] = language
+    start = time.perf_counter()
+    r = client.post(f"{base_url}/audio/transcriptions", data=data,
+                    files={"file": ("sample.wav", wav, "audio/wav")}, headers=_auth(None))
+    end = time.perf_counter()
+    if r.status_code != 200:
+        raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
+    return {"total_ms": (end - start) * 1000, "rtf": (end - start) / STT_SECONDS}
+
+
+# ------------------------------------------------------------------------------ LLM
+def llm_once(client: httpx.Client, base_url: str, model: str, max_tokens: int) -> dict[str, float]:
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": LLM_PROMPT}],
+        "max_tokens": max_tokens,
+        "temperature": 0.2,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    start = time.perf_counter()
+    first = None
+    chunks = 0
+    usage_tokens = None
+    with client.stream("POST", f"{base_url}/chat/completions", json=body, headers=_auth(None)) as r:
+        if r.status_code != 200:
+            raise RuntimeError(f"HTTP {r.status_code}: {r.read().decode(errors='replace')[:200]}")
+        for line in r.iter_lines():
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                break
+            event = json.loads(payload)
+            if event.get("usage"):
+                usage_tokens = event["usage"].get("completion_tokens")
+            for choice in event.get("choices") or []:
+                if (choice.get("delta") or {}).get("content"):
+                    if first is None:
+                        first = time.perf_counter()
+                    chunks += 1
+    end = time.perf_counter()
+    if first is None:
+        raise RuntimeError("no tokens streamed")
+    tokens = usage_tokens or chunks
+    gen_s = max(end - first, 1e-6)
+    return {
+        "ttft_ms": (first - start) * 1000,
+        "total_ms": (end - start) * 1000,
+        "tokens": float(tokens),
+        # tokens after the first one, over the time after the first one
+        "tokens_per_s": max(tokens - 1, 1) / gen_s,
+    }
+
+
+# ------------------------------------------------------------------------------ warm
+def warm(client: httpx.Client, args: argparse.Namespace) -> list[str]:
+    out = []
+
+    def step(name: str, fn: Callable[[], str]) -> None:
+        start = time.perf_counter()
+        try:
+            msg = fn()
+        except httpx.HTTPError as exc:
+            msg = f"not reachable ({exc.__class__.__name__})"
+        out.append(f"{name}: {msg} [{time.perf_counter() - start:.1f}s]")
+
+    if "llm" not in args.skip:
+        ollama = args.llm_url.removesuffix("/v1")
+        # An empty prompt loads the model; keep_alive is left to OLLAMA_KEEP_ALIVE.
+        step(f"LLM {args.llm_model}", lambda: f"HTTP {client.post(f'{ollama}/api/generate', json={'model': args.llm_model}).status_code}")  # noqa: E501
+    if "stt" not in args.skip:
+        root = args.speech_url.removesuffix("/v1")
+        # 201 = loaded now, 409 = already loaded.
+        step(f"STT {args.stt_model}", lambda: f"HTTP {client.post(f'{root}/api/ps/{args.stt_model}').status_code}")  # noqa: E501
+    if "kokoro" not in args.skip:
+        step(f"TTS {args.kokoro_model}", lambda: f"{tts_once(client, args.speech_url, args.kokoro_model, args.kokoro_voice, 'Hello.')['total_ms']:.0f} ms")  # noqa: E501
+    if "pocket" not in args.skip:
+        step(f"TTS {args.pocket_model}", lambda: f"{tts_once(client, args.pocket_url, args.pocket_model, args.pocket_voice, 'Hello.', args.pocket_key)['total_ms']:.0f} ms")  # noqa: E501
+    return out
+
+
+# ------------------------------------------------------------------------------ report
+def render_markdown(results: list[Result], meta: dict) -> str:
+    lines = [
+        "## Local model benchmark",
+        "",
+        f"Machine: {meta['machine']} - {meta['cpus']} logical CPUs - {meta['date']} - "
+        f"median of {meta['runs']} runs after 1 warm-up",
+        "",
+        "| Stage | Target | Model | Result |",
+        "|---|---|---|---|",
+    ]
+    for r in results:
+        m = r.metrics
+        if r.status != "ok":
+            text = f"{r.status}: {r.error}"
+        elif r.kind == "stt":
+            text = f"**{m['total_ms']:.0f} ms** for 5 s of audio (RTF {m['rtf']:.2f})"
+        elif r.kind == "tts":
+            text = (f"first audio **{m['ttfb_ms']:.0f} ms**, total {m['total_ms']:.0f} ms "
+                    f"for {m['audio_s']:.1f} s of audio (RTF {m['rtf']:.2f})")
+        else:
+            text = (f"first token **{m['ttft_ms']:.0f} ms**, {m['tokens_per_s']:.1f} tokens/s, "
+                    f"{m['tokens']:.0f} tokens in {m['total_ms']:.0f} ms")
+        lines.append(f"| {r.kind.upper()} | {r.target} | `{r.model}` | {text} |")
+    lines += ["", f"STT input: {meta['stt_source']}.", ""]
+    return "\n".join(lines)
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--speech-url", default="http://127.0.0.1:8001/v1", help="speech server (STT + Kokoro)")
+    p.add_argument("--stt-model", default="Systran/faster-whisper-base")
+    p.add_argument("--stt-language", default="en", help="language hint; empty for auto-detect")
+    p.add_argument("--stt-wav", help="5 s WAV to transcribe (default: speech generated by Kokoro)")
+    p.add_argument("--kokoro-model", default="speaches-ai/Kokoro-82M-v1.0-ONNX")
+    p.add_argument("--kokoro-voice", default="af_heart")
+    p.add_argument("--pocket-url", default="http://127.0.0.1:8002/v1")
+    p.add_argument("--pocket-model", default="pocket-tts")
+    p.add_argument("--pocket-voice", default="alba")
+    p.add_argument("--pocket-key", default=None, help="if the Pocket TTS server requires a key")
+    p.add_argument("--llm-url", default="http://127.0.0.1:11434/v1")
+    p.add_argument("--llm-model", default="qwen2.5:1.5b")
+    p.add_argument("--llm-tokens", type=int, default=60)
+    p.add_argument("--runs", type=int, default=3)
+    p.add_argument("--timeout", type=float, default=300.0, help="seconds per request")
+    p.add_argument("--skip", default="", help="comma list of: stt,kokoro,pocket,llm")
+    p.add_argument("--warm-only", action="store_true", help="load every model, measure nothing")
+    p.add_argument("--json", action="store_true", help="print JSON instead of Markdown")
+    args = p.parse_args()
+    args.skip = {s.strip() for s in args.skip.split(",") if s.strip()}
+
+    with httpx.Client(timeout=httpx.Timeout(args.timeout, connect=3.0)) as client:
+        if args.warm_only:
+            print("\n".join(warm(client, args)))
+            return 0
+
+        results: list[Result] = []
+        stt_source = "skipped"
+        if "stt" not in args.skip:
+            wav, stt_source = make_stt_wav(client, args)
+            results.append(_measure(
+                Result("stt", "speech server", args.stt_model),
+                lambda: stt_once(client, args.speech_url, args.stt_model, wav, args.stt_language or None),
+                args.runs))
+        if "kokoro" not in args.skip:
+            results.append(_measure(
+                Result("tts", "Kokoro (speech server)", args.kokoro_model),
+                lambda: tts_once(client, args.speech_url, args.kokoro_model, args.kokoro_voice, TTS_SENTENCE),
+                args.runs))
+        if "pocket" not in args.skip:
+            results.append(_measure(
+                Result("tts", "Pocket TTS", args.pocket_model),
+                lambda: tts_once(client, args.pocket_url, args.pocket_model, args.pocket_voice,
+                                 TTS_SENTENCE, args.pocket_key),
+                args.runs))
+        if "llm" not in args.skip:
+            results.append(_measure(
+                Result("llm", "Ollama", args.llm_model),
+                lambda: llm_once(client, args.llm_url, args.llm_model, args.llm_tokens),
+                args.runs))
+
+    meta = {
+        "machine": platform.processor() or platform.machine(),
+        "cpus": os.cpu_count(),
+        "date": time.strftime("%Y-%m-%d"),
+        "runs": args.runs,
+        "stt_source": stt_source,
+        "tts_sentence": TTS_SENTENCE,
+    }
+    if args.json:
+        print(json.dumps({"meta": meta, "results": [asdict(r) for r in results]}, indent=2))
+    else:
+        print(render_markdown(results, meta))
+    return 0 if all(r.status != "error" for r in results) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

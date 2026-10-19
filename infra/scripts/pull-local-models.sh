@@ -3,11 +3,16 @@
 # Run after `make local-ai-up`. Safe to re-run: already-present models are skipped.
 #
 # Override with environment variables, e.g.
-#   LLM_MODEL=llama3.2:3b STT_MODEL=Systran/faster-whisper-base sh infra/scripts/pull-local-models.sh
+#   LLM_MODEL=llama3.2:1b STT_MODEL=Systran/faster-whisper-small sh infra/scripts/pull-local-models.sh
+#
+# Defaults favour reply speed on CPU: Whisper base (74M parameters, multilingual) has a third
+# of the parameters of small (244M), so it is faster but makes more mistakes, especially
+# outside English; use small for Urdu and strong accents.
+# Pocket TTS (service local-tts) downloads its own weights on first start.
 set -eu
 
 LLM_MODEL="${LLM_MODEL:-qwen2.5:1.5b}"
-STT_MODEL="${STT_MODEL:-Systran/faster-whisper-small}"
+STT_MODEL="${STT_MODEL:-Systran/faster-whisper-base}"
 TTS_MODEL="${TTS_MODEL:-speaches-ai/Kokoro-82M-v1.0-ONNX}"
 SPEECH_URL="${SPEECH_URL:-http://127.0.0.1:8001}"
 
@@ -28,4 +33,7 @@ echo
 echo "Local models are ready. In ATLAS → Voice AI → AI providers, add a"
 echo "'Self-hosted models' connection for each server:"
 echo "  Language model   base URL http://local-llm:11434/v1     model $LLM_MODEL"
-echo "  Speech and voice base URL http://local-speech:8000/v1   STT $STT_MODEL, voice model kokoro"
+echo "  Speech and voice base URL http://local-speech:8000/v1   STT $STT_MODEL, voice model $TTS_MODEL (voice af_heart)"
+echo "  Pocket TTS       base URL http://local-tts:8000/v1      voice model pocket-tts (voice alba), if local-tts runs"
+echo
+echo "Load everything into memory before a test call: make local-ai-warm"

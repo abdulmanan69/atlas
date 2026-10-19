@@ -23,7 +23,11 @@ $targets = [ordered]@{
   "infra"     = { docker compose up -d postgres redis }
   "voice-up"   = { docker compose --profile voice up -d }
   "local-ai-up" = { docker compose --profile local-ai up -d local-llm local-speech }
+  "local-tts-up" = { docker compose --profile local-ai up -d --build local-tts }
   "local-ai-models" = { & sh (Join-Path $Root "infra/scripts/pull-local-models.sh") }
+  "local-ai-warm" = { Invoke-In $Api { uv run python ../../infra/scripts/bench_local_models.py --warm-only } }
+  "local-ai-bench" = { Invoke-In $Api { uv run python ../../infra/scripts/bench_local_models.py } }
+  "local-ai-down" = { docker compose --profile local-ai stop local-llm local-speech local-tts }
   "voice-down" = { docker compose --profile voice stop voice-runtime voice-storage voice-db }
   "voice-logs" = { docker compose --profile voice logs -f --tail=100 voice-runtime }
   "up"        = { docker compose --profile app up -d --build }

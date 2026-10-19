@@ -1,0 +1,16 @@
+# Pinned to the versions locked by pocket-tts v3.3.0 (uv.lock), Python 3.12.
+# torch is installed separately from the PyTorch CPU index (see Dockerfile).
+pocket-tts==3.3.0
+fastapi==0.141.1
+uvicorn==0.53.0
+pydantic==2.13.5
+numpy==2.5.3
+scipy==1.18.1
+safetensors==0.8.0
+sentencepiece==0.2.2
+tokenizers==0.23.2
+einops==0.8.2
+huggingface-hub==1.32.0
+requests==2.34.2
+typer==0.27.2
+python-multipart==0.0.32
