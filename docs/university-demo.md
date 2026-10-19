@@ -226,6 +226,20 @@ transcription it is a fraction of a second.
 - Make one test call yourself. The first reply after the model server starts has to read the
   whole agent prompt; ATLAS warms it while the call connects, and afterwards it is cached.
 
+## Check everything without a microphone
+
+An automated caller can run a full test call for you: it speaks four lines into a real test
+call, records the agent's replies and prints the delay of every turn. Use it after setup and
+again just before the demo (it also warms the models):
+
+```powershell
+.\make.ps1 e2e-call
+```
+
+It exits with an error if the call does not connect, the greeting never comes, or a reply
+takes longer than 15 seconds. The call also appears under **Calls** as a test call.
+Details: [Testing the voice agent](testing-voice.md).
+
 ## Troubleshooting
 
 | Symptom | What to do |
