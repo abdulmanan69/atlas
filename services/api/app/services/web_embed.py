@@ -331,10 +331,9 @@ async def start_web_call(
         token = await client.ensure_embed_token(agent.runtime_workflow_id, _session_domains(embed))
         # Server-to-server: ATLAS's own origin is on the token; the visitor's is checked
         # by the voice service when the browser's audio connects.
-        session = await client.start_embed_session(
-            token, origin=settings.web_app_origin.rstrip("/"), context=context
-        )
-        ice = await client.turn_servers(session.session_token)
+        app_origin = settings.web_app_origin.rstrip("/")
+        session = await client.start_embed_session(token, origin=app_origin, context=context)
+        ice = await client.turn_servers(session.session_token, origin=app_origin)
     call.runtime_run_id = str(session.workflow_run_id)
     call.started_at = datetime.now(UTC)
     _set_state(db, call, CallState.IN_PROGRESS, reason="web_session")

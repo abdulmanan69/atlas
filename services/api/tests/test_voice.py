@@ -381,6 +381,30 @@ async def test_browser_test_session(
     assert "key-" not in r.text
 
 
+async def test_browser_test_session_gets_the_turn_relay(
+    client: httpx.AsyncClient, owner: Account, runtime: FakeRuntime
+) -> None:
+    """With a TURN server on the voice service, browsers get its time-limited credentials."""
+    await _setup_models(client, owner)
+    agent = await _agent(client, owner)
+    url = f"/api/v1/agents/{agent['id']}"
+    await client.post(f"{url}/publish", headers=owner.headers, json={})
+    runtime.turn_enabled = True
+    r = await client.post(f"{url}/test-session", headers=owner.headers, json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["ice_servers"] == [
+        {"urls": "stun:turn.example.test:3478", "username": None, "credential": None},
+        {
+            "urls": [
+                "turn:turn.example.test:3478",
+                "turn:turn.example.test:3478?transport=tcp",
+            ],
+            "username": "1900000000:embed:emb_session",
+            "credential": "hmac-of-the-username",
+        },
+    ]
+
+
 async def test_agents_are_tenant_isolated_and_role_gated(
     client: httpx.AsyncClient, owner: Account, runtime: FakeRuntime
 ) -> None:

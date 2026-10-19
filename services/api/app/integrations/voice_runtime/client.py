@@ -194,6 +194,26 @@ def _message(detail: Any, fallback: str) -> str:
     return fallback
 
 
+def ice_servers_from_turn(body: Any) -> list[dict[str, Any]]:
+    """Browser ICE servers from the voice service's TURN credentials response.
+
+    `{username, password, ttl, uris}` becomes a STUN entry on the TURN host (server-
+    reflexive candidates without a third party) plus one TURN entry with every URI.
+    """
+    if not isinstance(body, dict):
+        return []
+    uris = [str(u) for u in body.get("uris") or [] if str(u).startswith(("turn:", "turns:"))]
+    username, password = body.get("username"), body.get("password")
+    if not uris or not isinstance(username, str) or not isinstance(password, str):
+        return []
+    servers: list[dict[str, Any]] = []
+    plain = next((u for u in uris if u.startswith("turn:")), None)
+    if plain:
+        servers.append({"urls": "stun:" + plain.removeprefix("turn:").split("?", 1)[0]})
+    servers.append({"urls": uris, "username": username, "credential": password})
+    return servers
+
+
 class VoiceRuntimeClient:
     def __init__(
         self,
@@ -651,13 +671,22 @@ class VoiceRuntimeClient:
         )
         return EmbedSession.model_validate(body)
 
-    async def turn_servers(self, session_token: str) -> list[dict[str, Any]]:
+    async def turn_servers(self, session_token: str, *, origin: str) -> list[dict[str, Any]]:
+        """ICE servers for a browser session: the voice service's TURN relay, if it has one.
+
+        The voice service answers time-limited TURN REST credentials
+        (`{username, password, ttl, uris}`) after checking the session's origin like the
+        browser's own request, so the origin the session was started with is sent along.
+        Optional: one attempt, and any failure (no TURN server: 503) means no relay.
+        """
         try:
-            body = await self._call("GET", f"/public/embed/turn-credentials/{session_token}")
-        except (RuntimeUnavailableError, RuntimeRejectedError):
+            resp = await self._http.request(
+                "GET", f"/public/embed/turn-credentials/{session_token}", headers={"Origin": origin}
+            )
+            body = resp.json() if resp.is_success else None
+        except (httpx.HTTPError, ValueError):
             return []
-        servers = body.get("ice_servers") if isinstance(body, dict) else None
-        return list(servers) if isinstance(servers, list) else []
+        return ice_servers_from_turn(body)
 
     # ---------------------------------------------------------------- typed test chats
     # The authenticated text-chat routes (routes/workflow_text_chat.py). A chat is a run in

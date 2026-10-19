@@ -119,6 +119,8 @@ class FakeRuntime:
         self.keys: dict[str, int] = {}
         self.calls: list[tuple[str, str, Any]] = []
         self.embed_tokens: dict[str, tuple[int, int, list[str]]] = {}
+        self.sessions: dict[str, list[str]] = {}  # embed session token -> allowed domains
+        self.turn_enabled = False  # ENABLE_COTURN + TURN_SECRET on the real service
         self.down = False
         self._ids = itertools.count(1)
 
@@ -194,16 +196,38 @@ class FakeRuntime:
             host = re.sub(r"^https?://", "", origin)
             if entry is None or (entry[2] and host not in entry[2]):
                 return _json(403, {"detail": "Origin not allowed"})
+            session_token = f"emb_session_{uuid.uuid4().hex[:8]}"
+            self.sessions[session_token] = entry[2]
             return _json(
                 200,
                 {
-                    "session_token": f"emb_session_{uuid.uuid4().hex[:8]}",
+                    "session_token": session_token,
                     "workflow_run_id": next(self._ids),
                     "config": {},
                 },
             )
         if path.startswith("/public/embed/turn-credentials/"):
-            return _json(503, {"detail": "TURN is not enabled"})
+            # Same order as the real service: session and origin first, then TURN itself.
+            domains = self.sessions.get(path.rsplit("/", 1)[-1])
+            host = re.sub(r"^https?://", "", request.headers.get("origin", ""))
+            if domains is None:
+                return _json(404, {"detail": "Invalid session token"})
+            if domains and host not in domains:
+                return _json(403, {"detail": f"Domain not allowed: {host}"})
+            if not self.turn_enabled:
+                return _json(503, {"detail": "TURN server not configured"})
+            return _json(
+                200,
+                {
+                    "username": "1900000000:embed:emb_session",
+                    "password": "hmac-of-the-username",
+                    "ttl": 86400,
+                    "uris": [
+                        "turn:turn.example.test:3478",
+                        "turn:turn.example.test:3478?transport=tcp",
+                    ],
+                },
+            )
         return _json(404, {"detail": "Not Found"})
 
     def _authed(

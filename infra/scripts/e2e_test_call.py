@@ -865,6 +865,32 @@ class Clock:
         return None if t is None else round(t - self.mono, 3)
 
 
+def ice_pair(pc: Any) -> str | None:
+    """The candidate pair carrying the audio, e.g. "relay 1.2.3.4:50000 -> host 172.30.0.10:41000".
+
+    "relay" on the left means this caller's audio goes through the TURN server, as for a
+    browser on a network without a direct path. Reads aiortc internals: best effort.
+    """
+    with contextlib.suppress(Exception):
+        for transceiver in pc.getTransceivers():
+            connection = transceiver.sender.transport.transport._connection
+            for pair in connection._nominated.values():
+                local, remote = pair.local_candidate, pair.remote_candidate
+                return f"{local.type} {local.host}:{local.port} -> {remote.type} {remote.host}:{remote.port}"
+    return None
+
+
+def override_signalling(url: str, base: str) -> str:
+    """The session's signalling URL on another base (scheme and host[:port]), path kept.
+
+    For a caller next to the voice service (e.g. inside its container on a server) while the
+    session advertises the public address: ws://localhost:8000 reaches it directly.
+    """
+    parts, new = urllib.parse.urlsplit(url), urllib.parse.urlsplit(base)
+    scheme = {"http": "ws", "https": "wss"}.get(new.scheme, new.scheme)
+    return urllib.parse.urlunsplit((scheme, new.netloc, parts.path, parts.query, ""))
+
+
 async def ws_connect(url: str, origin: str) -> Any:
     try:
         from websockets.asyncio.client import connect
@@ -960,6 +986,8 @@ async def run_call(args: argparse.Namespace, api: Atlas, agent: dict, utterances
 
     session = await api.call("POST", f"/agents/{agent['id']}/test-session", {"lead_id": args.lead_id})
     token, sig = session["session_token"], session["signaling_url"]
+    if args.signalling:
+        sig = override_signalling(sig, args.signalling)
     run["_token"] = token  # for the voice-db lookup only; removed before anything is written
     run["call_id"] = session.get("call_id")
     run["workflow_run_id"] = _int(session.get("workflow_run_id"))
@@ -1048,7 +1076,9 @@ async def run_call(args: argparse.Namespace, api: Atlas, agent: dict, utterances
         if call.connected_at is None:
             run["failures"].append(f"WebRTC did not connect ({call.error or call.stop_reason or pc.connectionState})")
             return run
-        log(f"  connected in {run['connection']['offer_to_connected_ms']} ms; waiting for the greeting")
+        run["connection"]["ice_pair"] = ice_pair(pc)
+        log(f"  connected in {run['connection']['offer_to_connected_ms']} ms (ICE pair: "
+            f"{run['connection']['ice_pair'] or 'unknown'}); waiting for the greeting")
 
         status, segs = await call.wait_agent(t_offer, args.greeting_timeout_s, args.turn_timeout_s)
         greeting = {"status": status, **describe_reply(clock, segs, call.connected_at, args.gap_ms)}
@@ -1372,6 +1402,7 @@ FORWARD = [  # options passed through unchanged to the copy inside the container
     "email", "org", "agent", "lead_id", "tts_model", "tts_voice", "runs", "max_reply_ms",
     "greeting_timeout_s", "reply_timeout_s", "turn_timeout_s", "connect_timeout_s", "end_silence_ms",
     "gap_ms", "vad_db", "silence_db", "min_speech_ms", "events_timeout_s", "origin", "pause_s",
+    "signalling",
 ]
 
 
@@ -1470,6 +1501,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     a("--origin", default=os.environ.get("ATLAS_WEB_APP_ORIGIN") or env.get("ATLAS_WEB_APP_ORIGIN") or "http://localhost:5173",
       help="Origin header for signalling (must match the web app origin the session was made for)")
     a("--use-ice-servers", action="store_true", help="use the session's STUN/TURN servers even for a local voice service")
+    a("--signalling", default=None,
+      help="connect signalling to this base (e.g. ws://localhost:8000) instead of the session's public address; "
+           "the path and token are kept. A localhost base also means no STUN/TURN (direct path)")
     a("--voice-db-url", default=None, help="voice service database URL for the stored record (default: DATABASE_URL)")
     a("--results-dir", default=str((root / ".cache" / "e2e-test-call") if root else Path.cwd() / "e2e-test-call"))
     a("--json", default=None, help="also write the result JSON here")

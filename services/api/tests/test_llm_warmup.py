@@ -295,14 +295,29 @@ async def test_destination_policy_applies_to_tenant_urls(
     monkeypatch.setattr(get_settings(), "allow_private_model_urls", True)
     assert await warm_agent_prompt(uuid.uuid4(), _guided(), {}, resolve=tenant) == "sent"
 
-    # Outside local development the policy requires https, even for the operator's URL.
+    # Outside local development a tenant's URL must use https, even with private hosts allowed.
     monkeypatch.setattr(get_settings(), "environment", Environment.PRODUCTION)
+    assert await warm_agent_prompt(
+        uuid.uuid4(), _guided(), {"first_name": "Ann"}, resolve=tenant
+    ) == ("blocked")
 
+    # The operator's URL may stay plain http while its host is internal (an API container
+    # reaching the model server on the same Docker network) ...
     async def operator(_org: uuid.UUID, _cfg: AgentConfig) -> WarmupTarget:
         return _target(warmup)
 
     assert await warm_agent_prompt(
         uuid.uuid4(), _guided(), {"first_name": "Zed"}, resolve=operator
+    ) == ("sent")
+
+    # ... but never across the internet.
+    async def operator_public(_org: uuid.UUID, _cfg: AgentConfig) -> WarmupTarget:
+        return WarmupTarget(
+            base_url="http://models.example.com/v1", model="qwen2.5:1.5b", trusted=True
+        )
+
+    assert await warm_agent_prompt(
+        uuid.uuid4(), _guided(), {"first_name": "Bo"}, resolve=operator_public
     ) == ("blocked")
 
 

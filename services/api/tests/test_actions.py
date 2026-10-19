@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from app.core import net_policy
 from app.core.config import Environment, get_settings
+from app.core.exceptions import ValidationFailedError
 from app.core.net_policy import is_blocked_address
 from app.db.session import get_sessionmaker
 from app.models.audit import AuditLog
@@ -702,6 +703,45 @@ async def test_test_endpoint_runs_the_runtime_tool_test(
 )
 def test_blocked_addresses(ip: str, blocked: bool) -> None:
     assert is_blocked_address(ip_address(ip)) is blocked
+
+
+@pytest.mark.parametrize(
+    ("host", "internal"),
+    [
+        ("local-llm", True),
+        ("localhost", True),
+        ("models.internal", True),
+        ("127.0.0.1", True),
+        ("10.0.0.5", True),
+        ("::1", True),
+        ("models.example.com", False),
+        ("8.8.8.8", False),
+    ],
+)
+def test_internal_hosts(host: str, internal: bool) -> None:
+    assert net_policy.is_internal_host(host) is internal
+
+
+async def test_internal_http_only_for_internal_hosts_outside_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(get_settings(), "environment", Environment.PRODUCTION)
+    url = "http://local-llm:11434/v1"
+    with pytest.raises(ValidationFailedError, match="must use https"):
+        await net_policy.validate_destination_url(url, label="Model", allow_private=True)
+    assert (
+        await net_policy.validate_destination_url(
+            url, label="Model", allow_private=True, allow_internal_http=True
+        )
+        == url
+    )
+    with pytest.raises(ValidationFailedError, match="must use https"):
+        await net_policy.validate_destination_url(
+            "http://models.example.com/v1",
+            label="Model",
+            allow_private=True,
+            allow_internal_http=True,
+        )
 
 
 @pytest.mark.parametrize(

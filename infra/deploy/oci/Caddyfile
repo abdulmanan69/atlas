@@ -1,0 +1,78 @@
+# ATLAS edge: HTTPS with automatic Let's Encrypt certificates for both hostnames.
+#
+#   {$ATLAS_WEB_HOST}    the web app (static build) and the ATLAS API under /api
+#   {$ATLAS_VOICE_HOST}  only the voice service's call signalling WebSocket
+#
+# Both names come from .env through docker-compose.prod.yml. No access log: signalling
+# URLs carry one-time session tokens.
+
+{
+	# HTTP/1.1 and HTTP/2: the firewall opens TCP 443 only, not UDP (HTTP/3).
+	servers {
+		protocols h1 h2
+	}
+}
+
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=63072000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+		-Via
+	}
+}
+
+(proxy_options) {
+	# Stream server-sent events (typed test chat, live transcript) as they are written, and
+	# keep WebSockets (calls) open for up to 5 minutes across a configuration reload.
+	flush_interval -1
+	stream_close_delay 5m
+	transport http {
+		dial_timeout 5s
+	}
+}
+
+{$ATLAS_WEB_HOST} {
+	import security_headers
+
+	handle /api/* {
+		reverse_proxy api:8080 {
+			import proxy_options
+		}
+	}
+
+	handle {
+		root * /srv/web
+		encode zstd gzip
+		header {
+			X-Frame-Options "DENY"
+			Permissions-Policy "microphone=(self), camera=(), geolocation=(), payment=()"
+		}
+		# Hashed bundles never change; everything else (index.html) is revalidated.
+		@immutable path /assets/*
+		header @immutable Cache-Control "public, max-age=31536000, immutable"
+		@mutable not path /assets/*
+		header @mutable Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+{$ATLAS_VOICE_HOST} {
+	import security_headers
+
+	# Browsers (test calls, the website widget) only open the signalling WebSocket here:
+	# ATLAS hands out the one-time session and the TURN credentials itself. The voice
+	# service's own API (accounts, agents, embed tokens, admin routes) is never exposed.
+	@signalling path /api/v1/ws/public/signaling/*
+	handle @signalling {
+		reverse_proxy voice-runtime:8000 {
+			import proxy_options
+		}
+	}
+
+	handle {
+		respond 404
+	}
+}

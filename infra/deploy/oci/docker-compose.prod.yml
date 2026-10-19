@@ -1,0 +1,194 @@
+# ATLAS on one Linux server (tested on Oracle Cloud, Oracle Linux 9). Extends the main
+# docker-compose.yml; deploy.sh writes both into .env so plain `docker compose` uses them:
+#
+#   COMPOSE_FILE=docker-compose.yml:infra/deploy/oci/docker-compose.prod.yml
+#   COMPOSE_PROFILES=app,voice,local-ai
+#
+# Reachable from the internet: Caddy (TCP 80/443: web app, ATLAS API under /api, the voice
+# service's call signalling WebSocket) and coturn (3478 TCP/UDP, relay UDP 49152-49252).
+# Nothing else publishes a host port: the databases, Redis, object storage, the voice
+# service's own API and the model servers are reachable only on the Docker network.
+# Every value below comes from .env (see README.md in this folder).
+
+name: atlas
+
+services:
+  postgres:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  api:
+    ports: !reset []
+
+  voice-storage:
+    ports: !reset []
+
+  voice-runtime:
+    ports: !reset []
+    environment:
+      ENVIRONMENT: production
+      # The address on the server's own interface. A private one (cloud 1:1 NAT) makes the
+      # voice service keep its container (host) ICE candidates, so a caller's TURN relay
+      # reaches it inside the server; the public address never has to loop back.
+      SERVER_IP: ${ATLAS_SERVER_PRIVATE_IP:?set ATLAS_SERVER_PRIVATE_IP in .env}
+      PUBLIC_BASE_URL: https://${ATLAS_VOICE_HOST:?set ATLAS_VOICE_HOST in .env}
+      BACKEND_API_ENDPOINT: https://${ATLAS_VOICE_HOST}
+      # Presigned recording/transcript links are fetched by the ATLAS API container only.
+      MINIO_PUBLIC_ENDPOINT: http://voice-storage:9000
+      ENABLE_COTURN: "true"
+      TURN_SECRET: ${ATLAS_TURN_SECRET:?set ATLAS_TURN_SECRET in .env}
+      TURN_HOST: ${ATLAS_TURN_HOST:?set ATLAS_TURN_HOST in .env}
+      TURN_PORT: "3478"
+      # coturn runs without TLS here: "0" leaves turns: URIs out of the ICE servers.
+      TURN_TLS_PORT: "0"
+      FORCE_TURN_RELAY: "false"
+    extra_hosts:
+      # The voice service's own TURN client reaches coturn on the private address (browsers
+      # resolve the same name to the public one through sslip.io).
+      - "${ATLAS_TURN_HOST}:${ATLAS_SERVER_PRIVATE_IP}"
+    networks:
+      default:
+        # Fixed: coturn may relay only to this container (allowed-peer-ip below).
+        ipv4_address: ${ATLAS_VOICE_RUNTIME_IP:-172.30.0.10}
+
+  local-llm:
+    ports: !reset []
+
+  local-speech:
+    ports: !reset []
+
+  local-tts:
+    ports: !reset []
+
+  local-stt:
+    ports: !reset []
+
+  caddy:
+    image: caddy:2.11.6-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      ATLAS_WEB_HOST: ${ATLAS_WEB_HOST:?set ATLAS_WEB_HOST in .env}
+      ATLAS_VOICE_HOST: ${ATLAS_VOICE_HOST}
+    volumes:
+      - ./infra/deploy/oci/Caddyfile:/etc/caddy/Caddyfile:ro
+      - web_dist:/srv/web:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    restart: unless-stopped
+
+  # STUN-only responder for the voice service's own address lookups. The voice service asks
+  # stun.l.google.com:19302 for its public address; from inside Docker that yields the
+  # Docker NAT mapping of the server's public IP, a direct path that outranks every relay
+  # path in ICE but drops audio on some caller networks (measured: garbled speech with two
+  # NAT exits on the caller's side). Answered here on the Docker network instead, the voice
+  # service advertises only its container address and its TURN relay, so callers' audio
+  # always takes the relay (browser -> coturn -> voice service, all on this server), and
+  # no lookup leaves for a third party.
+  stun:
+    image: coturn/coturn:4.18.0-alpine
+    command:
+      - -c
+      - /dev/null
+      - --stun-only
+      - --listening-port=19302
+      - --no-tls
+      - --log-file=stdout
+      - --simple-log
+      - --pidfile=/var/tmp/turnserver.pid
+    networks:
+      default:
+        aliases:
+          - stun.l.google.com
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+    restart: unless-stopped
+
+  coturn:
+    image: coturn/coturn:4.18.0-alpine
+    # Host network: 101 relay ports without a proxy process each, and coturn sees the
+    # server's real addresses (external-ip maps the private one to the public one).
+    network_mode: host
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+    configs:
+      - source: turnserver_conf
+        target: /etc/coturn/turnserver.conf
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    restart: unless-stopped
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${ATLAS_DOCKER_SUBNET:-172.30.0.0/24}
+          # Containers get addresses from the upper half; the voice service's fixed address
+          # sits in the lower half so it is never taken first.
+          ip_range: ${ATLAS_DOCKER_DYNAMIC_RANGE:-172.30.0.128/25}
+
+volumes:
+  caddy_data:
+  caddy_config:
+  # Filled by deploy.sh with the web app's production build.
+  web_dist:
+    external: true
+    name: atlas_web_dist
+
+configs:
+  # Rendered from .env by docker compose at `up`; the secret never appears in a process
+  # list or in the repository.
+  turnserver_conf:
+    content: |
+      listening-port=3478
+      listening-ip=${ATLAS_SERVER_PRIVATE_IP}
+      relay-ip=${ATLAS_SERVER_PRIVATE_IP}
+      external-ip=${ATLAS_SERVER_PUBLIC_IP:?set ATLAS_SERVER_PUBLIC_IP in .env}/${ATLAS_SERVER_PRIVATE_IP}
+      min-port=49152
+      max-port=49252
+      realm=${ATLAS_VOICE_HOST}
+      # Time-limited credentials (TURN REST API) minted by the voice service with TURN_SECRET.
+      use-auth-secret
+      static-auth-secret=${ATLAS_TURN_SECRET}
+      fingerprint
+      # coturn 4.18 already keeps the CLI, DTLS, RFC 5780 and the software attribute off.
+      no-tls
+      # UDP relays only: no TCP connections from the relay to any peer.
+      no-tcp-relay
+      no-multicast-peers
+      stale-nonce=600
+      user-quota=12
+      total-quota=1200
+      # Never relay into private, loopback, link-local (cloud metadata) or reserved ranges,
+      # except to the voice service's own container.
+      denied-peer-ip=0.0.0.0-0.255.255.255
+      denied-peer-ip=10.0.0.0-10.255.255.255
+      denied-peer-ip=100.64.0.0-100.127.255.255
+      denied-peer-ip=127.0.0.0-127.255.255.255
+      denied-peer-ip=169.254.0.0-169.254.255.255
+      denied-peer-ip=172.16.0.0-172.31.255.255
+      denied-peer-ip=192.0.0.0-192.0.0.255
+      denied-peer-ip=192.0.2.0-192.0.2.255
+      denied-peer-ip=192.88.99.0-192.88.99.255
+      denied-peer-ip=192.168.0.0-192.168.255.255
+      denied-peer-ip=198.18.0.0-198.19.255.255
+      denied-peer-ip=198.51.100.0-198.51.100.255
+      denied-peer-ip=203.0.113.0-203.0.113.255
+      denied-peer-ip=224.0.0.0-255.255.255.255
+      # Relays are IPv4 only (relay-ip), so no IPv6 peer is reachable. Do not add IPv6
+      # ranges here: coturn 4.18 matched public IPv4 peers against "::-::ffff" and denied them.
+      allowed-peer-ip=${ATLAS_VOICE_RUNTIME_IP:-172.30.0.10}
+      log-file=stdout
+      simple-log
+      new-log-timestamp
+      pidfile=/var/tmp/turnserver.pid

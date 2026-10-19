@@ -83,6 +83,14 @@ Useful options (all have defaults; `--help` lists everything):
 | `--max-reply-ms` | 15000 | Fail when a reply starts later than this |
 | `--json FILE` | | Also write the full result here |
 | `--results-dir` | `.cache/e2e-test-call/` | Recordings and result files (git-ignored) |
+| `--api URL` | `http://127.0.0.1:8080` | ATLAS API; on a server deployment `http://api:8080` (reached from inside the container) or the public `https://…` address |
+| `--signalling URL` | the session's address | Connect signalling here instead, path kept; `ws://localhost:8000` inside the voice-runtime container of a server deployment |
+| `--tts-url URL` | `http://127.0.0.1:8002` (host), `http://local-tts:8000` (container) | Pocket TTS server that speaks the caller's lines |
+
+After connecting, each run prints the ICE candidate pair that carries the audio. A remote
+caller through the TURN relay shows `relay` on one side, for example
+`host 192.168.1.10:64352 -> relay 203.0.113.7:49252`. Server deployments and the commands
+that test them over the internet: [infra/deploy/oci/README.md](../infra/deploy/oci/README.md).
 
 ## Reading the results
 

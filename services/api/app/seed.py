@@ -2,7 +2,8 @@
 
 Idempotent and incremental: creates the demo organization and leads on first run, and
 adds the voice demo (an agent, a finished dry-run campaign and simulated calls) when it
-is missing. Refuses to run in production. Nothing here touches the voice runtime.
+is missing. Refuses to run in production unless ATLAS_ALLOW_DEMO_SEED=true (a public
+demo deployment). Nothing here touches the voice runtime.
 """
 
 from __future__ import annotations
@@ -325,8 +326,13 @@ async def _backfill_latency(db: AsyncSession, org: Organization) -> int:
 
 async def seed() -> None:
     settings = get_settings()
-    if settings.is_production:
-        raise SystemExit("Refusing to seed a production environment")
+    # A public demo deployment runs with production settings (secure cookies, https-only
+    # policies) but still wants the synthetic demo tenant; the operator opts in explicitly.
+    if settings.is_production and os.environ.get("ATLAS_ALLOW_DEMO_SEED", "").lower() != "true":
+        raise SystemExit(
+            "Refusing to seed a production environment "
+            "(set ATLAS_ALLOW_DEMO_SEED=true for a demo deployment)"
+        )
     rng = random.Random(42)  # noqa: S311 - deterministic synthetic data, not security
     password = os.environ.get("ATLAS_DEMO_PASSWORD") or secrets.token_urlsafe(12)
     created_org = False

@@ -264,14 +264,19 @@ def target_for(
 async def check_destination(target: WarmupTarget) -> bool:
     """Apply the outbound destination policy (app/core/net_policy.py).
 
-    The operator's ATLAS_LOCAL_LLM_WARMUP_URL may be private (that is its purpose), but
-    still gets the scheme and credential checks. A tenant's connection URL must resolve
-    to a public address unless ATLAS_ALLOW_PRIVATE_MODEL_URLS is true.
+    The operator's ATLAS_LOCAL_LLM_WARMUP_URL may be private (that is its purpose), and
+    may use plain http when its host is internal (a model server on the same Docker
+    network); it still gets the credential check, and https otherwise. A tenant's
+    connection URL must resolve to a public address unless ATLAS_ALLOW_PRIVATE_MODEL_URLS
+    is true, and must use https outside local development.
     """
     allow_private = target.trusted or get_settings().allow_private_model_urls
     try:
         await validate_destination_url(
-            target.chat_url, label="Self-hosted model", allow_private=allow_private
+            target.chat_url,
+            label="Self-hosted model",
+            allow_private=allow_private,
+            allow_internal_http=target.trusted,
         )
     except ValidationFailedError as exc:
         log.info("llm_warmup_skipped", extra={"reason": "destination_policy", "detail": str(exc)})

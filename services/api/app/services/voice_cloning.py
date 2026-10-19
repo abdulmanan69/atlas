@@ -118,6 +118,8 @@ async def _base_url(conn: ConnectionOut) -> str:
             url,
             label="Pocket TTS server",
             allow_private=bool(override) or settings.allow_private_model_urls,
+            # The operator's own URL may be plain http to a server on the same Docker network.
+            allow_internal_http=bool(override),
         )
     except ValidationFailedError as exc:
         raise IntegrationUnavailableError(

@@ -803,7 +803,7 @@ async def test_session(
     async with runtime_client(db, ctx.org_id) as client:
         token = await client.ensure_embed_token(agent.runtime_workflow_id, [domain])
         session = await client.start_embed_session(token, origin=origin, context=context)
-        ice = await client.turn_servers(session.session_token)
+        ice = await client.turn_servers(session.session_token, origin=origin)
     call_service.mark_test_call_started(db, call, session.workflow_run_id)
     # Self-hosted models only: read the prompt while the browser connects (background).
     llm_warmup.schedule_published_warmup(ctx.org_id, agent.id, agent.published_version, context)

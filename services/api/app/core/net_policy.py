@@ -37,6 +37,24 @@ def is_blocked_address(ip: Address) -> bool:
     return not ip.is_global or ip.is_multicast
 
 
+def is_internal_host(host: str) -> bool:
+    """True for a host that only exists inside the deployment's own network.
+
+    A bare name (a Docker service such as `local-llm`), `localhost`, an internal-only
+    suffix (.local, .internal, .localhost) or a non-public IP literal.
+    """
+    host = host.strip().lower().rstrip(".")
+    try:
+        return is_blocked_address(ipaddress.ip_address(host))
+    except ValueError:
+        pass
+    return (
+        host == "localhost"
+        or "." not in host
+        or host.endswith((".local", ".internal", ".localhost"))
+    )
+
+
 async def resolve_host(host: str, port: int) -> list[Address]:
     """Resolve a hostname to every address it currently points at (monkeypatched in tests)."""
     loop = asyncio.get_running_loop()
@@ -61,12 +79,16 @@ async def validate_destination_url(
     label: str,
     allow_private: bool,
     resolver: Resolver | None = None,
+    allow_internal_http: bool = False,
 ) -> str:
     """Enforce the destination policy and return the normalised (stripped) URL.
 
     `label` names the feature in error messages ("Webhook", "Action"). `allow_private`
     skips the address check for local development against services on the same machine;
     the scheme and credential checks always apply. `resolver` defaults to live DNS.
+    `allow_internal_http` accepts plain http in every environment when the host is
+    internal (`is_internal_host`): only for operator-configured URLs such as a model
+    server on the same Docker network, never for tenant-supplied ones.
     """
     settings = get_settings()
 
@@ -81,7 +103,13 @@ async def validate_destination_url(
     except ValueError as exc:
         raise reject(f"{label} URL is not valid") from exc
     schemes = {"https"} | ({"http"} if settings.environment == Environment.LOCAL else set())
-    if parts.scheme not in schemes:
+    internal_http = (
+        allow_internal_http
+        and parts.scheme == "http"
+        and bool(host)
+        and is_internal_host(host or "")
+    )
+    if parts.scheme not in schemes and not internal_http:
         raise reject(f"{label} URL must use https")
     if not host or parts.username or parts.password:
         raise reject(f"{label} URL must have a host and must not embed credentials")

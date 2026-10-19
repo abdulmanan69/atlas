@@ -116,7 +116,8 @@ class Settings(BaseSettings):
     # Where ATLAS itself reaches the model server, e.g. http://127.0.0.1:11434/v1 when the
     # API runs on the host and the connection's base URL is a Docker-internal name such as
     # http://local-llm:11434/v1. Operator-set, so it may be private; outside local
-    # development the network policy requires https.
+    # development the network policy requires https unless the host is internal (a Docker
+    # service name or a private address, e.g. http://local-llm:11434/v1 for an API container).
     local_llm_warmup_url: str | None = None
     local_llm_warmup_timeout_seconds: float = 30.0
     # A tenant's self-hosted connection URL is only warmed directly when it resolves to a
@@ -127,7 +128,8 @@ class Settings(BaseSettings):
     # reaches the Pocket TTS server to list, clone and delete voices, e.g.
     # http://127.0.0.1:8002/v1 when the API runs on the host and the connection's base URL is
     # the Docker-internal http://local-tts:8000/v1. Operator-set, so it may be private;
-    # outside local development the network policy requires https. Unset: the connection's
+    # outside local development the network policy requires https unless the host is
+    # internal (a Docker service name or a private address). Unset: the connection's
     # own base URL, which must be public unless ALLOW_PRIVATE_MODEL_URLS is true.
     local_tts_url: str | None = None
     # Only when the Pocket TTS server requires a key (its POCKET_TTS_API_KEY).
