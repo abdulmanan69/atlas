@@ -65,7 +65,7 @@ call on `localhost` was tested to work with the network disconnected.
    Install pnpm 10 itself, not a newer major: the web app pins pnpm 10, and a newer pnpm
    downloads pnpm 10 on first use, which fails without internet.
 2. Start Docker Desktop and wait until it shows *Engine running*.
-3. Get the code: `git clone <repository URL> atlas`, or unzip a copy. Do **not** copy
+3. Get the code: `git clone https://github.com/abdulmanan69/atlas atlas`, or unzip a copy. Do **not** copy
    `apps\web\node_modules` or `services\api\.venv` from another PC: they contain absolute
    paths and links that only work on the PC that made them.
 4. In PowerShell, in the repository folder:
