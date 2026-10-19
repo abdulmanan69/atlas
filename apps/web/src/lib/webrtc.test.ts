@@ -1,4 +1,4 @@
-import { BrowserCall, type CallState } from "@/lib/webrtc";
+import { BrowserCall, type CallState, type FeedbackMessage } from "@/lib/webrtc";
 
 class FakeSocket {
   static OPEN = 1;
@@ -58,6 +58,7 @@ class FakePeer {
 
 function setup(mic: "ok" | "denied" = "ok") {
   const states: [CallState, string | undefined][] = [];
+  const feedback: FeedbackMessage[] = [];
   let socket!: FakeSocket;
   let peer!: FakePeer;
   const stop = vi.fn();
@@ -66,7 +67,7 @@ function setup(mic: "ok" | "denied" = "ok") {
   vi.stubGlobal("WebSocket", { OPEN: 1 });
   const call = new BrowserCall(
     { signaling_url: "ws://voice.test/signal/abc", ice_servers: [{ urls: "stun:stun.example:19302" }] },
-    { onState: (s, d) => states.push([s, d]) },
+    { onState: (s, d) => states.push([s, d]), onFeedback: (m) => feedback.push(m) },
     {
       getUserMedia: () => (mic === "ok" ? Promise.resolve(stream) : Promise.reject(new Error("NotAllowedError"))),
       createPeer: (c) => (peer = new FakePeer(c)) as unknown as RTCPeerConnection,
@@ -74,7 +75,7 @@ function setup(mic: "ok" | "denied" = "ok") {
       newId: () => "pc-test",
     },
   );
-  return { call, states, get socket() { return socket; }, get peer() { return peer; }, track, stop };
+  return { call, states, feedback, get socket() { return socket; }, get peer() { return peer; }, track, stop };
 }
 
 describe("BrowserCall", () => {
@@ -114,6 +115,20 @@ describe("BrowserCall", () => {
     expect(t.states.at(-1)).toEqual(["ended", "The agent ended the call (completed)."]);
     expect(t.peer.closed).toBe(true);
     expect(t.stop).toHaveBeenCalled();
+  });
+
+  it("passes the live conversation feedback on, in order, until the call ends", async () => {
+    const t = setup();
+    await t.call.start();
+    t.peer.connect();
+    const said = { type: "rtf-user-transcription", payload: { text: "Hello", final: true }, node_name: "Conversation" };
+    t.socket.receive(said);
+    t.socket.receive({ type: "rtf-latency-measured", payload: { latency_seconds: 0.62 } });
+    expect(t.feedback).toEqual([said, { type: "rtf-latency-measured", payload: { latency_seconds: 0.62 } }]);
+    expect(t.states.at(-1)?.[0]).toBe("live");
+    t.call.hangup();
+    t.socket.receive({ type: "rtf-bot-text", payload: { text: "late" } });
+    expect(t.feedback).toHaveLength(2);
   });
 
   it("explains a blocked microphone", async () => {

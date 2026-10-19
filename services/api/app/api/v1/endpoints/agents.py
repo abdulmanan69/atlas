@@ -1,15 +1,18 @@
-"""Voice agents: create, edit (versioned), publish, lifecycle, browser test calls."""
+"""Voice agents: create, edit (versioned), publish, lifecycle, browser test calls and chats."""
 
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Query, status
+from fastapi.responses import StreamingResponse
 
 from app.api.v1.deps import DB, AgentsManage, AgentsRead
 from app.models.voice import Agent
 from app.schemas.calls import CallOut
 from app.schemas.common import ERROR_RESPONSES
+from app.schemas.test_chat import TestChatEvent, TestChatMessage, TestChatStart
 from app.schemas.voice import (
     AgentConfigSave,
     AgentCreate,
@@ -27,6 +30,7 @@ from app.schemas.voice import (
 )
 from app.services import agents as service
 from app.services import calls as call_service
+from app.services import test_chat
 
 router = APIRouter(prefix="/agents", tags=["Agents"], responses=ERROR_RESPONSES)
 
@@ -211,3 +215,78 @@ async def end_test_call(
         db, ctx, agent_id=agent_id, call_id=call_id, connected=data.connected
     )
     return CallOut.model_validate(call)
+
+
+class EventStream(StreamingResponse):
+    media_type = "text/event-stream"
+
+
+# Errors are plain JSON before the stream starts; only the 200 body is an event stream.
+_JSON_ERROR = {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}
+_CHAT_STREAM: dict[int | str, dict[str, Any]] = {
+    **{
+        code: {"description": spec["description"], "content": _JSON_ERROR}
+        for code, spec in {
+            **ERROR_RESPONSES,
+            409: {"description": "Not published, archived, chat ended or a reply in progress"},
+            503: {"description": "The voice service is unavailable"},
+        }.items()
+    },
+    200: {
+        "model": TestChatEvent,
+        "description": (
+            "Server-sent events, one `data: <TestChatEvent>` per line pair, ending with "
+            "`done` or `error`"
+        ),
+    },
+}
+
+
+def _event_stream(relay: test_chat.ChatRelay) -> EventStream:
+    return EventStream(
+        relay.body,
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-Call-Id": str(relay.call_id),
+        },
+    )
+
+
+@router.post(
+    "/{agent_id}/test-chat",
+    response_class=EventStream,
+    responses=_CHAT_STREAM,
+    summary="Start a typed test chat with the published version",
+    description=(
+        "Recorded under Calls like a browser test call (mode test, channel text). Streams "
+        "`started` (with the call id), then the agent's greeting turn."
+    ),
+)
+async def start_test_chat(
+    agent_id: uuid.UUID, data: TestChatStart, ctx: AgentsManage, db: DB
+) -> EventStream:
+    return _event_stream(await test_chat.start(db, ctx, agent_id, data.lead_id))
+
+
+@router.post(
+    "/{agent_id}/test-chat/{call_id}/messages",
+    response_class=EventStream,
+    responses=_CHAT_STREAM,
+    summary="Send a message in a typed test chat and stream the agent's reply",
+)
+async def send_test_chat_message(
+    agent_id: uuid.UUID, call_id: uuid.UUID, data: TestChatMessage, ctx: AgentsManage, db: DB
+) -> EventStream:
+    return _event_stream(await test_chat.send(db, ctx, agent_id, call_id, data.text))
+
+
+@router.post(
+    "/{agent_id}/test-chat/{call_id}/end",
+    response_model=CallOut,
+    summary="End a typed test chat (its transcript and outcome then arrive on the call)",
+)
+async def end_test_chat(
+    agent_id: uuid.UUID, call_id: uuid.UUID, ctx: AgentsManage, db: DB
+) -> CallOut:
+    return CallOut.model_validate(await test_chat.end(db, ctx, agent_id, call_id))

@@ -54,6 +54,13 @@ class CallOut(APIModel):
     campaign_id: uuid.UUID | None
     direction: CallDirection
     mode: CallMode
+    channel: Literal["voice", "text"] = Field(
+        default="voice",
+        description=(
+            "`text` for a typed test chat from the agent editor (mode test); every other "
+            "call is `voice`"
+        ),
+    )
     state: CallState
     outcome: str | None = Field(description="Outcome code from the agent's configured outcomes")
     to_phone_e164: str | None
@@ -80,6 +87,8 @@ class CallOut(APIModel):
             data = {name: getattr(value, name) for name in cls.model_fields if hasattr(value, name)}
             data["transcript_available"] = _transcript_available(value)
             data["captured_count"] = len(value.captured or {})
+            typed = (value.usage or {}).get("channel") == "text"
+            data["channel"] = "text" if typed else "voice"
             if "latency_summary" in cls.model_fields:
                 data["latency_summary"] = _latency_summary(value)
             return data

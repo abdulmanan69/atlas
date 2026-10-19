@@ -69,6 +69,7 @@ describe("URL state → API filters", () => {
     expect(filtersActive(u)).toBe(true);
     expect(readCallsUrl(new URLSearchParams({ mode: "loud" })).mode).toBe("all");
     expect(directionLabel({ mode: "test", direction: "inbound" })).toBe("Browser");
+    expect(directionLabel({ mode: "test", direction: "inbound", channel: "text" })).toBe("Typed");
     expect(directionLabel({ mode: "live", direction: "inbound" })).toBe("Inbound");
     expect(directionLabel({ mode: "simulated", direction: "outbound" })).toBe("Outbound");
   });
@@ -159,6 +160,7 @@ describe("badges and formatting", () => {
     const { rows, selfHostedOnly } = summarizeUsage({
       llm: { "OpenAILLMService#1|||gpt-4.1-mini": { prompt_tokens: 900 } },
       extra_minutes: 2,
+      channel: "text",
     });
     expect(selfHostedOnly).toBe(false);
     expect(rows).toEqual([

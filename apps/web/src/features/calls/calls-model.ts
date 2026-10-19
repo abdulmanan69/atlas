@@ -50,9 +50,15 @@ export const MODE_BADGE: Record<CallMode, { label: string; tone: Tone; descripti
 
 export const DIRECTION_LABEL: Record<CallDirection, string> = { outbound: "Outbound", inbound: "Inbound" };
 
-/** "Browser" for a test call (the tester talked through the microphone), otherwise the direction. */
-export function directionLabel(call: Pick<Call, "mode" | "direction">): string {
-  return call.mode === "test" ? "Browser" : DIRECTION_LABEL[call.direction];
+/** "Browser" for a test call (microphone), "Typed" for a test chat, otherwise the direction. */
+export function directionLabel(call: Pick<Call, "mode" | "direction"> & { channel?: Call["channel"] }): string {
+  if (call.mode === "test") return call.channel === "text" ? "Typed" : "Browser";
+  return DIRECTION_LABEL[call.direction];
+}
+
+/** What to call a test with no lead: a browser test call or a typed test chat. */
+export function testName(call: { channel?: Call["channel"] }): string {
+  return call.channel === "text" ? "Test chat" : "Browser test call";
 }
 
 const OUTCOME_TONES: Record<string, Tone> = {
@@ -367,7 +373,8 @@ export function summarizeUsage(usage: Record<string, unknown> | null | undefined
   let any = false;
   let allSelfHosted = true;
   for (const [kind, value] of Object.entries(usage ?? {})) {
-    if (kind === "call_duration_seconds") continue;
+    // `channel` marks a typed test chat; it is not usage.
+    if (kind === "call_duration_seconds" || kind === "channel") continue;
     const label = USAGE_KIND[kind] ?? kind.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
     if (value && typeof value === "object" && !Array.isArray(value) && kind in USAGE_KIND) {
       for (const [key, v] of Object.entries(value as Record<string, unknown>)) {

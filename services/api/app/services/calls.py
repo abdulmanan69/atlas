@@ -55,6 +55,10 @@ MAX_TRANSCRIPT_BYTES = 2 * 1024 * 1024
 STALE_AFTER = timedelta(seconds=90)
 GIVE_UP_AFTER = timedelta(hours=2)
 SIMULATED_STUCK_AFTER = timedelta(minutes=2)
+# Marks a typed test chat (agent editor, "Type" mode) in `calls.usage`: no migration, and
+# kept when the runtime's usage replaces the rest. Read it with `call_channel`.
+CHANNEL_KEY = "channel"
+TestChannel = Literal["voice", "text"]
 # A browser test session can be joined for 60 minutes and a call lasts at most 20
 # (the runtime's max_call_duration cap), so a test call still open after this never
 # connected or lost its result; it is closed as canceled.
@@ -341,14 +345,20 @@ async def schedule_simulated_completion(
 
 
 async def create_test_call(
-    db: AsyncSession, ctx: TenantContext, agent: Agent, *, lead_id: uuid.UUID | None
+    db: AsyncSession,
+    ctx: TenantContext,
+    agent: Agent,
+    *,
+    lead_id: uuid.UUID | None,
+    channel: TestChannel = "voice",
 ) -> Call:
-    """Record a browser test call before its session starts.
+    """Record a browser test call (or typed test chat) before its session starts.
 
     The call id travels in the session's context as `atlas_call_id`, so the runtime's
     completion webhook finds this record. If starting the session fails, the request's
     transaction rolls back and the record goes with it. A lead, when given, only fills
-    the prompt's variables: it is linked for reference and never contacted.
+    the prompt's variables: it is linked for reference and never contacted. A typed chat
+    is marked `usage["channel"] = "text"` (kept when the result arrives).
     """
     call = Call(
         organization_id=ctx.org_id,
@@ -360,20 +370,24 @@ async def create_test_call(
         state=CallState.QUEUED,
         initiated_by_user_id=ctx.user_id,
         runtime_workflow_id=agent.runtime_workflow_id,
+        usage={CHANNEL_KEY: "text"} if channel == "text" else {},
     )
     db.add(call)
     await db.flush()
-    _event(
-        db,
-        call,
-        "created",
-        {
-            "direction": call.direction.value,
-            "mode": call.mode.value,
-            "lead_id": str(lead_id) if lead_id else None,
-        },
-    )
+    data: dict[str, Any] = {
+        "direction": call.direction.value,
+        "mode": call.mode.value,
+        "lead_id": str(lead_id) if lead_id else None,
+    }
+    if channel == "text":
+        data["channel"] = "text"
+    _event(db, call, "created", data)
     return call
+
+
+def call_channel(call: Call) -> TestChannel:
+    """`text` for a typed test chat, else `voice`."""
+    return "text" if (call.usage or {}).get(CHANNEL_KEY) == "text" else "voice"
 
 
 def mark_test_call_started(db: AsyncSession, call: Call, runtime_run_id: int) -> None:
@@ -563,9 +577,12 @@ async def apply_runtime_result(
     captured = {k: v for k, v in (extracted or {}).items() if k != OPT_OUT_FIELD}
     call.captured = captured
     call.opted_out = bool((extracted or {}).get(OPT_OUT_FIELD)) or call.outcome == "do_not_call"
-    call.usage = {
+    kept: dict[str, Any] = {
         k: v for k, v in usage.items() if k in ("llm", "stt", "tts", "call_duration_seconds")
     }
+    if call_channel(call) == "text":
+        kept[CHANNEL_KEY] = "text"
+    call.usage = kept
     call.runtime_transcript_key = run.get("transcript_url")
     call.runtime_recording_key = run.get("recording_url")
     call.recording_available = bool(run.get("recording_url"))

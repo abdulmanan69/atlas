@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { EmptyState, ErrorState } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Badge, Card, CardHeader, Skeleton, Tooltip } from "@/components/ui/primitives";
-import { directionLabel, eventLabel, formatOffset, MODE_BADGE, outcomeLabel, outcomeTone, parseTranscript, STATE_BADGE, summarizeUsage, TERMINAL_STATES } from "@/features/calls/calls-model";
+import { directionLabel, eventLabel, formatOffset, MODE_BADGE, outcomeLabel, outcomeTone, parseTranscript, STATE_BADGE, summarizeUsage, TERMINAL_STATES, testName } from "@/features/calls/calls-model";
 import { ResponseTimesCard } from "@/features/calls/response-times-card";
 import { qk, useAgentNames, useCall, useCallEvents, useOrgId, type CallDetail } from "@/features/queries";
 import { api, errorMessage, unwrap } from "@/lib/api";
@@ -58,7 +58,7 @@ export function CallView({ call }: { call: CallDetail }) {
   const state = STATE_BADGE[call.state];
   const mode = MODE_BADGE[call.mode];
   const phone = call.direction === "inbound" ? call.from_phone_e164 : call.to_phone_e164;
-  const title = call.lead_name ?? phone ?? (call.mode === "test" ? "Browser test call" : call.direction === "inbound" ? "Unknown caller" : "Call");
+  const title = call.lead_name ?? phone ?? (call.mode === "test" ? testName(call) : call.direction === "inbound" ? "Unknown caller" : "Call");
   const agentName = call.agent_id ? names.get(call.agent_id) : null;
   const at = call.started_at ?? call.created_at;
 
@@ -129,7 +129,15 @@ export function CallView({ call }: { call: CallDetail }) {
         <div role="note" className="mb-5 flex items-start gap-2 rounded-md border border-accent/30 bg-accent-soft/40 px-3 py-2.5 text-[13px] text-ink-2">
           <Info className="mt-0.5 size-4 shrink-0 text-accent" aria-hidden />
           <span>
-            <span className="font-medium">Browser test call — not a real phone call.</span> Someone talked to the published agent through the microphone in the agent editor.
+            {call.channel === "text" ? (
+              <>
+                <span className="font-medium">Test chat — not a real phone call.</span> Someone typed to the published agent in the agent editor.
+              </>
+            ) : (
+              <>
+                <span className="font-medium">Browser test call — not a real phone call.</span> Someone talked to the published agent through the microphone in the agent editor.
+              </>
+            )}
             {call.lead_id ? " The lead's details filled the variables; the lead was not contacted." : ""} Test calls never count in reports.
           </span>
         </div>
@@ -148,7 +156,8 @@ export function CallView({ call }: { call: CallDetail }) {
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="flex min-w-0 flex-col gap-5 lg:col-span-2">
           <TranscriptCard call={call} />
-          {call.state === "completed" || call.latency_summary ? <ResponseTimesCard callId={call.id} summary={call.latency_summary ?? null} simulated={call.mode === "simulated"} /> : null}
+          {/* A typed test chat has no speech, so there are no response times to show. */}
+          {call.channel !== "text" && (call.state === "completed" || call.latency_summary) ? <ResponseTimesCard callId={call.id} summary={call.latency_summary ?? null} simulated={call.mode === "simulated"} /> : null}
           {call.recording_available ? <RecordingCard call={call} /> : null}
         </div>
         <div className="flex flex-col gap-5">

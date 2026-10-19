@@ -7,7 +7,10 @@
  *   server → client  {type:"answer", payload:{sdp, type:"answer", pc_id}}
  *   server → client  {type:"error", payload:{message}}
  *   server → client  {type:"call-ended", payload:{reason}}
- * The server's own candidates arrive inside the answer SDP.
+ *   server → client  {type:"rtf-…", payload, node_id?, node_name?}  live conversation feedback
+ * The server's own candidates arrive inside the answer SDP. Feedback events (transcripts,
+ * agent text, response times, tools, steps) are pushed on the same socket while the call
+ * runs; see features/voice/test-transcript-model.ts for their shapes.
  */
 
 export type CallState = "idle" | "requesting-mic" | "connecting" | "live" | "ended" | "failed";
@@ -17,10 +20,20 @@ export interface CallSession {
   ice_servers: { urls: string | string[]; username?: string | null; credential?: string | null }[];
 }
 
+/** One live feedback message from the voice service (`type` starts with `rtf-`). */
+export interface FeedbackMessage {
+  type: string;
+  payload?: Record<string, unknown>;
+  node_id?: string | null;
+  node_name?: string | null;
+}
+
 export interface CallEvents {
   onState: (state: CallState, detail?: string) => void;
   onLocalStream?: (stream: MediaStream) => void;
   onRemoteStream?: (stream: MediaStream) => void;
+  /** Live conversation feedback, in arrival order. */
+  onFeedback?: (message: FeedbackMessage) => void;
 }
 
 export interface CallDeps {
@@ -130,6 +143,10 @@ export class BrowserCall {
     try {
       msg = JSON.parse(raw) as typeof msg;
     } catch {
+      return;
+    }
+    if (typeof msg.type === "string" && msg.type.startsWith("rtf-")) {
+      if (this.state !== "ended" && this.state !== "failed") this.events.onFeedback?.(msg as FeedbackMessage);
       return;
     }
     if (msg.type === "answer" && msg.payload?.sdp && this.pc) {
