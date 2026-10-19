@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.core.config import get_settings
+from app.core.timing import instrument_engine
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
@@ -33,6 +34,7 @@ def get_engine() -> AsyncEngine:
                 }
             },
         )
+        instrument_engine(_engine.sync_engine)
         _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False)
     return _engine
 

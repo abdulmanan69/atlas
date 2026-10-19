@@ -27,6 +27,7 @@ from app.core.exceptions import (
     ValidationFailedError,
 )
 from app.core.permissions import Permission
+from app.db.pagination import page_rows, page_scalars
 from app.models.calls import TERMINAL_STATES, Call, CallState
 from app.models.campaigns import (
     TERMINAL_STATUSES,
@@ -203,13 +204,9 @@ async def list_campaigns(
     stmt = select(Campaign).where(Campaign.organization_id == ctx.org_id)
     if status:
         stmt = stmt.where(Campaign.status == status)
-    total = int(await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
-    rows = await db.execute(
-        stmt.order_by(Campaign.created_at.desc(), Campaign.id)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+    return await page_scalars(
+        db, stmt.order_by(Campaign.created_at.desc(), Campaign.id), page, page_size
     )
-    return list(rows.scalars().all()), total
 
 
 async def get_campaign(db: AsyncSession, ctx: TenantContext, campaign_id: uuid.UUID) -> Campaign:
@@ -602,18 +599,26 @@ async def compute_stats(db: AsyncSession, campaign: Campaign) -> dict[str, Any]:
     )
     leads = {status.value: int(n) for status, n in lead_rows.all()}
     state_rows = await db.execute(
-        select(Call.state, func.count()).where(Call.campaign_id == campaign.id).group_by(Call.state)
+        select(Call.state, func.count())
+        .where(Call.organization_id == campaign.organization_id, Call.campaign_id == campaign.id)
+        .group_by(Call.state)
     )
     by_state = {state.value: int(n) for state, n in state_rows.all()}
     outcome_rows = await db.execute(
         select(Call.outcome, func.count())
-        .where(Call.campaign_id == campaign.id, Call.outcome.is_not(None))
+        .where(
+            Call.organization_id == campaign.organization_id,
+            Call.campaign_id == campaign.id,
+            Call.outcome.is_not(None),
+        )
         .group_by(Call.outcome)
     )
     by_outcome = {str(outcome): int(n) for outcome, n in outcome_rows.all()}
     avg = await db.scalar(
         select(func.avg(Call.duration_seconds)).where(
-            Call.campaign_id == campaign.id, Call.state == CallState.COMPLETED
+            Call.organization_id == campaign.organization_id,
+            Call.campaign_id == campaign.id,
+            Call.state == CallState.COMPLETED,
         )
     )
     finished = sum(by_state.get(s.value, 0) for s in TERMINAL_STATES)
@@ -675,10 +680,7 @@ async def list_campaign_leads(
     )
     if status:
         stmt = stmt.where(CampaignLead.status == status)
-    total = int(await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
-    rows = await db.execute(
-        stmt.order_by(CampaignLead.created_at, CampaignLead.id)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+    rows, total = await page_rows(
+        db, stmt.order_by(CampaignLead.created_at, CampaignLead.id), page, page_size
     )
-    return [(cl, lead) for cl, lead in rows.all()], total
+    return [(cl, lead) for cl, lead in rows], total

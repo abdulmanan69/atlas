@@ -1,4 +1,5 @@
-"""Pure-ASGI middleware: correlation IDs, access logs, body size limit, security headers."""
+"""Pure-ASGI middleware: correlation IDs, access logs, Server-Timing, body size limit,
+security headers, compression exclusions."""
 
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ import uuid
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.logging import api_key_id_ctx, request_id_ctx, tenant_id_ctx
+from app.core.timing import RequestTimings, request_timings_ctx
 
 log = logging.getLogger("atlas.access")
 _VALID_REQUEST_ID = re.compile(r"^[A-Za-z0-9._\-]{8,64}$")
@@ -38,6 +40,8 @@ class RequestContextMiddleware:
         rid_token = request_id_ctx.set(request_id)
         tid_token = tenant_id_ctx.set(None)
         kid_token = api_key_id_ctx.set(None)
+        timings = RequestTimings()
+        timing_token = request_timings_ctx.set(timings)
         started = time.perf_counter()
         status_holder = {"code": 500}
 
@@ -46,6 +50,7 @@ class RequestContextMiddleware:
                 status_holder["code"] = message["status"]
                 headers = list(message.get("headers", []))
                 headers.append((b"x-request-id", request_id.encode()))
+                headers.append((b"server-timing", timings.header()))
                 headers.extend(SECURITY_HEADERS)
                 if self.hsts:
                     headers.append(
@@ -71,6 +76,7 @@ class RequestContextMiddleware:
             request_id_ctx.reset(rid_token)
             tenant_id_ctx.reset(tid_token)
             api_key_id_ctx.reset(kid_token)
+            request_timings_ctx.reset(timing_token)
 
 
 class BodySizeLimitMiddleware:
@@ -120,3 +126,34 @@ async def _reject_413(send: Send) -> None:
         }
     )
     await send({"type": "http.response.body", "body": body})
+
+
+class SkipCompressedMediaMiddleware:
+    """Mark audio/video/image responses as already encoded so GZip leaves them alone.
+
+    Sits inside `GZipMiddleware`: recordings are streamed (often with Range-friendly
+    Content-Length) and are already compressed, so gzipping them only burns CPU.
+    """
+
+    _PREFIXES = (b"audio/", b"video/", b"image/")
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                names = {k.lower(): v for k, v in headers}
+                if b"content-encoding" not in names and names.get(b"content-type", b"").startswith(
+                    self._PREFIXES
+                ):
+                    headers.append((b"content-encoding", b"identity"))
+                    message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)

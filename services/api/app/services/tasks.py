@@ -5,11 +5,12 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import TenantContext
 from app.core.exceptions import NotFoundError, ValidationFailedError
+from app.db.pagination import page_scalars
 from app.models.crm import Activity, ActivityType, ActorType, Task, TaskStatus
 from app.models.identity import Membership
 from app.schemas.crm import TaskCreate, TaskUpdate
@@ -43,13 +44,9 @@ async def list_tasks(
         stmt = stmt.where(Task.assignee_user_id == assignee_user_id)
     if lead_id:
         stmt = stmt.where(Task.lead_id == lead_id)
-    total = int(await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
-    rows = await db.execute(
-        stmt.order_by(Task.due_at.asc().nulls_last(), Task.created_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    )
-    return list(rows.scalars().all()), total
+    # Task.id breaks ties so offset pages never repeat or skip a row.
+    ordered = stmt.order_by(Task.due_at.asc().nulls_last(), Task.created_at.desc(), Task.id)
+    return await page_scalars(db, ordered, page, page_size)
 
 
 async def _get(db: AsyncSession, ctx: TenantContext, task_id: uuid.UUID) -> Task:

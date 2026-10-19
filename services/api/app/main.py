@@ -7,12 +7,17 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.exceptions import install_exception_handlers
 from app.core.logging import configure_logging
-from app.core.middleware import BodySizeLimitMiddleware, RequestContextMiddleware
+from app.core.middleware import (
+    BodySizeLimitMiddleware,
+    RequestContextMiddleware,
+    SkipCompressedMediaMiddleware,
+)
 from app.core.redis import close_redis
 from app.db.session import dispose_engine
 from app.services import jobs
@@ -65,6 +70,9 @@ def create_app() -> FastAPI:
         swagger_ui_parameters={"persistAuthorization": True, "displayRequestDuration": True},
     )
     install_exception_handlers(app)
+    # Compression sits innermost so Server-Timing (outermost) includes the gzip cost.
+    app.add_middleware(SkipCompressedMediaMiddleware)
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -78,7 +86,7 @@ def create_app() -> FastAPI:
             "X-Request-ID",
             "Idempotency-Key",
         ],
-        expose_headers=["X-Request-ID"],
+        expose_headers=["X-Request-ID", "Server-Timing"],
         max_age=600,
     )
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_request_bytes)

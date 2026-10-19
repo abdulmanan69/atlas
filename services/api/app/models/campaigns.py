@@ -128,6 +128,7 @@ class Campaign(UUIDPrimaryKey, Timestamps, TenantScoped, Base):
     __tablename__ = "campaigns"
     __table_args__ = (
         Index("ix_campaigns_org_status", "organization_id", "status"),
+        Index("ix_campaigns_org_created", "organization_id", "created_at"),
         Index("ix_campaigns_status_start", "status", "start_at"),
         CheckConstraint("max_concurrency BETWEEN 1 AND 50", name="max_concurrency_range"),
         CheckConstraint("calls_per_minute BETWEEN 1 AND 60", name="calls_per_minute_range"),
@@ -195,6 +196,7 @@ class CampaignLead(UUIDPrimaryKey, Timestamps, TenantScoped, Base):
         UniqueConstraint("campaign_id", "lead_id"),
         Index("ix_campaign_leads_due", "campaign_id", "status", "next_attempt_at"),
         Index("ix_campaign_leads_org_lead", "organization_id", "lead_id"),
+        Index("ix_campaign_leads_campaign_created", "campaign_id", "created_at"),
     )
 
     campaign_id: Mapped[uuid.UUID] = mapped_column(

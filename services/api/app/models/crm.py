@@ -107,6 +107,8 @@ class Lead(UUIDPrimaryKey, Timestamps, TenantScoped, Base):
         Index("ix_leads_org_owner", "organization_id", "owner_user_id"),
         Index("ix_leads_org_created", "organization_id", "created_at"),
         Index("ix_leads_org_followup", "organization_id", "next_follow_up_at"),
+        Index("ix_leads_org_updated", "organization_id", "updated_at"),
+        Index("ix_leads_org_last_contacted", "organization_id", "last_contacted_at"),
         Index("ix_leads_tags", "tags", postgresql_using="gin"),
         Index(
             "ix_leads_search_trgm",
@@ -195,6 +197,7 @@ class Task(UUIDPrimaryKey, Timestamps, TenantScoped, Base):
     __table_args__ = (
         Index("ix_tasks_org_assignee_status", "organization_id", "assignee_user_id", "status"),
         Index("ix_tasks_org_due", "organization_id", "due_at"),
+        Index("ix_tasks_org_status_due", "organization_id", "status", "due_at"),
     )
 
     lead_id: Mapped[uuid.UUID | None] = mapped_column(

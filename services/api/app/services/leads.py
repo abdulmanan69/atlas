@@ -11,12 +11,13 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import ColumnElement, Select, func, select, update
+from sqlalchemy import ColumnElement, Select, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import TenantContext
 from app.core.exceptions import ConflictError, NotFoundError, ValidationFailedError
 from app.core.phone import InvalidPhoneError, normalize_phone
+from app.db.pagination import page_scalars
 from app.models.crm import (
     Activity,
     ActivityType,
@@ -107,11 +108,7 @@ async def list_leads(
     db: AsyncSession, ctx: TenantContext, f: LeadFilters, sort: LeadSort, page: int, page_size: int
 ) -> tuple[list[Lead], int]:
     base = _apply_filters(_live(ctx.org_id), f)
-    total = int(await db.scalar(select(func.count()).select_from(base.subquery())) or 0)
-    rows = await db.execute(
-        base.order_by(_SORTS[sort], Lead.id).offset((page - 1) * page_size).limit(page_size)
-    )
-    return list(rows.scalars().all()), total
+    return await page_scalars(db, base.order_by(_SORTS[sort], Lead.id), page, page_size)
 
 
 async def get_lead(db: AsyncSession, ctx: TenantContext, lead_id: uuid.UUID) -> Lead:
@@ -431,13 +428,9 @@ async def timeline(
     base = select(Activity).where(
         Activity.organization_id == ctx.org_id, Activity.lead_id == lead_id
     )
-    total = int(await db.scalar(select(func.count()).select_from(base.subquery())) or 0)
-    rows = await db.execute(
-        base.order_by(Activity.occurred_at.desc(), Activity.id)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+    return await page_scalars(
+        db, base.order_by(Activity.occurred_at.desc(), Activity.id), page, page_size
     )
-    return list(rows.scalars().all()), total
 
 
 # ---------------------------------------------------------------------------- CSV
