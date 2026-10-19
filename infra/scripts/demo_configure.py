@@ -203,6 +203,27 @@ def ensure_agent(api: Api) -> dict:
     return agent
 
 
+def browser_only_settings(api: Api, agent: dict) -> None:
+    """The demo agent only takes browser test calls, where there is never an answering
+    machine. Voicemail detection would still ask the language model to classify the
+    caller's first words and wait up to 3 s for it, delaying the first reply (measured).
+    Turn it off for this agent only; phone agents keep their own setting."""
+    # The list endpoint returns a summary; save from the full agent so the config validates.
+    full = api.call("GET", f"/agents/{agent['id']}")
+    config = full.get("config") or {}
+    voicemail = (config.get("call_settings") or {}).get("voicemail") or {}
+    if voicemail.get("enabled") is False:
+        say("voicemail detection already off for the demo agent")
+        return
+    config.setdefault("call_settings", {}).setdefault("voicemail", {})["enabled"] = False
+    try:
+        api.call("PUT", f"/agents/{agent['id']}/config",
+                 {"config": config, "note": "Demo: browser test calls only, voicemail detection off"})
+        say("voicemail detection turned off for the demo agent (browser calls never reach one)")
+    except ApiError as exc:
+        say(f"could not turn off voicemail detection ({exc.status}: {exc.message}); continuing")
+
+
 def phase_finish(api: Api, preset: str, web_url: str) -> int:
     active = apply_preset(api, preset)
     try:
@@ -216,6 +237,7 @@ def phase_finish(api: Api, preset: str, web_url: str) -> int:
         for p in check.get("problems") or []:
             say(f"  - {api.redact(str(p))}")
     agent = ensure_agent(api)
+    browser_only_settings(api, agent)
     try:
         published = api.call("POST", f"/agents/{agent['id']}/publish", {"note": "setup_local_demo"})
         say(f"agent published (version {published.get('published_version')}): "
