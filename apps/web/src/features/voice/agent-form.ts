@@ -1,6 +1,7 @@
 /** Form model for the agent editor, and conversion to/from the API's AgentConfig. */
 import { z } from "zod";
 
+import type { ResponseSpeed } from "@/features/calls/latency-types";
 import { normalizeFlow, type FlowDefinition } from "@/features/voice/flow/types";
 import type { AgentConfig, ServiceChoice } from "@/features/voice/queries";
 
@@ -15,8 +16,46 @@ export function normalizeChoice(c: ServiceChoice | null | undefined): { connecti
 const seconds = (min: number, max: number, what: string) =>
   z.number({ error: `Enter ${what} in seconds` }).min(min, `At least ${min} seconds`).max(max, `At most ${max} seconds`);
 
+type TurnFields = {
+  turn_start: "default" | "min_words";
+  turn_start_min_words: number;
+  turn_stop: "transcription" | "turn_analyzer";
+  smart_turn_stop_seconds: number;
+  idle_timeout_seconds: number;
+};
+
+/** What each response-speed preset compiles to (ADR 0006); mirrored by the API. */
+export const RESPONSE_SPEEDS: { value: ResponseSpeed; label: string; description: string; fields: TurnFields | null }[] = [
+  {
+    value: "snappy",
+    label: "Snappy",
+    description: "Replies as soon as the person pauses. Quick back-and-forth, but may cut in on slow talkers.",
+    fields: { turn_start: "min_words", turn_start_min_words: 1, turn_stop: "transcription", smart_turn_stop_seconds: 0.8, idle_timeout_seconds: 8 },
+  },
+  {
+    value: "balanced",
+    label: "Balanced",
+    description: "Waits for a short pause and ignores a stray “mm-hm”. Right for most calls.",
+    fields: { turn_start: "min_words", turn_start_min_words: 2, turn_stop: "transcription", smart_turn_stop_seconds: 1.5, idle_timeout_seconds: 10 },
+  },
+  {
+    value: "patient",
+    label: "Patient",
+    description: "Waits until the sentence sounds finished. Fewer interruptions, slower replies.",
+    fields: { turn_start: "default", turn_start_min_words: 2, turn_stop: "turn_analyzer", smart_turn_stop_seconds: 2.5, idle_timeout_seconds: 15 },
+  },
+  { value: "custom", label: "Custom", description: "Set turn-taking and the silence limit yourself.", fields: null },
+];
+
+export function speedFields(speed: ResponseSpeed): TurnFields | null {
+  return RESPONSE_SPEEDS.find((s) => s.value === speed)?.fields ?? null;
+}
+
 export const callSettingsSchema = z
   .object({
+    response_speed: z.enum(["snappy", "balanced", "patient", "custom"]),
+    context_compaction: z.boolean(),
+    tts_cache: z.boolean(),
     max_call_seconds: seconds(30, 1200, "the longest call").int("Whole seconds"),
     idle_timeout_seconds: seconds(3, 60, "the silence limit").int("Whole seconds"),
     turn_start: z.enum(["default", "min_words"]),
@@ -89,6 +128,16 @@ export const agentFormSchema = z
 export type AgentForm = z.infer<typeof agentFormSchema>;
 export type CallSettingsForm = z.infer<typeof callSettingsSchema>;
 
+/**
+ * Mirrors the API: settings saved before presets existed (turn fields present, no
+ * response_speed) are read as Custom, so their explicit turn-taking keeps working.
+ */
+export function storedSpeed(cs: AgentConfig["call_settings"]): ResponseSpeed {
+  if (cs?.response_speed) return cs.response_speed;
+  const legacy = cs && ["turn_start", "turn_start_min_words", "turn_stop", "smart_turn_stop_seconds"].some((k) => (cs as Record<string, unknown>)[k] !== undefined);
+  return legacy ? "custom" : "balanced";
+}
+
 export function toForm(c: AgentConfig): AgentForm {
   const cs = c.call_settings;
   return {
@@ -96,6 +145,9 @@ export function toForm(c: AgentConfig): AgentForm {
     flow: c.mode === "flow" ? normalizeFlow(c.flow) : null,
     global_rules: c.global_rules ?? "",
     call_settings: {
+      response_speed: storedSpeed(cs),
+      context_compaction: cs?.context_compaction ?? true,
+      tts_cache: cs?.tts_cache ?? false,
       max_call_seconds: cs?.max_call_seconds ?? 300,
       idle_timeout_seconds: cs?.idle_timeout_seconds ?? 10,
       turn_start: cs?.turn_start ?? "default",

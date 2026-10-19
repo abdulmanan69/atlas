@@ -1,4 +1,4 @@
-import { issuesByTarget, pathFunctionName, validateFlow } from "@/features/voice/flow/validate";
+import { estimateTokens, issuesByTarget, pathFunctionName, PROMPT_BUDGET, validateFlow } from "@/features/voice/flow/validate";
 import { uuid, type FlowDefinition, type FlowNode, type FlowPath, type FlowValidation, type NodeKind } from "@/features/voice/flow/types";
 
 function node(kind: NodeKind, name: string, patch: Partial<FlowNode> = {}): FlowNode {
@@ -147,5 +147,25 @@ describe("issuesByTarget", () => {
     ]);
     expect(grouped.get("node:a")).toHaveLength(2);
     expect(grouped.get("path:a")).toHaveLength(1);
+  });
+});
+
+describe("prompt budget", () => {
+  it("estimates about four characters per token", () => {
+    expect(estimateTokens("")).toBe(0);
+    expect(estimateTokens("   ")).toBe(0);
+    expect(estimateTokens("abcd")).toBe(1);
+    expect(estimateTokens("abcde")).toBe(2);
+  });
+
+  it("warns about a long node prompt and long global rules, without blocking publishing", () => {
+    const { flow, step } = linear();
+    step.prompt = "x".repeat(PROMPT_BUDGET.node * 4 + 4);
+    const v = validateFlow(flow, {}, "r".repeat(PROMPT_BUDGET.globalRules * 4 + 4));
+    expect(v.valid).toBe(true);
+    const budget = (x: FlowValidation) => x.warnings.filter((i) => i.field === "prompt" || i.field === "global_rules");
+    expect(budget(v).map((i) => `${i.target}:${i.id}:${i.field}`)).toEqual([`node:${step.id}:prompt`, "flow::global_rules"]);
+    expect(budget(v)[0]?.message).toContain("1,501 tokens");
+    expect(budget(validateFlow(linear().flow, {}, "short rules"))).toHaveLength(0);
   });
 });

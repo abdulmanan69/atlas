@@ -324,6 +324,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ai-settings/latency-guide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Typical provider latencies (as published by each provider) and fast presets */
+        get: operations["latency_guide_api_v1_ai_settings_latency_guide_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai-settings/pipeline-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Platform-wide provider and response latency since the voice service started */
+        get: operations["pipeline_health_api_v1_ai_settings_pipeline_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai-settings/presets/{preset_id}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Use a preset's providers for calls, with the organization's existing connections */
+        post: operations["apply_preset_api_v1_ai_settings_presets__preset_id__apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/ai/catalog": {
         parameters: {
             query?: never;
@@ -660,6 +711,23 @@ export interface paths {
         };
         /** What happened to this call, in order */
         get: operations["call_events_api_v1_calls__call_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/calls/{call_id}/latency": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Response times per turn (404 when the call was not measured) */
+        get: operations["call_latency_api_v1_calls__call_id__latency_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1973,6 +2041,11 @@ export interface components {
              * @description Answered calls with outcome 'qualified'
              */
             qualified: number;
+            /**
+             * Response P50 Ms
+             * @description Median response time over every measured turn of this agent's real calls (simulated calls excluded); null when nothing was measured
+             */
+            response_p50_ms?: number | null;
         };
         /**
          * AgentConfig
@@ -2403,6 +2476,8 @@ export interface components {
             id: string;
             /** Initiated By User Id */
             initiated_by_user_id: string | null;
+            /** @description Response times measured on the call (or synthetic for a dry run); null when not measured. Per-turn detail: GET /calls/{id}/latency */
+            latency_summary?: components["schemas"]["LatencySummary"] | null;
             /** Lead Id */
             lead_id: string | null;
             /**
@@ -2468,6 +2543,13 @@ export interface components {
             occurred_at: string;
             /** Type */
             type: string;
+        };
+        /** CallLatencyDetail */
+        CallLatencyDetail: {
+            summary: components["schemas"]["LatencySummary"];
+            thresholds?: components["schemas"]["LatencyThresholds"];
+            /** Turns */
+            turns: components["schemas"]["LatencyTurn"][];
         };
         /**
          * CallMode
@@ -2548,6 +2630,12 @@ export interface components {
         CallSettings: {
             ambient?: components["schemas"]["AmbientSettings"];
             /**
+             * Context Compaction
+             * @description Summarise older conversation so long calls keep answering quickly
+             * @default true
+             */
+            context_compaction?: boolean;
+            /**
              * Idle Timeout Seconds
              * @description Hang up after this long without the person talking
              * @default 10
@@ -2564,10 +2652,23 @@ export interface components {
              */
             max_call_seconds?: number;
             /**
+             * Response Speed
+             * @description How quickly the agent takes its turn. Presets set the turn-taking fields below; 'custom' uses them as given. Settings saved before presets existed (turn fields present, no response_speed) are read as 'custom'.
+             * @default balanced
+             * @enum {string}
+             */
+            response_speed?: "snappy" | "balanced" | "patient" | "custom";
+            /**
              * Smart Turn Stop Seconds
              * @default 2
              */
             smart_turn_stop_seconds?: number;
+            /**
+             * Tts Cache
+             * @description Reuse synthesised audio for repeated phrases. Only takes effect with a text-to-speech provider that supports it (see the latency guide)
+             * @default false
+             */
+            tts_cache?: boolean;
             /**
              * Turn Start
              * @default default
@@ -2769,6 +2870,12 @@ export interface components {
              * @description Sum of per-call cost estimates; null when no call reported a cost
              */
             estimated_cost: number | null;
+            /**
+             * Measured Calls
+             * @description Real calls in scope with at least one measured turn
+             * @default 0
+             */
+            measured_calls?: number;
             mode_split: components["schemas"]["ModeSplit"];
             /**
              * Opted Out
@@ -2787,6 +2894,16 @@ export interface components {
             qualification_rate: number | null;
             /** Range Days */
             range_days: number;
+            /**
+             * Response P50 Ms
+             * @description Median time from the person finishing speaking to the agent starting to speak, over every measured turn of real calls in scope (simulated calls never count); null when nothing was measured
+             */
+            response_p50_ms?: number | null;
+            /**
+             * Response P95 Ms
+             * @description 95th percentile of the same turns; null when none
+             */
+            response_p95_ms?: number | null;
             /**
              * Total Duration Seconds
              * @description Sum of durations across every call; 0 if none
@@ -3449,6 +3566,21 @@ export interface components {
         };
         /** FlowIssue */
         FlowIssue: {
+            /**
+             * Budget
+             * @description prompt_long / global_rules_long: the token budget exceeded
+             */
+            budget?: number | null;
+            /**
+             * Code
+             * @description Machine-readable kind for some issues, e.g. prompt_long, global_rules_long
+             */
+            code?: string | null;
+            /**
+             * Estimated Tokens
+             * @description prompt_long / global_rules_long: estimated prompt tokens
+             */
+            estimated_tokens?: number | null;
             /** Field */
             field?: string | null;
             /**
@@ -3695,6 +3827,205 @@ export interface components {
             /** Revoked At */
             revoked_at: string | null;
             role: components["schemas"]["Role"];
+        };
+        /** LatencyGuide */
+        LatencyGuide: {
+            /** Disclaimer */
+            disclaimer: string;
+            /** Presets */
+            presets: components["schemas"]["LatencyPreset"][];
+            /** Providers */
+            providers: components["schemas"]["LatencyGuideProvider"][];
+            /**
+             * Tts Cache Providers
+             * @description Text-to-speech providers for which the speech cache can be turned on
+             */
+            tts_cache_providers: string[];
+        };
+        /** LatencyGuideProvider */
+        LatencyGuideProvider: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "stt" | "llm" | "tts";
+            /**
+             * Model Hint
+             * @description Model or option the figure refers to
+             */
+            model_hint: string | null;
+            /** Note */
+            note: string;
+            /**
+             * Provider
+             * @description Provider id, as in the provider catalog
+             */
+            provider: string;
+            /**
+             * Streaming
+             * @description Results stream as they are produced
+             */
+            streaming: boolean;
+            /**
+             * Turn Aware
+             * @description Speech-to-text detects the end of the person's turn itself
+             */
+            turn_aware: boolean;
+            /**
+             * Typical Ms
+             * @description Typical latency as stated by the provider (not measured by ATLAS); null when the provider states no figure or it depends on your hardware
+             */
+            typical_ms: number | null;
+        };
+        /** LatencyPreset */
+        LatencyPreset: {
+            choices: components["schemas"]["PresetChoices"];
+            /** Description */
+            description: string;
+            /** Id */
+            id: string;
+            /**
+             * Requires
+             * @description Provider ids that need a connection first
+             */
+            requires: string[];
+            /** Title */
+            title: string;
+        };
+        /**
+         * LatencySummary
+         * @description One call's response times. Values are milliseconds; null when not measured.
+         */
+        LatencySummary: {
+            /**
+             * First Response Ms
+             * @description Response time of the first answered turn in the call
+             */
+            first_response_ms: number | null;
+            /**
+             * Interruptions
+             * @description Times the person started speaking over the agent
+             */
+            interruptions: number;
+            /**
+             * Llm Ttfb P50 Ms
+             * @description Median language-model time to first token
+             */
+            llm_ttfb_p50_ms: number | null;
+            /**
+             * Measured Turns
+             * @description Turns with a measured response time
+             */
+            measured_turns: number;
+            /**
+             * Response Max Ms
+             * @description Slowest response in the call
+             */
+            response_max_ms: number | null;
+            /**
+             * Response P50 Ms
+             * @description Median time from the person finishing speaking to the agent starting to speak
+             */
+            response_p50_ms: number | null;
+            /**
+             * Response P95 Ms
+             * @description 95th percentile response time
+             */
+            response_p95_ms: number | null;
+            /**
+             * Slow Turns
+             * @description Turns whose response took longer than 1500 ms
+             */
+            slow_turns: number;
+            /**
+             * Source
+             * @description runtime = measured on a real call; simulated = synthetic dry-run values
+             * @enum {string}
+             */
+            source: "runtime" | "simulated";
+            /**
+             * Stt Ttfb P50 Ms
+             * @description Median speech-to-text time to first result
+             */
+            stt_ttfb_p50_ms: number | null;
+            /**
+             * Tool Time Ms
+             * @description Total time spent in actions and knowledge lookups
+             */
+            tool_time_ms: number;
+            /**
+             * Tts Ttfb P50 Ms
+             * @description Median text-to-speech time to first audio
+             */
+            tts_ttfb_p50_ms: number | null;
+            /**
+             * Turns
+             * @description Conversation turns seen in the call
+             */
+            turns: number;
+        };
+        /** LatencyThresholds */
+        LatencyThresholds: {
+            /**
+             * Slow Ms
+             * @default 1500
+             */
+            slow_ms?: number;
+            /**
+             * Target Ms
+             * @default 800
+             */
+            target_ms?: number;
+        };
+        /** LatencyTool */
+        LatencyTool: {
+            /** Duration Ms */
+            duration_ms: number | null;
+            /**
+             * Kind
+             * @description knowledge = document lookup; action = an ATLAS action
+             * @enum {string}
+             */
+            kind: "knowledge" | "action";
+            /** Name */
+            name: string;
+        };
+        /** LatencyTurn */
+        LatencyTurn: {
+            /** Agent Ended At */
+            agent_ended_at: string | null;
+            /** Agent Started At */
+            agent_started_at: string | null;
+            /** Agent Text */
+            agent_text: string | null;
+            /** Llm Ttfb Ms */
+            llm_ttfb_ms: number | null;
+            /** Node Name */
+            node_name: string | null;
+            /**
+             * Response Ms
+             * @description Person stops speaking → agent starts speaking, in milliseconds
+             */
+            response_ms: number | null;
+            /**
+             * Slow
+             * @description response_ms above 1500
+             */
+            slow: boolean;
+            /** Stt Ttfb Ms */
+            stt_ttfb_ms: number | null;
+            /** Tools */
+            tools?: components["schemas"]["LatencyTool"][];
+            /** Tts Ttfb Ms */
+            tts_ttfb_ms: number | null;
+            /** Turn */
+            turn: number;
+            /** User Ended At */
+            user_ended_at: string | null;
+            /** User Started At */
+            user_started_at: string | null;
+            /** User Text */
+            user_text: string | null;
         };
         /**
          * LeadCreate
@@ -4248,6 +4579,46 @@ export interface components {
              */
             total: number;
         };
+        /** PipelineHealth */
+        PipelineHealth: {
+            /**
+             * Available
+             * @description False when metrics are not enabled or not reachable
+             */
+            available: boolean;
+            /** Note */
+            note: string;
+            response?: components["schemas"]["ResponseLatency"] | null;
+            /**
+             * Scope
+             * @default platform
+             * @constant
+             */
+            scope?: "platform";
+            /** Services */
+            services?: components["schemas"]["ServiceLatency"][];
+            /**
+             * Window
+             * @default process lifetime
+             * @constant
+             */
+            window?: "process lifetime";
+        };
+        /** PresetChoice */
+        PresetChoice: {
+            /** Provider */
+            provider: string;
+            /** Settings */
+            settings?: {
+                [key: string]: unknown;
+            };
+        };
+        /** PresetChoices */
+        PresetChoices: {
+            llm: components["schemas"]["PresetChoice"];
+            stt: components["schemas"]["PresetChoice"];
+            tts: components["schemas"]["PresetChoice"];
+        };
         /**
          * PresetParameter
          * @description A value ATLAS fills in from the call context, never asked of the model.
@@ -4448,6 +4819,15 @@ export interface components {
             /** Version */
             version: string;
         };
+        /** ResponseLatency */
+        ResponseLatency: {
+            /** P50 Ms */
+            p50_ms: number | null;
+            /** P95 Ms */
+            p95_ms: number | null;
+            /** Samples */
+            samples: number;
+        };
         /** RetryPolicy */
         RetryPolicy: {
             /**
@@ -4516,6 +4896,25 @@ export interface components {
             settings?: {
                 [key: string]: string | number | boolean | null;
             };
+        };
+        /** ServiceLatency */
+        ServiceLatency: {
+            /**
+             * Kind
+             * @description stt, llm or tts
+             */
+            kind?: string | null;
+            /** P50 Ms */
+            p50_ms: number | null;
+            /** P95 Ms */
+            p95_ms: number | null;
+            /** Samples */
+            samples: number;
+            /**
+             * Service
+             * @description Service class reported by the voice service
+             */
+            service: string;
         };
         /** SessionOut */
         SessionOut: {
@@ -6389,6 +6788,185 @@ export interface operations {
             };
         };
     };
+    latency_guide_api_v1_ai_settings_latency_guide_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LatencyGuide"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    pipeline_health_api_v1_ai_settings_pipeline_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineHealth"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    apply_preset_api_v1_ai_settings_presets__preset_id__apply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                preset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSelection"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required connection is missing; error.details.missing lists the provider ids to connect first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     get_catalog_api_v1_ai_catalog_get: {
         parameters: {
             query?: never;
@@ -7764,6 +8342,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CallEventOut"][];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    call_latency_api_v1_calls__call_id__latency_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                call_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallLatencyDetail"];
                 };
             };
             /** @description Missing or invalid credentials */

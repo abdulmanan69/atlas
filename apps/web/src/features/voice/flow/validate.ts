@@ -10,6 +10,25 @@ export function pathFunctionName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, "_");
 }
 
+/** Estimated-token budgets past which a prompt noticeably slows each reply (ADR 0006). */
+export const PROMPT_BUDGET = { node: 1500, globalRules: 800 } as const;
+
+/** Rough token count: about four characters per token for English text, as the API estimates it. */
+export function estimateTokens(text: string): number {
+  const t = text.trim();
+  return t ? Math.ceil(t.length / 4) : 0;
+}
+
+const n0 = (n: number) => n.toLocaleString("en-US");
+
+export function promptLongMessage(tokens: number): string {
+  return `Long prompt: about ${n0(tokens)} tokens, over the ${n0(PROMPT_BUDGET.node)} budget. The model rereads it before every reply here, so replies start later.`;
+}
+
+export function globalRulesLongMessage(tokens: number): string {
+  return `Global rules are about ${n0(tokens)} tokens, over the ${n0(PROMPT_BUDGET.globalRules)} budget. They are read before every reply, so trimming them speeds up the whole call.`;
+}
+
 const issue = (target: IssueTarget, id: string, field: string | null, message: string): FlowIssue => ({ target, id, field, message });
 
 function blankPromptMessage(node: FlowNode): string {
@@ -54,7 +73,7 @@ function backEdges(startId: string, outgoing: Map<string, FlowPath[]>): FlowPath
  * @param actionNames action id → function name, for the actions attached to nodes;
  *   a path cannot share a function name with an action on its source node.
  */
-export function validateFlow(flow: FlowDefinition, actionNames: Record<string, string> = {}): FlowValidation {
+export function validateFlow(flow: FlowDefinition, actionNames: Record<string, string> = {}, globalRules = ""): FlowValidation {
   const errors: FlowIssue[] = [];
   const warnings: FlowIssue[] = [];
   const nodes = new Map(flow.nodes.map((n) => [n.id, n]));
@@ -116,6 +135,13 @@ export function validateFlow(flow: FlowDefinition, actionNames: Record<string, s
     const targets = new Set((outgoing.get(n.id) ?? []).map((p) => p.to_node));
     if (targets.size === 1) warnings.push(issue("node", n.id, "paths", "Single path: every path leads to the same place. Consider merging this step into the next one."));
   }
+
+  for (const n of flow.nodes) {
+    const tokens = estimateTokens(n.prompt);
+    if (tokens > PROMPT_BUDGET.node) warnings.push(issue("node", n.id, "prompt", promptLongMessage(tokens)));
+  }
+  const ruleTokens = estimateTokens(globalRules);
+  if (ruleTokens > PROMPT_BUDGET.globalRules) warnings.push(issue("flow", "", "global_rules", globalRulesLongMessage(ruleTokens)));
 
   return { valid: errors.length === 0, errors, warnings };
 }

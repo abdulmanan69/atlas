@@ -10,6 +10,7 @@ import { Segmented } from "@/components/ui/segmented";
 import { Select, SelectItem } from "@/components/ui/select";
 import { Table, Td, Th, Tr } from "@/components/ui/table";
 import { MODE_BADGE, outcomeLabel, outcomeTone, type ModeChoice } from "@/features/calls/calls-model";
+import { formatMs, responseTone } from "@/features/calls/latency-model";
 import { useAgents, useCallsOverview, useCampaigns, type CallsOverview } from "@/features/queries";
 import { byAgentCsv, dailyPoints, downloadText, METRICS, RANGES, rate, type Range } from "@/features/reports/reports-model";
 import { formatDate, formatDuration, formatNumber, formatPercent } from "@/lib/format";
@@ -118,12 +119,12 @@ export default function ReportsPage() {
 
 function KpiStrip({ data }: { data: CallsOverview | undefined }) {
   return (
-    <Card className="grid grid-cols-2 divide-line sm:grid-cols-3 lg:grid-cols-6 lg:divide-x [&>*]:border-line">
+    <Card className="grid grid-cols-2 divide-line sm:grid-cols-4 xl:grid-cols-8 xl:divide-x [&>*]:border-line">
       {data
         ? METRICS.map((m) => {
             const undefinedValue = m.undefinedFor?.(data) ?? false;
             return (
-              <div key={m.id} className="border-b px-5 py-4 lg:border-b-0">
+              <div key={m.id} className="border-b px-5 py-4 xl:border-b-0">
                 <Tooltip content={m.definition}>
                   <div className="eyebrow inline-flex cursor-help items-center gap-1">
                     {m.label}
@@ -131,11 +132,11 @@ function KpiStrip({ data }: { data: CallsOverview | undefined }) {
                   </div>
                 </Tooltip>
                 <div className={cn("mt-2 font-mono text-[28px] font-medium leading-none tracking-tight", undefinedValue ? "text-faint" : "text-ink")}>{m.value(data)}</div>
-                <div className="mt-2 text-[12px] text-muted">{undefinedValue ? "Not yet measurable" : m.id === "attempted" ? `${formatNumber(data.totals.in_progress)} still in progress` : m.id === "answered" ? `${formatNumber(data.totals.qualified)} qualified` : m.id === "estimated_cost" ? "Reported by the voice service" : `Over ${formatNumber(data.totals.attempted)} attempted`}</div>
+                <div className="mt-2 text-[12px] text-muted">{m.note ? m.note(data) : undefinedValue ? "Not yet measurable" : m.id === "attempted" ? `${formatNumber(data.totals.in_progress)} still in progress` : m.id === "answered" ? `${formatNumber(data.totals.qualified)} qualified` : m.id === "estimated_cost" ? "Reported by the voice service" : `Over ${formatNumber(data.totals.attempted)} attempted`}</div>
               </div>
             );
           })
-        : Array.from({ length: 6 }, (_, i) => (
+        : Array.from({ length: METRICS.length }, (_, i) => (
             <div key={i} className="px-5 py-4">
               <Skeleton className="h-3 w-20" />
               <Skeleton className="mt-3 h-7 w-16" />
@@ -241,6 +242,11 @@ function AgentsCard({ data, className }: { data: CallsOverview | undefined; clas
               <Th className="text-right">Answer rate</Th>
               <Th className="text-right">Qualified</Th>
               <Th className="text-right">Avg. duration</Th>
+              <Th className="text-right">
+                <Tooltip content="Median time from the person going quiet to the agent speaking, over this agent's measured calls.">
+                  <span className="cursor-help">Response</span>
+                </Tooltip>
+              </Th>
             </tr>
           </thead>
           <tbody>
@@ -261,11 +267,12 @@ function AgentsCard({ data, className }: { data: CallsOverview | undefined; clas
                     <Td className="text-right font-mono">{formatPercent(rate(r.answered, r.attempted))}</Td>
                     <Td className="text-right font-mono">{formatNumber(r.qualified)}</Td>
                     <Td className={cn("text-right font-mono", r.avg_duration_seconds === null && "text-faint")}>{formatDuration(r.avg_duration_seconds)}</Td>
+                    <Td className={cn("text-right font-mono", RESPONSE_TONE[responseTone(r.response_p50_ms)])}>{formatMs(r.response_p50_ms)}</Td>
                   </Tr>
                 ))
               : Array.from({ length: 3 }, (_, i) => (
                   <tr key={i}>
-                    <Td colSpan={6}>
+                    <Td colSpan={7}>
                       <Skeleton className="h-7" />
                     </Td>
                   </tr>
@@ -276,6 +283,8 @@ function AgentsCard({ data, className }: { data: CallsOverview | undefined; clas
     </Card>
   );
 }
+
+const RESPONSE_TONE = { good: "text-success", warn: "text-warn", bad: "text-danger", neutral: "text-faint" } as const;
 
 function ModeCard({ data }: { data: CallsOverview | undefined }) {
   const split = data?.mode_split;

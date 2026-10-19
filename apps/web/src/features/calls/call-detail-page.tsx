@@ -8,6 +8,7 @@ import { EmptyState, ErrorState } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Badge, Card, CardHeader, Skeleton, Tooltip } from "@/components/ui/primitives";
 import { eventLabel, flattenUsage, MODE_BADGE, outcomeLabel, outcomeTone, parseTranscript, STATE_BADGE, TERMINAL_STATES } from "@/features/calls/calls-model";
+import { ResponseTimesCard } from "@/features/calls/response-times-card";
 import { qk, useAgentNames, useCall, useCallEvents, useOrgId, type CallDetail } from "@/features/queries";
 import { api, errorMessage, unwrap } from "@/lib/api";
 import { formatCost, formatDateTime, formatDuration, formatRelative } from "@/lib/format";
@@ -133,6 +134,7 @@ export function CallView({ call }: { call: CallDetail }) {
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="flex min-w-0 flex-col gap-5 lg:col-span-2">
           <TranscriptCard call={call} />
+          {call.state === "completed" || call.latency_summary ? <ResponseTimesCard callId={call.id} summary={call.latency_summary ?? null} simulated={call.mode === "simulated"} /> : null}
           {call.recording_available ? <RecordingCard call={call} /> : null}
         </div>
         <div className="flex flex-col gap-5">

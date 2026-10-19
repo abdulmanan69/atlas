@@ -3,6 +3,7 @@
  * formatting, so tooltips and tables never disagree), null-safe rates, and the client-side
  * CSV export. Component-free.
  */
+import { formatMs } from "@/features/calls/latency-model";
 import type { CallsOverview } from "@/features/queries";
 import { formatCost, formatDuration, formatNumber, formatPercent } from "@/lib/format";
 
@@ -17,6 +18,15 @@ export interface Metric {
   value: (o: CallsOverview) => string;
   /** `true` when the metric is undefined (null) rather than zero. */
   undefinedFor?: (o: CallsOverview) => boolean;
+  /** The line under the value, when it is more specific than the default denominator. */
+  note?: (o: CallsOverview) => string;
+}
+
+/** "Over 12 measured calls": response times only count calls whose turns were timed. */
+export function measuredNote(o: CallsOverview): string {
+  const n = o.measured_calls ?? 0;
+  if (n === 0) return "No measured calls yet";
+  return `Over ${formatNumber(n)} measured ${n === 1 ? "call" : "calls"}`;
 }
 
 /** Null means "not computable" (no denominator) and is shown as "—"; zero is a real zero. */
@@ -51,6 +61,22 @@ export const METRICS: Metric[] = [
     value: (o) => formatCost(o.estimated_cost),
     undefinedFor: (o) => o.estimated_cost === null,
   },
+  {
+    id: "response_p50",
+    label: "Median response",
+    definition: "Half of the agent's replies started faster than this, from the person going quiet to the agent speaking. Only calls with timed turns count; simulated timings never mix in.",
+    value: (o) => formatMs(o.response_p50_ms),
+    undefinedFor: (o) => o.response_p50_ms === null || o.response_p50_ms === undefined,
+    note: measuredNote,
+  },
+  {
+    id: "response_p95",
+    label: "p95 response",
+    definition: "19 out of 20 replies started faster than this: how slow the slower moments felt. Measured on the same calls as the median.",
+    value: (o) => formatMs(o.response_p95_ms),
+    undefinedFor: (o) => o.response_p95_ms === null || o.response_p95_ms === undefined,
+    note: measuredNote,
+  },
 ];
 
 export function rate(numerator: number, denominator: number): number | null {
@@ -72,11 +98,11 @@ export function toCsv(headers: string[], rows: (string | number | null | undefin
 /** The by-agent table as CSV. Rates are plain ratios (0–1) with 4 decimals; blanks mean undefined. */
 export function byAgentCsv(rows: CallsOverview["by_agent"]): string {
   return toCsv(
-    ["agent_id", "agent", "attempted", "answered", "answer_rate", "qualified", "qualification_rate", "avg_duration_seconds"],
+    ["agent_id", "agent", "attempted", "answered", "answer_rate", "qualified", "qualification_rate", "avg_duration_seconds", "response_p50_ms"],
     rows.map((r) => {
       const ar = rate(r.answered, r.attempted);
       const qr = rate(r.qualified, r.answered);
-      return [r.agent_id ?? "", r.agent_name ?? "No agent", r.attempted, r.answered, ar === null ? "" : ar.toFixed(4), r.qualified, qr === null ? "" : qr.toFixed(4), r.avg_duration_seconds ?? ""];
+      return [r.agent_id ?? "", r.agent_name ?? "No agent", r.attempted, r.answered, ar === null ? "" : ar.toFixed(4), r.qualified, qr === null ? "" : qr.toFixed(4), r.avg_duration_seconds ?? "", r.response_p50_ms ?? ""];
     }),
   );
 }

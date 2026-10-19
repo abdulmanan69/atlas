@@ -18,8 +18,9 @@ import { nodeFormSchema, pathFormSchema, type NodeForm, type PathForm } from "@/
 import type { EditorAction, EditorState } from "@/features/voice/flow/model";
 import { ActionsPicker, KnowledgePicker } from "@/features/voice/flow/pickers";
 import { useCompiledPrompt } from "@/features/voice/flow/queries";
+import { TokenMeter } from "@/features/voice/flow/token-meter";
 import { KIND_LABEL, LIMITS, type FlowIssue, type FlowNode, type FlowPath } from "@/features/voice/flow/types";
-import { pathFunctionName, targetKey } from "@/features/voice/flow/validate";
+import { estimateTokens, pathFunctionName, PROMPT_BUDGET, targetKey } from "@/features/voice/flow/validate";
 import { cn } from "@/lib/utils";
 
 export interface InspectorProps {
@@ -219,6 +220,7 @@ function NodeInspector({ node, issues, warningIssues, dispatch, readOnly, global
         >
           <Textarea rows={isEnd ? 4 : 9} className="min-h-28" {...form.register("prompt")} {...track("prompt")} aria-invalid={issues.some((i) => i.field === "prompt") || undefined} />
         </Field>
+        <TokenMeter text={form.watch("prompt")} budget={PROMPT_BUDGET.node} extra={rules && !isEnd && form.watch("use_global_rules") ? estimateTokens(rules) : 0} className="-mt-3" />
         <VariableChips disabled={readOnly} onInsert={(v) => insert(v, "prompt")} />
 
         <div className="flex flex-col gap-2">
@@ -415,6 +417,7 @@ function FlowSummary({ state, errors, warnings, globalRules, onEditGlobalRules, 
   const errorCount = [...errors.values()].reduce((a, b) => a + b.length, 0);
   const warningCount = [...warnings.values()].reduce((a, b) => a + b.length, 0);
   const rules = globalRules.trim();
+  const flowWarnings = warnings.get(targetKey("flow", "")) ?? [];
   return (
     <div className="flex flex-col gap-5">
       <div>
@@ -438,6 +441,8 @@ function FlowSummary({ state, errors, warnings, globalRules, onEditGlobalRules, 
       </p>
       <Section title="Global rules" hint="Read before every Start and Step that applies them. Persona, tone, language, what never to say.">
         {rules ? <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-surface-2 px-2.5 py-2 font-mono text-[11.5px] leading-relaxed text-ink-2">{rules}</pre> : <p className="text-[12px] text-faint">None yet. Without them, each node must repeat persona and tone.</p>}
+        {rules ? <TokenMeter text={rules} budget={PROMPT_BUDGET.globalRules} what="global rules" /> : null}
+        <IssueList issues={[]} warningIssues={flowWarnings.filter((i) => i.field === "global_rules")} />
         <Button size="sm" className="self-start" onClick={onEditGlobalRules} disabled={readOnly && !rules}>
           {readOnly ? "View global rules" : rules ? "Edit global rules" : "Add global rules"}
         </Button>

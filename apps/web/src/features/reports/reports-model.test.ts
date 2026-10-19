@@ -29,7 +29,7 @@ const busy: CallsOverview = {
     { date: "2026-10-18", attempted: 3, answered: 2 },
   ],
   by_agent: [
-    { agent_id: "a1", agent_name: "Qualifier, \"Q\"", attempted: 4, answered: 3, qualified: 1, avg_duration_seconds: 60 },
+    { agent_id: "a1", agent_name: "Qualifier, \"Q\"", attempted: 4, answered: 3, qualified: 1, avg_duration_seconds: 60, response_p50_ms: 720 },
     { agent_id: null, agent_name: null, attempted: 1, answered: 0, qualified: 0, avg_duration_seconds: null },
   ],
 };
@@ -55,8 +55,18 @@ describe("metric formatting: null is not zero", () => {
   });
 
   it("every metric carries a definition for its tooltip", () => {
-    expect(METRICS).toHaveLength(6);
+    expect(METRICS).toHaveLength(8);
     for (const m of METRICS) expect(m.definition.length).toBeGreaterThan(20);
+  });
+
+  it("response times are undefined until a call is measured, and name their denominator", () => {
+    expect(metric("response_p50").value(empty)).toBe("—");
+    expect(metric("response_p50").undefinedFor?.(empty)).toBe(true);
+    expect(metric("response_p95").note?.(empty)).toBe("No measured calls yet");
+    const measured = { ...busy, response_p50_ms: 640, response_p95_ms: 1820, measured_calls: 3 };
+    expect(metric("response_p50").value(measured)).toBe("640 ms");
+    expect(metric("response_p95").value(measured)).toBe("1.8 s");
+    expect(metric("response_p50").note?.(measured)).toBe("Over 3 measured calls");
   });
 
   it("rate() is null without a denominator", () => {
@@ -82,8 +92,8 @@ describe("CSV export", () => {
 
   it("exports the by-agent table with ratios and blanks for undefined rates", () => {
     const lines = byAgentCsv(busy.by_agent).trim().split("\r\n");
-    expect(lines[0]).toBe("agent_id,agent,attempted,answered,answer_rate,qualified,qualification_rate,avg_duration_seconds");
-    expect(lines[1]).toBe('a1,"Qualifier, ""Q""",4,3,0.7500,1,0.3333,60');
-    expect(lines[2]).toBe(",No agent,1,0,0.0000,0,,");
+    expect(lines[0]).toBe("agent_id,agent,attempted,answered,answer_rate,qualified,qualification_rate,avg_duration_seconds,response_p50_ms");
+    expect(lines[1]).toBe('a1,"Qualifier, ""Q""",4,3,0.7500,1,0.3333,60,720');
+    expect(lines[2]).toBe(",No agent,1,0,0.0000,0,,,");
   });
 });

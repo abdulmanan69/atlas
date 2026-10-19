@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 
+import { usePrefetchIntent } from "@/app/prefetch";
 import { Mark, PRODUCT_NAME, Wordmark } from "@/components/brand";
 import { CommandMenu } from "@/components/command-menu";
 import { Logo } from "@/components/common";
@@ -108,6 +109,7 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle?: () =>
   const role = useCurrentMembership()?.role ?? "viewer";
   const visible = (n: NavItem) => !n.minRole || RANK[role] >= RANK[n.minRole];
   const groups = ["Pipeline", "Voice AI", "Organization"] as const;
+  const prefetch = usePrefetchIntent();
 
   return (
     <>
@@ -130,6 +132,7 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle?: () =>
                     to={n.to}
                     end={n.to === "/"}
                     title={collapsed ? n.label : undefined}
+                    {...prefetch(n.to)}
                     className={({ isActive }) =>
                       cn(
                         "relative flex h-8 items-center gap-2.5 rounded-md text-[13px] font-medium text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink",

@@ -13,6 +13,7 @@ import { useInvalidate } from "@/features/queries";
 import { ConnectionDialog } from "@/features/voice/connection-dialog";
 import { SERVICE_LABELS, useCatalog, useConnections, useModelSelection, type Connection, type ModelSelection, type ServiceChoice, type ServiceKind } from "@/features/voice/queries";
 import { ServiceEditor } from "@/features/voice/service-editor";
+import { PipelineHealthCard, SpeedCard } from "@/features/voice/speed-section";
 import { api, errorMessage, unwrap, type Schemas } from "@/lib/api";
 import { useHasRole } from "@/lib/session";
 
@@ -44,9 +45,13 @@ export default function AiProvidersPage() {
         </Card>
       ) : (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <ModelsCard canEdit={canEdit} />
+          <div className="flex min-w-0 flex-col gap-5">
+            <ModelsCard canEdit={canEdit} />
+            <SpeedCard catalog={catalog.data} connections={connections.data} onAddConnection={() => setAdding(true)} />
+          </div>
           <div className="flex flex-col gap-5">
             <ConnectionsCard connections={connections.data} loading={connections.isLoading} canEdit={canEdit} onAdd={() => setAdding(true)} />
+            <PipelineHealthCard />
             <SelfHostedCard />
           </div>
         </div>

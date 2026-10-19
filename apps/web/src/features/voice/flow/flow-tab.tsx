@@ -38,8 +38,9 @@ import { tidyUp } from "@/features/voice/flow/layout";
 import { reducedMotion } from "@/features/voice/flow/motion";
 import { createState, reduce, type EditorAction, type EditorState } from "@/features/voice/flow/model";
 import { actionNameMap, useActions } from "@/features/voice/flow/queries";
+import { TokenMeter } from "@/features/voice/flow/token-meter";
 import { KIND_LABEL, LIMITS, type FlowDefinition, type FlowIssue, type IssueTarget } from "@/features/voice/flow/types";
-import { issuesByTarget, validateFlow } from "@/features/voice/flow/validate";
+import { issuesByTarget, PROMPT_BUDGET, validateFlow } from "@/features/voice/flow/validate";
 import { api, errorMessage, unwrap } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -101,7 +102,7 @@ function FlowEditor({ agentId, version, form, canEdit, dirty, focus: externalFoc
   }, [externalFocus]);
 
   const actionNames = useMemo(() => actionNameMap(actions.data), [actions.data]);
-  const local = useMemo(() => validateFlow(state.flow, actionNames), [state.flow, actionNames]);
+  const local = useMemo(() => validateFlow(state.flow, actionNames, globalRules), [state.flow, actionNames, globalRules]);
   const errorList = useMemo(() => [...local.errors, ...(serverIssues?.errors ?? [])], [local.errors, serverIssues]);
   const warningList = useMemo(() => [...local.warnings, ...(serverIssues?.warnings ?? [])], [local.warnings, serverIssues]);
   const errors = useMemo(() => issuesByTarget(errorList), [errorList]);
@@ -112,9 +113,13 @@ function FlowEditor({ agentId, version, form, canEdit, dirty, focus: externalFoc
     onSuccess: (result) => {
       // Rules we already check locally are reported locally; keep only what the server adds.
       const seen = new Set([...local.errors, ...local.warnings].map((i) => `${i.target}:${i.id}:${i.field ?? ""}:${i.message}`));
-      const fresh = (list: { target: FlowIssue["target"]; id: string; field?: string | null; message: string }[]): FlowIssue[] =>
-        list.filter((i) => !seen.has(`${i.target}:${i.id}:${i.field ?? ""}:${i.message}`)).map((i) => ({ target: i.target, id: i.id, field: i.field ?? null, message: i.message }));
-      setServerIssues({ errors: fresh(result.errors), warnings: fresh(result.warnings) });
+      // Prompt-budget warnings are estimated locally too; the server's wording may differ, so match on where they point.
+      const budgetSeen = new Set(local.warnings.filter((i) => i.field === "prompt" || i.field === "global_rules").map((i) => `${i.target}:${i.id}:${i.field}`));
+      const fresh = (list: { target: FlowIssue["target"]; id: string; field?: string | null; message: string }[], budget = false): FlowIssue[] =>
+        list
+          .filter((i) => !seen.has(`${i.target}:${i.id}:${i.field ?? ""}:${i.message}`) && !(budget && budgetSeen.has(`${i.target}:${i.id}:${i.field ?? ""}`)))
+          .map((i) => ({ target: i.target, id: i.id, field: i.field ?? null, message: i.message }));
+      setServerIssues({ errors: fresh(result.errors), warnings: fresh(result.warnings, true) });
       setPanelOpen(true);
       if (result.valid && local.valid) toast.success("Ready to publish.");
       else toast.error(`${result.errors.length + local.errors.length} ${result.errors.length + local.errors.length === 1 ? "problem" : "problems"} to fix before publishing.`);
@@ -320,6 +325,7 @@ function GlobalRulesDialog({ open, onOpenChange, form, readOnly }: { open: boole
           onChange={(e) => form.setValue("global_rules", e.target.value, { shouldDirty: true })}
         />
       </Field>
+      <TokenMeter text={value} budget={PROMPT_BUDGET.globalRules} what="global rules" className="mt-3" />
     </Dialog>
   );
 }

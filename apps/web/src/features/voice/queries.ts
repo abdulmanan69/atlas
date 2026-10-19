@@ -23,6 +23,8 @@ export const vk = {
   agent: (o: string | null, id: string) => ["org", o, "agent", id] as const,
   versions: (o: string | null, id: string) => ["org", o, "agent", id, "versions"] as const,
   templates: (o: string | null) => ["org", o, "agent-templates"] as const,
+  latencyGuide: (o: string | null) => ["org", o, "ai", "latency-guide"] as const,
+  pipelineHealth: (o: string | null) => ["org", o, "ai", "pipeline-health"] as const,
 };
 
 export function useCatalog() {
@@ -46,6 +48,20 @@ export function useModelSelection() {
   const o = useOrgId();
   const can = useHasRole("manager");
   return useQuery({ queryKey: vk.models(o), queryFn: () => unwrap(api.GET("/api/v1/ai/models")), enabled: !!o && can });
+}
+
+/** Typical provider latency, fast presets and which voices can reuse audio. Static per deployment. */
+export function useLatencyGuide() {
+  const o = useOrgId();
+  const can = useHasRole("manager");
+  return useQuery({ queryKey: vk.latencyGuide(o), queryFn: () => unwrap(api.GET("/api/v1/ai-settings/latency-guide")), staleTime: 30 * 60_000, enabled: !!o && can });
+}
+
+/** Owner/admin only: the voice runtime's own latency histograms, platform-wide. */
+export function usePipelineHealth() {
+  const o = useOrgId();
+  const can = useHasRole("admin");
+  return useQuery({ queryKey: vk.pipelineHealth(o), queryFn: () => unwrap(api.GET("/api/v1/ai-settings/pipeline-health")), staleTime: 60_000, enabled: !!o && can });
 }
 
 /** Connections whose provider offers the given service. */

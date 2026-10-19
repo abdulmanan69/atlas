@@ -52,6 +52,7 @@ export const qk = {
   call: (o: string | null, id: string) => ["org", o, "call", id] as const,
   callEvents: (o: string | null, id: string) => ["org", o, "call", id, "events"] as const,
   callTranscript: (o: string | null, id: string) => ["org", o, "call", id, "transcript"] as const,
+  callLatency: (o: string | null, id: string) => ["org", o, "call", id, "latency"] as const,
   campaigns: (o: string | null, q?: CampaignQuery) => ["org", o, "campaigns", q ?? {}] as const,
   campaign: (o: string | null, id: string) => ["org", o, "campaign", id] as const,
   campaignProgress: (o: string | null, id: string) => ["org", o, "campaign", id, "progress"] as const,
@@ -76,7 +77,8 @@ export function useMembers() {
   return useQuery({
     queryKey: qk.members(o),
     queryFn: () => unwrap(api.GET("/api/v1/members")),
-    staleTime: 60_000,
+    // Reference data: changes only through the team page, which invalidates it.
+    staleTime: 5 * 60_000,
     enabled: !!o && canRead,
   });
 }
@@ -128,7 +130,8 @@ export function useAgents(includeArchived = false) {
   return useQuery({
     queryKey: qk.agents(o, includeArchived),
     queryFn: () => unwrap(api.GET("/api/v1/agents", { params: { query: { include_archived: includeArchived } } })),
-    staleTime: 60_000,
+    // Reference data for pickers and name lookups; agent writes invalidate "agents".
+    staleTime: 5 * 60_000,
     enabled: !!o,
   });
 }
