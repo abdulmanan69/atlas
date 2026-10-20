@@ -1,0 +1,458 @@
+{
+ "measured": "2026-10-20T20:31:27+00:00",
+ "label": "Kaggle Tesla T4, 15360 MiB",
+ "rounds": 3,
+ "temperature": 0.3,
+ "models": {
+  "qwen2.5:1.5b": {
+   "summary": {
+    "ttfb_ms": {
+     "p50": 26,
+     "p90": 34
+    },
+    "first_sentence_ms": {
+     "p50": 35,
+     "p90": 60
+    },
+    "total_ms": {
+     "p50": 137,
+     "p90": 324
+    }
+   },
+   "turns": [
+    {
+     "round": 1,
+     "turn": 1,
+     "ttfb_ms": 36,
+     "first_sentence_ms": 13495,
+     "total_ms": 13708,
+     "prompt_tokens": 495,
+     "completion_tokens": 21,
+     "tool_call": false,
+     "text": "Got it. I'm here to help with your home search. How can I assist you today?"
+    },
+    {
+     "round": 1,
+     "turn": 2,
+     "ttfb_ms": 35,
+     "first_sentence_ms": 47,
+     "total_ms": 138,
+     "prompt_tokens": 535,
+     "completion_tokens": 12,
+     "tool_call": false,
+     "text": "Perfect. And what are your budget constraints, Sarah?"
+    },
+    {
+     "round": 1,
+     "turn": 3,
+     "ttfb_ms": 25,
+     "first_sentence_ms": 33,
+     "total_ms": 183,
+     "prompt_tokens": 565,
+     "completion_tokens": 22,
+     "tool_call": false,
+     "text": "Okay. And who else is involved in the decision? Any specific preferences or criteria you have in mind?"
+    },
+    {
+     "round": 1,
+     "turn": 4,
+     "ttfb_ms": 30,
+     "first_sentence_ms": 61,
+     "total_ms": 283,
+     "prompt_tokens": 611,
+     "completion_tokens": 35,
+     "tool_call": false,
+     "text": "Of course, Sarah. We appreciate your interest in our services. If you have any more questions in the future, feel free to reach out. Have a great day!"
+    },
+    {
+     "round": 2,
+     "turn": 1,
+     "ttfb_ms": 19,
+     "first_sentence_ms": 34,
+     "total_ms": 107,
+     "prompt_tokens": 495,
+     "completion_tokens": 13,
+     "tool_call": false,
+     "text": "Got it. Do you have a specific budget in mind?"
+    },
+    {
+     "round": 2,
+     "turn": 2,
+     "ttfb_ms": 25,
+     "first_sentence_ms": 33,
+     "total_ms": 100,
+     "prompt_tokens": 527,
+     "completion_tokens": 11,
+     "tool_call": false,
+     "text": "Okay. Who else is involved in the decision?"
+    },
+    {
+     "round": 2,
+     "turn": 3,
+     "ttfb_ms": 24,
+     "first_sentence_ms": 33,
+     "total_ms": 136,
+     "prompt_tokens": 556,
+     "completion_tokens": 16,
+     "tool_call": false,
+     "text": "Sure. Do you have any preferences for the location or type of property?"
+    },
+    {
+     "round": 2,
+     "turn": 4,
+     "ttfb_ms": 28,
+     "first_sentence_ms": 36,
+     "total_ms": 207,
+     "prompt_tokens": 596,
+     "completion_tokens": 25,
+     "tool_call": false,
+     "text": "Great. I can wrap up the call now. Is there anything else you'd like to add before I end it?"
+    },
+    {
+     "round": 3,
+     "turn": 1,
+     "ttfb_ms": 19,
+     "first_sentence_ms": 34,
+     "total_ms": 92,
+     "prompt_tokens": 495,
+     "completion_tokens": 11,
+     "tool_call": false,
+     "text": "Got it. What timeline are you working with?"
+    },
+    {
+     "round": 3,
+     "turn": 2,
+     "ttfb_ms": 26,
+     "first_sentence_ms": 35,
+     "total_ms": 102,
+     "prompt_tokens": 525,
+     "completion_tokens": 11,
+     "tool_call": false,
+     "text": "Okay. Do you have a budget in mind?"
+    },
+    {
+     "round": 3,
+     "turn": 3,
+     "ttfb_ms": 27,
+     "first_sentence_ms": 35,
+     "total_ms": 102,
+     "prompt_tokens": 554,
+     "completion_tokens": 11,
+     "tool_call": false,
+     "text": "Sure. Who else is involved in the decision?"
+    },
+    {
+     "round": 3,
+     "turn": 4,
+     "ttfb_ms": 28,
+     "first_sentence_ms": 36,
+     "total_ms": 329,
+     "prompt_tokens": 589,
+     "completion_tokens": 41,
+     "tool_call": false,
+     "text": "Great. I'll wrap up the call for you. You can reach me at 555-1234. I'll be happy to help you further. Have a great day!"
+    }
+   ]
+  },
+  "qwen2.5:3b": {
+   "summary": {
+    "ttfb_ms": {
+     "p50": 36,
+     "p90": 40
+    },
+    "first_sentence_ms": {
+     "p50": 56,
+     "p90": 80
+    },
+    "total_ms": {
+     "p50": 186,
+     "p90": 258
+    }
+   },
+   "turns": [
+    {
+     "round": 1,
+     "turn": 1,
+     "ttfb_ms": 35,
+     "first_sentence_ms": 80,
+     "total_ms": 215,
+     "prompt_tokens": 495,
+     "completion_tokens": 14,
+     "tool_call": false,
+     "text": "Got it. What are you looking to achieve with this purchase?"
+    },
+    {
+     "round": 1,
+     "turn": 2,
+     "ttfb_ms": 37,
+     "first_sentence_ms": 50,
+     "total_ms": 162,
+     "prompt_tokens": 528,
+     "completion_tokens": 11,
+     "tool_call": false,
+     "text": "Okay. Do you have a budget in mind?"
+    },
+    {
+     "round": 1,
+     "turn": 3,
+     "ttfb_ms": 36,
+     "first_sentence_ms": 49,
+     "total_ms": 161,
+     "prompt_tokens": 557,
+     "completion_tokens": 11,
+     "tool_call": false,
+     "text": "Perfect. Who else is involved in this decision?"
+    },
+    {
+     "round": 1,
+     "turn": 4,
+     "ttfb_ms": 40,
+     "first_sentence_ms": 79,
+     "total_ms": 204,
+     "prompt_tokens": 592,
+     "completion_tokens": 14,
+     "tool_call": false,
+     "text": "You're welcome. We'll keep in touch. Goodbye."
+    },
+    {
+     "round": 2,
+     "turn": 1,
+     "ttfb_ms": 24,
+     "first_sentence_ms": 49,
+     "total_ms": 185,
+     "prompt_tokens": 495,
+     "completion_tokens": 14,
+     "tool_call": false,
+     "text": "Got it. What are you looking to achieve with this purchase?"
+    },
+    {
+     "round": 2,
+     "turn": 2,
+     "ttfb_ms": 37,
+     "first_sentence_ms": 160,
+     "total_ms": 173,
+     "prompt_tokens": 528,
+     "completion_tokens": 12,
+     "tool_call": false,
+     "text": "Okay, and who else is involved in this decision?"
+    },
+    {
+     "round": 2,
+     "turn": 3,
+     "ttfb_ms": 36,
+     "first_sentence_ms": 63,
+     "total_ms": 186,
+     "prompt_tokens": 558,
+     "completion_tokens": 13,
+     "tool_call": false,
+     "text": "Understood. Do you have a specific area in mind?"
+    },
+    {
+     "round": 2,
+     "turn": 4,
+     "ttfb_ms": 41,
+     "first_sentence_ms": 79,
+     "total_ms": 263,
+     "prompt_tokens": 595,
+     "completion_tokens": 19,
+     "tool_call": false,
+     "text": "You're welcome. We'll keep in touch. Call back if you have more questions."
+    },
+    {
+     "round": 3,
+     "turn": 1,
+     "ttfb_ms": 24,
+     "first_sentence_ms": 49,
+     "total_ms": 187,
+     "prompt_tokens": 495,
+     "completion_tokens": 14,
+     "tool_call": false,
+     "text": "Got it. What are you looking to achieve with this purchase?"
+    },
+    {
+     "round": 3,
+     "turn": 2,
+     "ttfb_ms": 36,
+     "first_sentence_ms": 50,
+     "total_ms": 162,
+     "prompt_tokens": 528,
+     "completion_tokens": 11,
+     "tool_call": false,
+     "text": "Okay. Do you have a budget in mind?"
+    },
+    {
+     "round": 3,
+     "turn": 3,
+     "ttfb_ms": 36,
+     "first_sentence_ms": 49,
+     "total_ms": 161,
+     "prompt_tokens": 557,
+     "completion_tokens": 11,
+     "tool_call": false,
+     "text": "Perfect. Who else is involved in this decision?"
+    },
+    {
+     "round": 3,
+     "turn": 4,
+     "ttfb_ms": 40,
+     "first_sentence_ms": 78,
+     "total_ms": 266,
+     "prompt_tokens": 592,
+     "completion_tokens": 19,
+     "tool_call": false,
+     "text": "You're welcome. We'll keep in touch. Call back if you have more questions."
+    }
+   ]
+  },
+  "qwen2.5:7b": {
+   "summary": {
+    "ttfb_ms": {
+     "p50": 58,
+     "p90": 67
+    },
+    "first_sentence_ms": {
+     "p50": 84,
+     "p90": 91
+    },
+    "total_ms": {
+     "p50": 444,
+     "p90": 744
+    }
+   },
+   "turns": [
+    {
+     "round": 1,
+     "turn": 1,
+     "ttfb_ms": 50,
+     "first_sentence_ms": 115,
+     "total_ms": 453,
+     "prompt_tokens": 495,
+     "completion_tokens": 15,
+     "tool_call": false,
+     "text": "Got it. What timeline are you working with for your home search?"
+    },
+    {
+     "round": 1,
+     "turn": 2,
+     "ttfb_ms": 58,
+     "first_sentence_ms": 81,
+     "total_ms": 443,
+     "prompt_tokens": 529,
+     "completion_tokens": 15,
+     "tool_call": false,
+     "text": "Sure. Do you have a budget in mind for your new home?"
+    },
+    {
+     "round": 1,
+     "turn": 3,
+     "ttfb_ms": 57,
+     "first_sentence_ms": 80,
+     "total_ms": 436,
+     "prompt_tokens": 562,
+     "completion_tokens": 15,
+     "tool_call": false,
+     "text": "Perfect. Who else is involved in the decision to buy a home?"
+    },
+    {
+     "round": 1,
+     "turn": 4,
+     "ttfb_ms": 67,
+     "first_sentence_ms": 91,
+     "total_ms": 661,
+     "prompt_tokens": 601,
+     "completion_tokens": 22,
+     "tool_call": false,
+     "text": "Alright. Thank you for your time. We won't be contacting you again. Have a great day!"
+    },
+    {
+     "round": 2,
+     "turn": 1,
+     "ttfb_ms": 35,
+     "first_sentence_ms": 84,
+     "total_ms": 399,
+     "prompt_tokens": 495,
+     "completion_tokens": 14,
+     "tool_call": false,
+     "text": "Got it. What's your target timeline for making a decision?"
+    },
+    {
+     "round": 2,
+     "turn": 2,
+     "ttfb_ms": 58,
+     "first_sentence_ms": 81,
+     "total_ms": 446,
+     "prompt_tokens": 528,
+     "completion_tokens": 15,
+     "tool_call": false,
+     "text": "Okay. Do you have a budget in mind for your new home?"
+    },
+    {
+     "round": 2,
+     "turn": 3,
+     "ttfb_ms": 58,
+     "first_sentence_ms": 82,
+     "total_ms": 384,
+     "prompt_tokens": 561,
+     "completion_tokens": 13,
+     "tool_call": false,
+     "text": "Sure. Who else is involved in the decision-making process?"
+    },
+    {
+     "round": 2,
+     "turn": 4,
+     "ttfb_ms": 64,
+     "first_sentence_ms": 87,
+     "total_ms": 769,
+     "prompt_tokens": 598,
+     "completion_tokens": 26,
+     "tool_call": false,
+     "text": "Alright. I understand. Demo Realty will not be contacting you again. Thank you for your time. Have a great day!"
+    },
+    {
+     "round": 3,
+     "turn": 1,
+     "ttfb_ms": 36,
+     "first_sentence_ms": 85,
+     "total_ms": 420,
+     "prompt_tokens": 495,
+     "completion_tokens": 15,
+     "tool_call": false,
+     "text": "Got it. What timeline are you working with for your home search?"
+    },
+    {
+     "round": 3,
+     "turn": 2,
+     "ttfb_ms": 60,
+     "first_sentence_ms": 83,
+     "total_ms": 453,
+     "prompt_tokens": 529,
+     "completion_tokens": 15,
+     "tool_call": false,
+     "text": "Okay. Do you have a budget in mind for your new home?"
+    },
+    {
+     "round": 3,
+     "turn": 3,
+     "ttfb_ms": 58,
+     "first_sentence_ms": 82,
+     "total_ms": 330,
+     "prompt_tokens": 562,
+     "completion_tokens": 11,
+     "tool_call": false,
+     "text": "Sure. Who else is involved in the decision?"
+    },
+    {
+     "round": 3,
+     "turn": 4,
+     "ttfb_ms": 67,
+     "first_sentence_ms": 90,
+     "total_ms": 753,
+     "prompt_tokens": 597,
+     "completion_tokens": 25,
+     "tool_call": false,
+     "text": "Alright. I understand. Thank you for your time. We won't be contacting you again. Have a great day!"
+    }
+   ]
+  }
+ }
+}
