@@ -83,7 +83,9 @@ services:
       ATLAS_WEB_HOST: ${ATLAS_WEB_HOST:?set ATLAS_WEB_HOST in .env}
       ATLAS_VOICE_HOST: ${ATLAS_VOICE_HOST}
     volumes:
-      - ./infra/deploy/oci/Caddyfile:/etc/caddy/Caddyfile:ro
+      # The folder, not the file: `git pull` replaces the file, and a file mount would keep
+      # showing the old one. deploy.sh reloads the configuration on every run.
+      - ./infra/deploy/oci/caddy:/etc/caddy:ro
       - web_dist:/srv/web:ro
       - caddy_data:/data
       - caddy_config:/config

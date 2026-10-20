@@ -240,6 +240,9 @@ if [ "$TURN_HASH" != "$(cat "$TURN_HASH_FILE" 2>/dev/null || true)" ]; then
   fi
   printf '%s\n' "$TURN_HASH" >"$TURN_HASH_FILE"
 fi
+# Apply the current Caddyfile without a restart: open calls and connections stay up, and
+# an unchanged file is a no-op. An invalid file is refused and the running one kept.
+dc exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1   || warn "the web server refused the new Caddyfile and keeps the previous one (docker compose logs caddy)"
 dc ps --format '    {{.Service}}: {{.Status}}'
 
 # ------------------------------------------------------------------------- 6. database
