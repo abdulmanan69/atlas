@@ -35,6 +35,15 @@ Environment:
   POCKET_TTS_MAX_CUSTOM_VOICES  most cloned voices kept on disk (default 50)
   POCKET_TTS_CUSTOM_VOICE_CACHE cloned voice states held in memory, least recently used
                              evicted first (default 4; each is 6-19 MB)
+  POCKET_TTS_PHRASE_CACHE    "|"-separated phrases synthesised at startup and kept, so a
+                             reply that opens with one of them starts at once (default: the
+                             demo agent's openers, DEFAULT_CACHED_PHRASES; "" = none)
+  POCKET_TTS_PHRASE_CACHE_VOICES  comma-separated voices those phrases are made for
+                             (default: POCKET_TTS_DEFAULT_VOICE)
+  POCKET_TTS_PHRASE_CACHE_MAX_CHARS  other requests up to this many characters are kept
+                             too once fully spoken, least recently used evicted first
+                             (default 32; 0 = only the startup phrases)
+  POCKET_TTS_PHRASE_CACHE_MB memory for all kept audio (default 16; about 330 s of speech)
 """
 
 from __future__ import annotations
@@ -157,6 +166,32 @@ CUSTOM_PREFIX = "custom-"
 CUSTOM_ID = re.compile(r"^custom-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{16}$")
 MAX_NAME_CHARS = 60
 MAX_METADATA_BYTES = 16 * 1024
+
+# ------------------------------------------------------------------ phrase cache settings
+
+# Keep in sync with the opener rule in infra/scripts/demo_configure.py: the demo agent opens
+# every reply with one of these, so its first words come from memory instead of the model.
+# The list also holds the openers qwen2.5:1.5b picks on its own most often ("Perfect.",
+# "Of course.", "You're welcome.", "Certainly.", "Absolutely."), seen in test calls.
+DEFAULT_CACHED_PHRASES = (
+    "Got it.", "Okay.", "Sure.", "Great.", "Alright.", "Perfect.", "Of course.", "I see.",
+    "Understood.", "That makes sense.", "No problem.", "Thanks.", "You're welcome.",
+    "Certainly.", "Absolutely.",
+)
+_phrases_env = os.environ.get("POCKET_TTS_PHRASE_CACHE")
+CACHED_PHRASES: list[str] = (
+    list(DEFAULT_CACHED_PHRASES)
+    if _phrases_env is None
+    else [p.strip() for p in _phrases_env.split("|") if p.strip()]
+)
+_phrase_voices_env = os.environ.get("POCKET_TTS_PHRASE_CACHE_VOICES", "").strip()
+PHRASE_CACHE_VOICES: list[str] = (
+    [v.strip() for v in _phrase_voices_env.split(",") if v.strip()]
+    if _phrase_voices_env
+    else [DEFAULT_VOICE]
+)
+PHRASE_CACHE_MAX_CHARS = int(os.environ.get("POCKET_TTS_PHRASE_CACHE_MAX_CHARS", "32"))
+PHRASE_CACHE_BYTES = int(float(os.environ.get("POCKET_TTS_PHRASE_CACHE_MB", "16")) * 1024 * 1024)
 
 _model: TTSModel | None = None
 _voice_states: dict[str, object] = {}
@@ -466,6 +501,203 @@ def _voice_out(meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# ------------------------------------------------------------------ phrase cache
+
+_QUOTES = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"'})
+
+
+def normalize_phrase(text: str) -> str:
+    """The cache key of a text: Unicode-normalised, straight quotes, single spaces, any case."""
+    text = unicodedata.normalize("NFKC", text).translate(_QUOTES)
+    return " ".join(text.split()).casefold()
+
+
+class PhraseCache:
+    """Synthesised audio of short phrases, per voice, held in memory only (never on disk).
+
+    The voice service starts playing a sentence only once it has received 0.5 s of its
+    audio (or all of it), which takes Pocket TTS 0.4-0.5 s on the Oracle server's CPU; a
+    kept phrase is answered from memory instead, in chunks of the size the model produces.
+    Phrases made at startup are pinned; other short texts are kept once fully spoken, least
+    recently used evicted first. Total audio is bounded by `max_bytes`.
+    """
+
+    def __init__(self, max_bytes: int, max_chars: int) -> None:
+        self.max_bytes = max(max_bytes, 0)
+        self.max_chars = max(max_chars, 0)
+        self._items: OrderedDict[tuple[str, str], tuple[bytes, ...]] = OrderedDict()
+        self._pinned: set[tuple[str, str]] = set()
+        # Pinned phrases that may open a longer sentence: (voice, key) -> pattern.
+        self._openers: dict[tuple[str, str], re.Pattern[str]] = {}
+        self._bytes = 0
+        self._lock = threading.Lock()
+        self.hits = 0
+        self.misses = 0
+        self.opener_hits = 0
+
+    def cacheable(self, text: str) -> bool:
+        return 0 < len(normalize_phrase(text)) <= self.max_chars
+
+    def get(self, voice: str, text: str) -> tuple[bytes, ...] | None:
+        key = (voice, normalize_phrase(text))
+        with self._lock:
+            chunks = self._items.get(key)
+            if chunks is None:
+                self.misses += 1
+                return None
+            self._items.move_to_end(key)
+            self.hits += 1
+            return chunks
+
+    def put(self, voice: str, text: str, chunks: list[bytes], *, pin: bool = False) -> bool:
+        key = (voice, normalize_phrase(text))
+        stored = tuple(c for c in chunks if c)
+        size = sum(len(c) for c in stored)
+        if not key[1] or size == 0:
+            return False
+        with self._lock:
+            old = self._items.pop(key, None)
+            if old is not None:
+                self._bytes -= sum(len(c) for c in old)
+            # Make room from the least recently used unpinned entries.
+            for victim in [k for k in self._items if k not in self._pinned]:
+                if self._bytes + size <= self.max_bytes:
+                    break
+                self._bytes -= sum(len(c) for c in self._items.pop(victim))
+            if self._bytes + size > self.max_bytes:
+                self._pinned.discard(key)
+                return False
+            self._items[key] = stored
+            self._bytes += size
+            if pin:
+                self._pinned.add(key)
+                stem = key[1].rstrip(".!?")
+                if stem:
+                    self._openers[key] = _opener_pattern(stem)
+            return True
+
+    def opener(self, voice: str, text: str) -> tuple[tuple[bytes, ...], str] | None:
+        """A pinned phrase that opens `text`, then ",", "." or "!" (and maybe more words).
+
+        Returns that phrase's audio and the rest of the text ("" when there is none) with its
+        first letter in upper case: "Got it, perfect timing." is spoken as the kept "Got it."
+        and "Perfect timing.", so the first words are heard at once while the rest is
+        synthesised; "Great!" is spoken as the kept "Great.". Longest match wins.
+        """
+        with self._lock:
+            found = None
+            for key, pattern in self._openers.items():
+                if key[0] != voice or (found and len(key[1]) <= len(found[0][1])):
+                    continue
+                m = pattern.fullmatch(text)
+                if m:
+                    found = (key, m.group(1) or "")
+            if found is None:
+                return None
+            key, rest = found
+            chunks = self._items.get(key)
+            if chunks is None:
+                return None
+            self.opener_hits += 1
+            return chunks, rest[:1].upper() + rest[1:]
+
+    def drop_voice(self, voice: str) -> None:
+        with self._lock:
+            for key in [k for k in self._items if k[0] == voice]:
+                self._bytes -= sum(len(c) for c in self._items.pop(key))
+                self._pinned.discard(key)
+                self._openers.pop(key, None)
+
+    def stats(self) -> dict[str, int]:
+        with self._lock:
+            return {
+                "entries": len(self._items),
+                "pinned": len(self._pinned),
+                "bytes": self._bytes,
+                "max_bytes": self.max_bytes,
+                "max_chars": self.max_chars,
+                "hits": self.hits,
+                "opener_hits": self.opener_hits,
+                "misses": self.misses,
+            }
+
+
+def _opener_pattern(stem: str) -> re.Pattern[str]:
+    """Matches `stem` (a normalised phrase without its end mark) at the start of a text,
+    followed by ",", "." or "!" and either nothing or more words; group 1 is the rest."""
+    words = [
+        "['\u2019]".join(re.escape(part) for part in word.split("'")) for word in stem.split()
+    ]
+    return re.compile(
+        r"\s*" + r"\s+".join(words) + r"\s*[,.!](?:\s+(\S.*))?\s*", re.IGNORECASE | re.DOTALL
+    )
+
+
+_phrase_cache = PhraseCache(PHRASE_CACHE_BYTES, PHRASE_CACHE_MAX_CHARS)
+
+# Pocket TTS starts each text with 80-175 ms of near-silence (measured on the Oracle server,
+# voice alba). A kept phrase usually opens a reply, so it is stored from KEEP_LEAD_MS before
+# its first sound: the caller hears it that much sooner.
+LEAD_THRESHOLD_DB = -40.0
+KEEP_LEAD_MS = 30
+
+
+def sound_start(data: bytes, sample_rate: int) -> int | None:
+    """Byte offset KEEP_LEAD_MS before the first 10 ms window at or above LEAD_THRESHOLD_DB
+    (RMS), or None when there is no such window."""
+    samples = np.frombuffer(data[: len(data) // 2 * 2], dtype=np.int16).astype(np.float32) / 32768
+    win = max(sample_rate // 100, 1)
+    n = len(samples) // win
+    if n == 0:
+        return None
+    rms = np.sqrt(np.mean(samples[: n * win].reshape(n, win) ** 2, axis=1))
+    loud = np.nonzero(rms >= 10 ** (LEAD_THRESHOLD_DB / 20))[0]
+    if loud.size == 0:
+        return None
+    return max(0, int(loud[0]) * win - sample_rate * KEEP_LEAD_MS // 1000) * 2
+
+
+def trim_leading_silence(chunks: list[bytes], sample_rate: int) -> list[bytes]:
+    """Drop the near-silence before the first sound (10 ms windows), keeping KEEP_LEAD_MS.
+
+    The rest is re-cut into chunks of the first chunk's size. Audio without any sound above
+    LEAD_THRESHOLD_DB is returned unchanged.
+    """
+    data = b"".join(chunks)
+    if not data or not chunks[0]:
+        return chunks
+    start = sound_start(data, sample_rate)
+    if not start:
+        return chunks
+    rest = data[start:]
+    size = len(chunks[0])
+    return [rest[i : i + size] for i in range(0, len(rest), size)]
+
+
+def prewarm_phrases(phrases: list[str], voices: list[str]) -> None:
+    """Synthesise and pin `phrases` for each voice (startup; blocking)."""
+    if not phrases or not voices:
+        return
+    started = time.perf_counter()
+    kept = 0
+    for voice in voices:
+        for phrase in phrases:
+            assert _model is not None
+            chunks = trim_leading_silence(
+                list(_pcm_chunks(phrase, voice, threading.Event())), _model.sample_rate
+            )
+            if _phrase_cache.put(voice, phrase, chunks, pin=True):
+                kept += 1
+            else:
+                logger.warning("Phrase cache full: %d of the startup phrases were kept", kept)
+                break
+    stats = _phrase_cache.stats()
+    logger.info(
+        "Phrase cache: %d phrase(s) for %s in %.1fs (%d KB)",
+        kept, ",".join(voices), time.perf_counter() - started, stats["bytes"] // 1024,
+    )
+
+
 def _pcm_chunks(text: str, voice: str, stop: threading.Event) -> Iterator[bytes]:
     assert _model is not None
     state = _voice_state(voice)
@@ -520,6 +752,13 @@ async def lifespan(_: FastAPI):
     if WARMUP:
         for _ in _pcm_chunks("Hello there.", DEFAULT_VOICE, threading.Event()):
             pass
+    phrase_voices = []
+    for v in PHRASE_CACHE_VOICES:
+        if v in ALLOWED_VOICES or v in _custom_voices:
+            phrase_voices.append(v)
+        else:
+            logger.warning("POCKET_TTS_PHRASE_CACHE_VOICES: voice %s is not available; skipped", v)
+    prewarm_phrases(CACHED_PHRASES, phrase_voices)
     logger.info(
         "Pocket TTS ready in %.1fs (language=%s, torch threads=%d)",
         time.perf_counter() - started, LANGUAGE, torch.get_num_threads(),
@@ -672,7 +911,15 @@ async def delete_custom_voice(voice_id: str, authorization: str | None = Header(
         raise HTTPException(status_code=404, detail="Cloned voice not found")
     if not await asyncio.to_thread(delete_voice, voice_id):
         raise HTTPException(status_code=404, detail="Cloned voice not found")
+    _phrase_cache.drop_voice(voice_id)
     return None
+
+
+@app.get("/v1/audio/phrase-cache")
+async def phrase_cache_stats(authorization: str | None = Header(default=None)) -> dict:
+    """Counts only (never the cached texts): entries, bytes, hits and misses."""
+    _check_auth(authorization)
+    return _phrase_cache.stats()
 
 
 @app.post("/v1/audio/speech")
@@ -708,14 +955,58 @@ async def speech(
     text = body.input.strip()
     if not text:
         raise HTTPException(status_code=400, detail="Input text is empty")
+    media_type = "audio/wav" if body.response_format == "wav" else "audio/pcm"
+    received = time.perf_counter()
 
+    # head: kept audio sent first; rest: text still to synthesise after it (None: nothing).
+    head: tuple[bytes, ...] = ()
+    rest: str | None = text
+    status = "miss"
+    cached = _phrase_cache.get(voice, text)
+    if cached is not None:
+        head, rest, status = cached, None, "hit"
+    else:
+        split = _phrase_cache.opener(voice, text)
+        if split is not None:
+            head, rest = split
+            status = "opener"
+            if not rest:  # "Great!" -> the kept "Great."
+                rest = None
+            else:
+                tail = _phrase_cache.get(voice, rest)  # "Got it, thanks." -> both kept
+                if tail is not None:
+                    head, rest = head + tail, None
+    headers = {"X-Phrase-Cache": status}
+
+    if rest is None:
+        async def replay() -> AsyncIterator[bytes]:
+            if body.response_format == "wav":
+                yield _wav_header(sample_rate)
+            for chunk in head:
+                yield chunk
+            # Lengths only: the text itself is never logged.
+            logger.info(
+                "speech cache=%s chars=%d audio_s=%.2f",
+                status, len(text), sum(len(c) for c in head) / (2 * sample_rate),
+            )
+
+        return StreamingResponse(replay(), media_type=media_type, headers=headers)
+
+    to_speak = rest
     queue: Queue[bytes | BaseException | None] = Queue(maxsize=64)
     stop = threading.Event()
+    keep = not head and _phrase_cache.cacheable(to_speak)
 
     def worker() -> None:
+        chunks: list[bytes] = []
         try:
-            for pcm in _pcm_chunks(text, voice, stop):
+            for pcm in _pcm_chunks(to_speak, voice, stop):
                 queue.put(pcm)
+                if keep:
+                    chunks.append(pcm)
+            # Only audio that was spoken to the end is kept.
+            if keep and not stop.is_set():
+                _phrase_cache.put(voice, to_speak, trim_leading_silence(chunks, sample_rate))
         except BaseException as exc:  # surfaced to the response stream below
             queue.put(exc)
         finally:
@@ -725,16 +1016,37 @@ async def speech(
     loop = asyncio.get_running_loop()
 
     async def stream() -> AsyncIterator[bytes]:
+        first_ms: float | None = None
+        audio_bytes = 0
+        # After a kept opener, the synthesised rest starts at its first sound (it would
+        # otherwise add its own 80-175 ms of lead-in to the pause between the two).
+        pending: bytearray | None = bytearray() if head else None
         try:
             if body.response_format == "wav":
                 yield _wav_header(sample_rate)
+            for chunk in head:
+                if first_ms is None:
+                    first_ms = (time.perf_counter() - received) * 1000
+                audio_bytes += len(chunk)
+                yield chunk
             while True:
                 item = await loop.run_in_executor(None, queue.get)
                 if item is None:
+                    if pending:
+                        yield bytes(pending)
                     break
                 if isinstance(item, BaseException):
                     logger.error("Synthesis failed: %s", item)
                     break
+                if pending is not None:
+                    pending += item
+                    start = sound_start(bytes(pending), sample_rate)
+                    if start is None and len(pending) < sample_rate * 2 * 3 // 10:
+                        continue
+                    item, pending = bytes(pending[start or 0 :]), None
+                if first_ms is None:
+                    first_ms = (time.perf_counter() - received) * 1000
+                audio_bytes += len(item)
                 yield item
                 if await request.is_disconnected():
                     break
@@ -743,6 +1055,10 @@ async def speech(
             stop.set()
             while not queue.empty():
                 queue.get_nowait()
+            logger.info(
+                "speech cache=%s chars=%d first_audio_ms=%s audio_s=%.2f total_ms=%.0f",
+                status, len(text), "-" if first_ms is None else f"{first_ms:.0f}",
+                audio_bytes / (2 * sample_rate), (time.perf_counter() - received) * 1000,
+            )
 
-    media_type = "audio/wav" if body.response_format == "wav" else "audio/pcm"
-    return StreamingResponse(stream(), media_type=media_type)
+    return StreamingResponse(stream(), media_type=media_type, headers=headers)

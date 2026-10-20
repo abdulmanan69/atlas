@@ -55,6 +55,15 @@ services:
 
   local-llm:
     ports: !reset []
+    environment:
+      # 8 vCPU = 4 cores with 2 threads each (VM.Standard.E2.4, AMD EPYC 7551). Measured on
+      # this shape with real test calls (docs/perf/oracle-latency.md): 4 threads gave the
+      # first token of a reply in 0.80-0.98 s (median of each run); 8 threads were faster
+      # alone (0.66 vs 0.77 s) but in calls slowed speech-to-text and the voice too (first
+      # token 2.5 s); 3 threads pinned to 3 cores (cpuset) with Pocket TTS on the 4th were
+      # slower too (1.22 s). LLAMA_ARG_THREADS is the only thread setting the model server
+      # reads from the environment (there is no batch-thread variable).
+      LLAMA_ARG_THREADS: "${LOCAL_LLM_THREADS:-4}"
 
   local-speech:
     ports: !reset []

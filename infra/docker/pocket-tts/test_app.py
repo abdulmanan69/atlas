@@ -1,8 +1,10 @@
-"""Tests for the adapter's voice-cloning code path, with the model replaced by a fake.
+"""Tests for the adapter's voice-cloning code path and phrase cache, with the model
+replaced by a fake.
 
 The real cloning weights are gated, so these tests check everything around them: upload
 limits, WAV decoding and resampling, consent, ids, saving and reloading the voice state,
-the 501 answer when cloning is off, and speech with a cloned voice.
+the 501 answer when cloning is off, and speech with a cloned voice. The phrase-cache tests
+check replay without the model, keys per voice, what is kept, and the memory bound.
 
 Run inside the image (stdlib unittest; the folder is mounted, not copied into the image):
 
@@ -90,10 +92,14 @@ class CloningTest(unittest.TestCase):
         server._custom_voices.clear()
         server._custom_states.clear()
         server._voice_states.clear()
+        # Each test starts with an empty phrase cache, so every request reaches the model.
+        self.saved_cache = server._phrase_cache
+        server._phrase_cache = server.PhraseCache(1024 * 1024, 32)
         self.client = TestClient(server.app)  # no `with`: the real model is never loaded
 
     def tearDown(self) -> None:
         server.VOICE_DIR, server._model, server._cloning_enabled, server.API_KEY = self.saved
+        server._phrase_cache = self.saved_cache
         server._custom_voices.clear()
         server._custom_states.clear()
         self.tmp.cleanup()
@@ -271,6 +277,146 @@ class CloningTest(unittest.TestCase):
     os.environ.get("POCKET_TTS_MODEL_TESTS") == "1",
     "loads the real model (about 1 GB of RAM): set POCKET_TTS_MODEL_TESTS=1",
 )
+class CountingModel(FakeModel):
+    """Three distinct chunks per synthesis, numbered, so replays can be told apart."""
+
+    has_voice_cloning = False
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+        self.texts: list[str] = []
+
+    def generate_audio_stream(self, model_state, text_to_generate, stop=None, **_):
+        self.calls += 1
+        self.texts.append(text_to_generate)
+        for i in range(3):
+            yield torch.full((1920,), 0.1 * (self.calls + i))
+
+
+class PhraseCacheTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.saved = (server._model, server._phrase_cache, server._cloning_enabled, server.API_KEY)
+        self.model = CountingModel()
+        server._model = self.model  # type: ignore[assignment]
+        server._phrase_cache = server.PhraseCache(1024 * 1024, 32)
+        server._cloning_enabled = False
+        server.API_KEY = None
+        server._voice_states.clear()
+        self.client = TestClient(server.app)
+
+    def tearDown(self) -> None:
+        server._model, server._phrase_cache, server._cloning_enabled, server.API_KEY = self.saved
+        server._voice_states.clear()
+
+    def speak(self, text: str, voice: str = "alba", fmt: str = "pcm"):
+        return self.client.post(
+            "/v1/audio/speech",
+            json={"model": "pocket-tts", "input": text, "voice": voice, "response_format": fmt},
+        )
+
+    def test_normalisation(self) -> None:
+        self.assertEqual(server.normalize_phrase("  Got\u00a0 it. "), "got it.")
+        self.assertEqual(server.normalize_phrase("That\u2019s right."), "that's right.")
+        self.assertNotEqual(server.normalize_phrase("Great."), server.normalize_phrase("Great!"))
+
+    def test_prewarmed_phrase_is_replayed_without_the_model(self) -> None:
+        server.prewarm_phrases(["Got it."], ["alba"])
+        self.assertEqual(self.model.calls, 1)
+        first = self.speak("got it.")
+        again = self.speak("Got  it.", fmt="wav")
+        self.assertEqual(self.model.calls, 1)
+        self.assertEqual(first.headers["x-phrase-cache"], "hit")
+        self.assertEqual(len(first.content), 3 * 1920 * 2)
+        # Same audio as generated; WAV adds only the streaming header.
+        self.assertEqual(again.content[44:], first.content)
+        self.assertEqual(again.content[:4], b"RIFF")
+        self.assertEqual(server._phrase_cache.stats()["pinned"], 1)
+
+    def test_cache_is_per_voice(self) -> None:
+        server.prewarm_phrases(["Okay."], ["alba"])
+        r = self.speak("Okay.", voice="marius")
+        self.assertEqual(r.headers["x-phrase-cache"], "miss")
+        self.assertEqual(self.model.calls, 2)
+
+    def test_short_texts_are_kept_once_spoken_long_ones_never(self) -> None:
+        self.assertEqual(self.speak("Understood.").headers["x-phrase-cache"], "miss")
+        self.assertEqual(self.speak("Understood.").headers["x-phrase-cache"], "hit")
+        long_text = "This sentence is longer than thirty-two characters."
+        self.assertEqual(self.speak(long_text).headers["x-phrase-cache"], "miss")
+        self.assertEqual(self.speak(long_text).headers["x-phrase-cache"], "miss")
+        self.assertEqual(self.model.calls, 3)
+
+    def test_memory_bound_evicts_unpinned_first(self) -> None:
+        chunk = b"\x01" * 1000
+        cache = server.PhraseCache(3000, 32)
+        self.assertTrue(cache.put("alba", "Pinned.", [chunk], pin=True))
+        self.assertTrue(cache.put("alba", "One.", [chunk]))
+        self.assertTrue(cache.put("alba", "Two.", [chunk]))
+        self.assertIsNotNone(cache.get("alba", "One."))  # Two. is now least recently used
+        self.assertTrue(cache.put("alba", "Three.", [chunk]))
+        self.assertIsNone(cache.get("alba", "Two."))
+        self.assertIsNotNone(cache.get("alba", "Pinned."))
+        self.assertLessEqual(cache.stats()["bytes"], 3000)
+        self.assertFalse(cache.put("alba", "Too big.", [chunk * 4]))
+        cache.drop_voice("alba")
+        self.assertEqual(cache.stats()["entries"], 0)
+
+    def test_kept_audio_starts_just_before_the_first_sound(self) -> None:
+        rate = 24000
+        silence = np.zeros(4800, dtype=np.int16).tobytes()  # 100 ms
+        tone = (np.full(1920, 0.2) * 32767).astype(np.int16).tobytes()
+        trimmed = server.trim_leading_silence([silence] + [tone] * 6, rate)
+        joined = b"".join(trimmed)
+        lead = rate * server.KEEP_LEAD_MS // 1000 * 2
+        self.assertEqual(len(joined), lead + 6 * len(tone))
+        self.assertEqual(joined[:lead], bytes(lead))
+        self.assertEqual(joined[lead:], tone * 6)
+        # Re-cut into chunks of the first chunk's size.
+        sizes = [len(silence), len(silence), len(joined) - 2 * len(silence)]
+        self.assertEqual([len(c) for c in trimmed], sizes)
+        # Nothing audible: unchanged.
+        self.assertEqual(server.trim_leading_silence([silence], rate), [silence])
+
+    def test_kept_opener_starts_a_longer_sentence(self) -> None:
+        server.prewarm_phrases(["Got it.", "Thanks."], ["alba"])
+        opener = server._phrase_cache.get("alba", "Got it.")
+        r = self.speak("Got it, perfect timing then.")
+        self.assertEqual(r.headers["x-phrase-cache"], "opener")
+        self.assertEqual(self.model.texts[-1], "Perfect timing then.")
+        self.assertTrue(r.content.startswith(b"".join(opener)))
+        self.assertGreater(len(r.content), len(b"".join(opener)))
+        # Opener and rest both kept: nothing to synthesise.
+        calls = self.model.calls
+        r = self.speak("Got it! Thanks.")
+        self.assertEqual((r.headers["x-phrase-cache"], self.model.calls), ("opener", calls))
+        # Not an opener: no separator after it, or a different word.
+        for text in ("Got it right this time.", "Gotta go now.", "I got it, thanks."):
+            self.assertEqual(self.speak(text).headers["x-phrase-cache"], "miss", text)
+
+    def test_bare_opener_with_other_end_mark_is_the_kept_phrase(self) -> None:
+        server.prewarm_phrases(["Great."], ["alba"])
+        calls = self.model.calls
+        r = self.speak("Great!")
+        self.assertEqual((r.headers["x-phrase-cache"], self.model.calls), ("opener", calls))
+        self.assertEqual(r.content, b"".join(server._phrase_cache.get("alba", "Great.")))
+        self.assertEqual(self.speak("Great.Really").headers["x-phrase-cache"], "miss")
+
+    def test_longest_opener_wins_and_apostrophes_match(self) -> None:
+        server.prewarm_phrases(["Sure.", "Sure thing.", "You're welcome."], ["alba"])
+        self.speak("Sure thing, see you then.")
+        self.assertEqual(self.model.texts[-1], "See you then.")
+        self.speak("You\u2019re welcome, Sarah.")
+        self.assertEqual(self.model.texts[-1], "Sarah.")
+
+    def test_stats_endpoint_gives_counts_only(self) -> None:
+        self.speak("Sure.")
+        self.speak("Sure.")
+        stats = self.client.get("/v1/audio/phrase-cache").json()
+        self.assertEqual((stats["hits"], stats["misses"], stats["entries"]), (1, 1, 1))
+        self.assertNotIn("sure", json.dumps(stats).lower())
+
+
 class BoundedEncoderTest(unittest.TestCase):
     """The bounded encoder gives the library's result, with the open (non-cloning) weights.
 

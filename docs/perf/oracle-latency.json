@@ -1,0 +1,1062 @@
+{
+ "meta": {
+  "date": "2026-10-19/20",
+  "server": "Oracle Cloud VM.Standard.E2.4: AMD EPYC 7551 (Zen 1, AVX2, no AVX-512), 8 vCPU = 4 cores x 2 threads (sibling pairs 0-1, 2-3, 4-5, 6-7), 32 GB, KVM, us-ashburn-1",
+  "stack": "voice service image 1.49.0; local-llm ollama/ollama:0.40.6 (llama-server) qwen2.5:1.5b q4_K_M, OLLAMA_NUM_PARALLEL=1, flash attention on, batch 512, context 4096, prompt cache 256 MiB; local-tts Pocket TTS 3.3.0 (1 torch thread, voice alba); speech-to-text: the organisation's choice during this work, Whisper small.en via local-speech (speaches 0.8.3, int8, 4 threads) - not changed here",
+  "caller": "infra/scripts/e2e_test_call.py inside the voice-runtime container (direct host path), 4 caller lines from WAV files made once by Pocket TTS (voice marius) and reused in every run, 15 s between calls; remote run: same script and WAVs on a Windows PC over the internet through the TURN relay",
+  "lock": "every benchmark ran inside flock /tmp/atlas-bench.lock; another agent's speech-to-text evaluations ran between them, never during",
+  "timing": "per turn, ms after the caller's last speech frame was sent: stt_final = final transcript event received; llm_start = LLM request sent (ttfb event - ttfb); llm_first = first token; tts_start = first sentence handed to TTS; tts_chunk = first 0.5 s of audio received by the voice service; bot_started = voice service started sending audio; heard = first agent audio frame at or above -45 dBFS at the caller. 'clean' turns exclude the ones where speech-to-text split a caller line in two, which shifts the voice service's events by one turn",
+  "tools": "infra/scripts/e2e_test_call.py plus analysis scripts kept outside the repository (per-turn waterfall from events.jsonl; LLM turns through Ollama /api/chat with the demo agent's real first request; Pocket TTS streaming timing)"
+ },
+ "result": {
+  "reply_heard_ms_all_turns": {
+   "before": {
+    "p50": 7658,
+    "p90": 9542
+   },
+   "after": {
+    "p50": 6440,
+    "p90": 9416
+   }
+  },
+  "reply_heard_ms_clean_turns": {
+   "before": {
+    "p50": 7827,
+    "p90": 10140
+   },
+   "after": {
+    "p50": 6572,
+    "p90": 10982
+   }
+  },
+  "transcript_to_heard_ms": {
+   "before": {
+    "p50": 2994,
+    "p90": 3993
+   },
+   "after": {
+    "p50": 1914,
+    "p90": 2809
+   }
+  },
+  "first_sentence_spoken_from_memory": {
+   "before": "0/9",
+   "after": "9/10"
+  },
+  "note": "The whole reply time is dominated by speech-to-text (Whisper small.en, 4.7-4.9 s p50 after the caller stops), owned by another workstream. Everything after the transcript went from 3.0 s to 1.9 s (p50) and 4.0 s to 2.8 s (p90)."
+ },
+ "hard_floors": [
+  {
+   "what": "VAD end of speech",
+   "cost_ms": 200,
+   "configurable": false,
+   "where": "vendor/voice-runtime/api/services/pipecat/run_pipeline.py:181 (also :297, :973) SileroVADAnalyzer(params=VADParams(stop_secs=0.2))"
+  },
+  {
+   "what": "turn stop wait (SpeechTimeoutUserTurnStopStrategy user_speech_timeout)",
+   "cost_ms": 600,
+   "configurable": "not through workflow configuration; turn_stop_strategy 'turn_analyzer' swaps in the smart-turn strategy instead (run_pipeline.py:247-257, not measured here)",
+   "where": "pipecat/turns/user_stop/speech_timeout_user_turn_stop_strategy.py:52 (image site-packages) default 0.6, constructed with defaults at vendor/voice-runtime/api/services/pipecat/run_pipeline.py:259",
+   "measured": "607-608 ms between the final transcript and the LLM request in every Whisper turn (segmented speech-to-text plus a minimum-words turn start restart the timer at the transcript); with the earlier streaming speech-to-text the LLM request left 1.08 s after the caller stopped (docs/perf/e2e-test-call-streaming.json runs re-analysed)"
+  },
+  {
+   "what": "TTS pre-roll: the voice service plays a sentence only after 0.5 s of its audio (24000 bytes) arrived, or the whole sentence if shorter",
+   "configurable": false,
+   "where": "pipecat/services/tts_service.py:492-506 (CHUNK_SECONDS = 0.5 at :505) used by pipecat/services/speaches/tts.py:89 response.iter_bytes(self.chunk_size); httpx/_decoders.py:228-258 ByteChunker returns only full chunks; vendor service_factory.py:960-970 passes no chunk size; no environment variable or workflow setting",
+   "cost_ms": {
+    "idle_server": "first audio 230-257 ms, first 0.5 s 487-524 ms: about 260 ms",
+    "in_calls": "voice service tts ttfb p50 704-777 ms against Pocket TTS first audio p50 about 290 ms (its own log): about 400 ms",
+    "kept_phrases": "0 (the whole phrase arrives in 3 ms)"
+   }
+  },
+  {
+   "what": "sentence boundary needs the next character",
+   "cost_ms": "one more LLM token, 55-90 ms on this CPU",
+   "where": "pipecat/utils/text/simple_text_aggregator.py:97-196 (lookahead before match_endofsentence, pipecat/utils/string.py:143)"
+  },
+  {
+   "what": "output audio chunk",
+   "cost_ms": 40,
+   "where": "pipecat/transports/base_transport.py:79 audio_out_10ms_chunks = 4 (vendor transport_setup.py does not override it)"
+  },
+  {
+   "what": "LLM on 4 Zen 1 cores",
+   "cost_ms": "first token 0.8-1.0 s for the 12-40 new prompt tokens of a turn (about 25 tokens/s), opener sentence complete 1.08-1.2 s after the request",
+   "where": "measured: llama-server timings in local-llm logs, e2e llm_ttfb"
+  }
+ ],
+ "e2e_configurations": {
+  "baseline": {
+   "description": "before: old opener rule, no phrase cache, LLM 4 threads",
+   "turns": 12,
+   "clean_turns": 9,
+   "heard_all": {
+    "p50": 7658,
+    "p90": 9542
+   },
+   "choppy_turns": 1,
+   "heard": {
+    "p50": 7827,
+    "p90": 10140
+   },
+   "stt_final": {
+    "p50": 4901,
+    "p90": 6975
+   },
+   "turn_gap": {
+    "p50": 607,
+    "p90": 608
+   },
+   "llm_ttfb": {
+    "p50": 973,
+    "p90": 1063
+   },
+   "llm_first_sentence": {
+    "p50": 1368,
+    "p90": 2142
+   },
+   "tts_ttfb": {
+    "p50": 706,
+    "p90": 862
+   },
+   "tts_to_playing": {
+    "p50": 35,
+    "p90": 40
+   },
+   "transport": {
+    "p50": 229,
+    "p90": 296
+   },
+   "transcript_to_heard": {
+    "p50": 2994,
+    "p90": 3993
+   },
+   "first_sentence_from_memory": "0/9",
+   "transcript_to_heard_when_from_memory": {
+    "p50": null,
+    "p90": null
+   },
+   "transcript_to_heard_when_synthesised": {
+    "p50": 2994,
+    "p90": 3993
+   },
+   "first_sentences": [
+    "Great! I'm also looking to buy my first home. Could you tell",
+    "That's quite common, Sarah.",
+    "I see. And how does that timeline fit within the home buying",
+    "A typical budget for a home can vary widely, but let's see h",
+    "Got it. For the second, you might be interested in checking ",
+    "Could you share the square footage of the units you're looki",
+    "No problem. Thanks for the call, Sarah. Please let us know w",
+    "Great, thank you! Could you tell me when you first wanted to",
+    "Do you have a budget in your mind? What are you looking to s"
+   ]
+  },
+  "after1": {
+   "description": "phrase cache (8 openers) + rule v1, LLM 4 threads",
+   "turns": 12,
+   "clean_turns": 12,
+   "heard_all": {
+    "p50": 7582,
+    "p90": 9375
+   },
+   "choppy_turns": 0,
+   "heard": {
+    "p50": 7582,
+    "p90": 9375
+   },
+   "stt_final": {
+    "p50": 4650,
+    "p90": 5306
+   },
+   "turn_gap": {
+    "p50": 608,
+    "p90": 609
+   },
+   "llm_ttfb": {
+    "p50": 982,
+    "p90": 1110
+   },
+   "llm_first_sentence": {
+    "p50": 1357,
+    "p90": 2785
+   },
+   "tts_ttfb": {
+    "p50": 704,
+    "p90": 920
+   },
+   "tts_to_playing": {
+    "p50": 32,
+    "p90": 42
+   },
+   "transport": {
+    "p50": 150,
+    "p90": 301
+   },
+   "transcript_to_heard": {
+    "p50": 3116,
+    "p90": 4636
+   },
+   "first_sentence_from_memory": "5/12",
+   "transcript_to_heard_when_from_memory": {
+    "p50": 1925,
+    "p90": 2037
+   },
+   "transcript_to_heard_when_synthesised": {
+    "p50": 3448,
+    "p90": 4786
+   },
+   "first_sentences": [
+    "Okay, so could you tell me what timeline in life you're work",
+    "Got it. Do you have a specific budget in mind, Sarah?",
+    "Sure, the market around that budget should provide some info",
+    "No problem. This has been helpful feedback and will help our",
+    "Got it. Do you have a specific budget in mind right now?",
+    "Sure, we can provide options within that timeline. Just to c",
+    "Understanding, what kind of neighborhood do you think we sho",
+    "Okay, we can schedule a follow-up call to discuss your prefe",
+    "Got it. And do you have a specific timeline in mind? For ins",
+    "Okay, that gives us some time to review our options together",
+    "Great. Just to clarify, what specific aspects of the home wo",
+    "That's perfect. We can certainly discuss these options furth"
+   ]
+  },
+  "after2": {
+   "description": "same as after1, LLM restarted (repeat)",
+   "turns": 12,
+   "clean_turns": 12,
+   "heard_all": {
+    "p50": 6973,
+    "p90": 7996
+   },
+   "choppy_turns": 4,
+   "heard": {
+    "p50": 6973,
+    "p90": 7996
+   },
+   "stt_final": {
+    "p50": 4672,
+    "p90": 4778
+   },
+   "turn_gap": {
+    "p50": 608,
+    "p90": 609
+   },
+   "llm_ttfb": {
+    "p50": 964,
+    "p90": 1058
+   },
+   "llm_first_sentence": {
+    "p50": 1188,
+    "p90": 1466
+   },
+   "tts_ttfb": {
+    "p50": 315,
+    "p90": 845
+   },
+   "tts_to_playing": {
+    "p50": 32,
+    "p90": 41
+   },
+   "transport": {
+    "p50": 167,
+    "p90": 390
+   },
+   "transcript_to_heard": {
+    "p50": 2299,
+    "p90": 3184
+   },
+   "first_sentence_from_memory": "6/12",
+   "transcript_to_heard_when_from_memory": {
+    "p50": 1923,
+    "p90": 2069
+   },
+   "transcript_to_heard_when_synthesised": {
+    "p50": 3011,
+    "p90": 3621
+   },
+   "first_sentences": [
+    "Sure, how can I assist you on that? Any specific features or",
+    "Got it. Do you already have a list of places you’re consider",
+    "Sure thing. What timeline are you most flexible with? Maybe ",
+    "No problem, Sarah. How can we assist you further when you’re",
+    "Great! What timeline are you working with? What are your bud",
+    "Okay. Our latest offers are priced at approximately $395K. D",
+    "Okay. Based on your budget, our first offer is $400K with a ",
+    "Got it. If you decide to move forward and hear back from us,",
+    "Okay, first let's discuss your timeline. Are you planning to",
+    "Sure, we can definitely help with that. And if you have any ",
+    "Got it. And do you know who else is involved in the decision",
+    "Alright, thank you so much for taking the time to talk with "
+   ]
+  },
+  "pin": {
+   "description": "LLM 3 threads on cores 0-2 (cpuset 0-5), TTS on core 3 (cpuset 6,7)",
+   "turns": 12,
+   "clean_turns": 9,
+   "heard_all": {
+    "p50": 6746,
+    "p90": 9155
+   },
+   "choppy_turns": 0,
+   "heard": {
+    "p50": 8009,
+    "p90": 9611
+   },
+   "stt_final": {
+    "p50": 4770,
+    "p90": 5577
+   },
+   "turn_gap": {
+    "p50": 608,
+    "p90": 616
+   },
+   "llm_ttfb": {
+    "p50": 1217,
+    "p90": 1457
+   },
+   "llm_first_sentence": {
+    "p50": 1601,
+    "p90": 3564
+   },
+   "tts_ttfb": {
+    "p50": 726,
+    "p90": 919
+   },
+   "tts_to_playing": {
+    "p50": 29,
+    "p90": 39
+   },
+   "transport": {
+    "p50": 141,
+    "p90": 346
+   },
+   "transcript_to_heard": {
+    "p50": 3331,
+    "p90": 5507
+   },
+   "first_sentence_from_memory": "4/9",
+   "transcript_to_heard_when_from_memory": {
+    "p50": 2044,
+    "p90": 2150
+   },
+   "transcript_to_heard_when_synthesised": {
+    "p50": 3796,
+    "p90": 5772
+   },
+   "first_sentences": [
+    "Great, how would you describe your financial situation and y",
+    "Okay. Who else in your household or team is involved in this",
+    "That was helpful. Have a nice day!",
+    "Got it. I’m trying to decide between new condo apartments an",
+    "Okay, just to make sure I have that right, our goal is to bu",
+    "Got it, Sarah. If you have any more questions, feel free to ",
+    "Got it. What timelines are you working with for finding a ne",
+    "Sure. Do you have a specific budget in mind for this purchas",
+    ""
+   ]
+  },
+  "final-t4": {
+   "description": "13 openers + rule v4, LLM 4 threads",
+   "turns": 12,
+   "clean_turns": 9,
+   "heard_all": {
+    "p50": 6830,
+    "p90": 8508
+   },
+   "choppy_turns": 1,
+   "heard": {
+    "p50": 7782,
+    "p90": 8571
+   },
+   "stt_final": {
+    "p50": 4762,
+    "p90": 5186
+   },
+   "turn_gap": {
+    "p50": 607,
+    "p90": 608
+   },
+   "llm_ttfb": {
+    "p50": 799,
+    "p90": 1023
+   },
+   "llm_first_sentence": {
+    "p50": 1200,
+    "p90": 1741
+   },
+   "tts_ttfb": {
+    "p50": 777,
+    "p90": 887
+   },
+   "tts_to_playing": {
+    "p50": 26,
+    "p90": 43
+   },
+   "transport": {
+    "p50": 138,
+    "p90": 372
+   },
+   "transcript_to_heard": {
+    "p50": 2900,
+    "p90": 3609
+   },
+   "first_sentence_from_memory": "3/9",
+   "transcript_to_heard_when_from_memory": {
+    "p50": 1726,
+    "p90": 1764
+   },
+   "transcript_to_heard_when_synthesised": {
+    "p50": 3052,
+    "p90": 3672
+   },
+   "first_sentences": [
+    "Got it. So your home-buying timeline is important to you?",
+    "Great. You mentioned a budget, how much do you envision bein",
+    "Okay, thank you, Sarah. When will you be ready to buy the ho",
+    "Perfect. We have a range of locations available, and we also",
+    "Alright, it's around that price range. How important would i",
+    "Got it, perfect timing then. Thanks Sarah, looking forward t",
+    "Great, in about three months sounds good. If you need help i",
+    "Absolutely, $400,000 gives us a little wiggle room. We can f",
+    "No thank you, that's perfect. I’ll follow up to confirm deta"
+   ]
+  },
+  "final-t8": {
+   "description": "13 openers + rule v4, LLM 8 threads",
+   "turns": 12,
+   "clean_turns": 5,
+   "heard_all": {
+    "p50": 6244,
+    "p90": 15144
+   },
+   "choppy_turns": 3,
+   "heard": {
+    "p50": 6704,
+    "p90": 14597
+   },
+   "stt_final": {
+    "p50": 4759,
+    "p90": 6782
+   },
+   "turn_gap": {
+    "p50": 609,
+    "p90": 702
+   },
+   "llm_ttfb": {
+    "p50": 955,
+    "p90": 4004
+   },
+   "llm_first_sentence": {
+    "p50": 1184,
+    "p90": 8861
+   },
+   "tts_ttfb": {
+    "p50": 16,
+    "p90": 340
+   },
+   "tts_to_playing": {
+    "p50": 19,
+    "p90": 960
+   },
+   "transport": {
+    "p50": 135,
+    "p90": 158
+   },
+   "transcript_to_heard": {
+    "p50": 1945,
+    "p90": 10893
+   },
+   "first_sentence_from_memory": "4/5",
+   "transcript_to_heard_when_from_memory": {
+    "p50": 1897,
+    "p90": 9926
+   },
+   "transcript_to_heard_when_synthesised": {
+    "p50": 7213,
+    "p90": 7213
+   },
+   "first_sentences": [
+    "Got it. And it's a little over a month until the first anniv",
+    "Okay. For the first question, what timeline are you working ",
+    "Got it. And when do you plan on making a decision about this",
+    "Perfect. And the last question, do you have a budget in mind",
+    "Got it, what timeline are you working with?"
+   ]
+  },
+  "final": {
+   "description": "13 openers + opener prefixes + rule v4, LLM 4 threads (shipped)",
+   "turns": 16,
+   "clean_turns": 10,
+   "heard_all": {
+    "p50": 6440,
+    "p90": 9416
+   },
+   "choppy_turns": 4,
+   "heard": {
+    "p50": 6572,
+    "p90": 10982
+   },
+   "stt_final": {
+    "p50": 4746,
+    "p90": 5303
+   },
+   "turn_gap": {
+    "p50": 608,
+    "p90": 608
+   },
+   "llm_ttfb": {
+    "p50": 902,
+    "p90": 1434
+   },
+   "llm_first_sentence": {
+    "p50": 1082,
+    "p90": 1795
+   },
+   "tts_ttfb": {
+    "p50": 16,
+    "p90": 89
+   },
+   "tts_to_playing": {
+    "p50": 29,
+    "p90": 42
+   },
+   "transport": {
+    "p50": 148,
+    "p90": 156
+   },
+   "transcript_to_heard": {
+    "p50": 1914,
+    "p90": 2809
+   },
+   "first_sentence_from_memory": "9/10",
+   "transcript_to_heard_when_from_memory": {
+    "p50": 1908,
+    "p90": 2986
+   },
+   "transcript_to_heard_when_synthesised": {
+    "p50": 2427,
+    "p90": 2427
+   },
+   "first_sentences": [
+    "Perfect. Our timeline is around 6 months. Right now, our pri",
+    "Got it. Just confirming. I'm not quite sure how those times ",
+    "Got it. For your budget, we're looking for an investment tha",
+    "Got it. Thanks for being flexible there. Now, how many peopl",
+    "Great! When do you generally have a clear idea of how much y",
+    "You're welcome, Sarah. We'd be happy to help connect you wit",
+    "Got it. I'm here to help. Can you tell me a bit more about y",
+    "Okay. That's great. And what's your budget range?",
+    "Great. Do you have anyone else involved in the decision or a",
+    "Sure. No problem, Sarah. I'll be back when you're ready. See"
+   ]
+  },
+  "remote": {
+   "description": "shipped config, caller on a PC over the internet via the TURN relay",
+   "turns": 8,
+   "clean_turns": 5,
+   "heard_all": {
+    "p50": 6958,
+    "p90": 7817
+   },
+   "choppy_turns": 3,
+   "heard": {
+    "p50": 7365,
+    "p90": 7878
+   },
+   "stt_final": {
+    "p50": 5193,
+    "p90": 5756
+   },
+   "turn_gap": {
+    "p50": 604,
+    "p90": 618
+   },
+   "llm_ttfb": {
+    "p50": 890,
+    "p90": 984
+   },
+   "llm_first_sentence": {
+    "p50": 1112,
+    "p90": 1146
+   },
+   "tts_ttfb": {
+    "p50": 14,
+    "p90": 18
+   },
+   "tts_to_playing": {
+    "p50": 31,
+    "p90": 32
+   },
+   "transport": {
+    "p50": 344,
+    "p90": 363
+   },
+   "transcript_to_heard": {
+    "p50": 2094,
+    "p90": 2160
+   },
+   "first_sentence_from_memory": "5/5",
+   "transcript_to_heard_when_from_memory": {
+    "p50": 2094,
+    "p90": 2160
+   },
+   "transcript_to_heard_when_synthesised": {
+    "p50": null,
+    "p90": null
+   },
+   "first_sentences": [
+    "Got it, Alex. How can I assist you? I can help with a lot of",
+    "Got it. So you're looking to buy your first home. Are you wo",
+    "Sure. And are you on a budget? How much would you be open to",
+    "Okay. And are you specifically looking for a particular type",
+    "Got it. So you two live together and plan on buying a couple"
+   ]
+  }
+ },
+ "tts_microbench": {
+  "method": "45 requests per run from the api container to local-tts, one at a time, idle server: 5 kept-phrase texts, 4 sentences made unique per round, and (final) 4 sentences opening with a kept phrase; first byte, first 24000 bytes (what the voice service waits for), leading audio below -40 dBFS",
+  "runs": [
+   {
+    "label": "before-cache",
+    "summary": {
+     "cached-list": {
+      "first_byte_ms": 187.4,
+      "first_chunk_ms": 439.5,
+      "total_ms": 633.5,
+      "audio_s": 1.0,
+      "lead_silence_ms": 80.0,
+      "n": 25,
+      "hits": 0
+     },
+     "generated": {
+      "first_byte_ms": 230.4,
+      "first_chunk_ms": 486.9,
+      "total_ms": 1241.0,
+      "audio_s": 2.1,
+      "lead_silence_ms": 175.0,
+      "n": 20,
+      "hits": 0
+     }
+    }
+   },
+   {
+    "label": "after-cache",
+    "summary": {
+     "cached-list": {
+      "first_byte_ms": 2.3,
+      "first_chunk_ms": 2.6,
+      "total_ms": 2.9,
+      "audio_s": 0.9,
+      "lead_silence_ms": 30.0,
+      "n": 25,
+      "hits": 25
+     },
+     "generated": {
+      "first_byte_ms": 257.0,
+      "first_chunk_ms": 519.8,
+      "total_ms": 1292.3,
+      "audio_s": 2.1,
+      "lead_silence_ms": 185.0,
+      "n": 20,
+      "hits": 0
+     }
+    }
+   },
+   {
+    "label": "final",
+    "summary": {
+     "cached-list": {
+      "first_byte_ms": 2.6,
+      "first_chunk_ms": 2.9,
+      "total_ms": 3.2,
+      "audio_s": 0.9,
+      "lead_silence_ms": 30.0,
+      "n": 25,
+      "hits": 25
+     },
+     "generated": {
+      "first_byte_ms": 254.1,
+      "first_chunk_ms": 524.4,
+      "total_ms": 1301.2,
+      "audio_s": 2.1,
+      "lead_silence_ms": 160.0,
+      "n": 20,
+      "hits": 0
+     },
+     "opener+rest": {
+      "first_byte_ms": 3.9,
+      "first_chunk_ms": 5.0,
+      "total_ms": 1228.8,
+      "audio_s": 2.8,
+      "lead_silence_ms": 30.0,
+      "n": 20,
+      "hits": 0
+     }
+    }
+   }
+  ]
+ },
+ "llm": {
+  "threads_and_models": [
+   {
+    "label": "q4km-t4",
+    "model": "qwen2.5:1.5b",
+    "options": {
+     "num_thread": 4
+    },
+    "cold_prompt_tok_s": 34.8,
+    "cold_prompt_tokens": 475,
+    "turn_ttft_ms_median": 770.0,
+    "turn_first_sentence_ms_median": 1008.5,
+    "gen_tok_s_median": 18.1,
+    "replies": 8,
+    "first_sentence_is_kept_opener": 4,
+    "first_words_served_from_memory": 7,
+    "sample_replies": [
+     "Got it. We're here to help you find the perfect place. Do you have a budget in mind?",
+     "Perfect. What are the approximate dates you're considering?",
+     "Okay, let's see if we can narrow down a few options that fit within your budget. Do you have anyone involved in the decision?",
+     "Of course, Sarah. If you decide to move forward with anything we recommend, we can send over a list. We'd be happy to help. Have a good day!"
+    ]
+   },
+   {
+    "label": "q4km-t2",
+    "model": "qwen2.5:1.5b",
+    "options": {
+     "num_thread": 2
+    },
+    "cold_prompt_tok_s": 18.4,
+    "cold_prompt_tokens": 471,
+    "turn_ttft_ms_median": 1469.0,
+    "turn_first_sentence_ms_median": 1909.0,
+    "gen_tok_s_median": 10.2,
+    "replies": 8,
+    "first_sentence_is_kept_opener": 3,
+    "first_words_served_from_memory": 7,
+    "sample_replies": [
+     "Got it. I'm here to help you find the perfect home. When do you have a specific timeline in mind?",
+     "Perfect. Do you have any budget in mind?",
+     "That's about what I'm looking for as well. Could you possibly tell me about the team involved in the decision-making process?",
+     "Of course, anytime. We'll look forward to hearing from you. Goodbye."
+    ]
+   },
+   {
+    "label": "q4km-t3",
+    "model": "qwen2.5:1.5b",
+    "options": {
+     "num_thread": 3
+    },
+    "cold_prompt_tok_s": 27.7,
+    "cold_prompt_tokens": 469,
+    "turn_ttft_ms_median": 987.0,
+    "turn_first_sentence_ms_median": 1323.5,
+    "gen_tok_s_median": 14.4,
+    "replies": 8,
+    "first_sentence_is_kept_opener": 3,
+    "first_words_served_from_memory": 5,
+    "sample_replies": [
+     "Got it. How are you currently planning your timeline for buying a home?",
+     "That's doable. Do you have a budget in mind for the purchase?",
+     "Understood. And who else is involved in the decision? Your spouse or is it just you?",
+     "Alright, thank you for your time. If there's anything else, we can schedule a follow-up call. Have a great day!"
+    ]
+   },
+   {
+    "label": "q4km-t6",
+    "model": "qwen2.5:1.5b",
+    "options": {
+     "num_thread": 6
+    },
+    "cold_prompt_tok_s": 36.4,
+    "cold_prompt_tokens": 473,
+    "turn_ttft_ms_median": 752.0,
+    "turn_first_sentence_ms_median": 931.5,
+    "gen_tok_s_median": 17.7,
+    "replies": 8,
+    "first_sentence_is_kept_opener": 6,
+    "first_words_served_from_memory": 7,
+    "sample_replies": [
+     "Got it. What timeline are you aiming for?",
+     "Great. Do you have a budget in mind?",
+     "I see. And who is involved in the decision?",
+     "Okay, thank you for your time. We look forward to potentially working with you. Have a great day!"
+    ]
+   },
+   {
+    "label": "q4km-t8",
+    "model": "qwen2.5:1.5b",
+    "options": {
+     "num_thread": 8
+    },
+    "cold_prompt_tok_s": 41.2,
+    "cold_prompt_tokens": 475,
+    "turn_ttft_ms_median": 655.0,
+    "turn_first_sentence_ms_median": 1074.5,
+    "gen_tok_s_median": 18.6,
+    "replies": 8,
+    "first_sentence_is_kept_opener": 3,
+    "first_words_served_from_memory": 6,
+    "sample_replies": [
+     "Great! What timeline are you working with for your purchase?",
+     "Okay, any specific budget in mind?",
+     "And who else is involved in the decision?",
+     "You're welcome. I'll wrap up my end of the call."
+    ]
+   },
+   {
+    "label": "qwen2.5:1.5b-instruct-q4_0-t4",
+    "model": "qwen2.5:1.5b-instruct-q4_0",
+    "options": {
+     "num_thread": 4
+    },
+    "cold_prompt_tok_s": 30.0,
+    "cold_prompt_tokens": 473,
+    "turn_ttft_ms_median": 868.5,
+    "turn_first_sentence_ms_median": 1146.0,
+    "gen_tok_s_median": 16.4,
+    "replies": 8,
+    "first_sentence_is_kept_opener": 4,
+    "first_words_served_from_memory": 5,
+    "sample_replies": [
+     "Got it. What timeline are you working with? Do you have a budget in mind? Who else is involved in the decision?",
+     "That's helpful. Do you have any specific neighborhoods or types of properties in mind?",
+     "Understood. Thank you for sharing that information. I'll pass on your budget and timeline to our team for your ideal property. We can reach out to you later thi",
+     "You're welcome. We'll keep you updated as we move forward. If there's anything else we can assist you with, don't hesitate to reach out. Have a great day."
+    ]
+   },
+   {
+    "label": "qwen2.5:1.5b-instruct-q8_0-t4",
+    "model": "qwen2.5:1.5b-instruct-q8_0",
+    "options": {
+     "num_thread": 4
+    },
+    "cold_prompt_tok_s": 27.4,
+    "cold_prompt_tokens": 473,
+    "turn_ttft_ms_median": 921.0,
+    "turn_first_sentence_ms_median": 1485.0,
+    "gen_tok_s_median": 13.5,
+    "replies": 8,
+    "first_sentence_is_kept_opener": 2,
+    "first_words_served_from_memory": 6,
+    "sample_replies": [
+     "Got it. Can you tell me when you'd like to buy your home?",
+     "Sure, that's a good timeframe. Do you have a specific budget in mind?",
+     "Understood. And who else is involved in the decision?",
+     "Thank you for your time. We appreciate it. Have a great day!"
+    ]
+   },
+   {
+    "label": "qwen2.5:0.5b-t4",
+    "model": "qwen2.5:0.5b",
+    "options": {
+     "num_thread": 4
+    },
+    "cold_prompt_tok_s": 80.0,
+    "cold_prompt_tokens": 476,
+    "turn_ttft_ms_median": 351.0,
+    "turn_first_sentence_ms_median": 529.0,
+    "gen_tok_s_median": 30.6,
+    "replies": 8,
+    "first_sentence_is_kept_opener": 3,
+    "first_words_served_from_memory": 5,
+    "sample_replies": [
+     "Got it. Let's talk about the next steps in the process. Is there a specific area you're interested in?",
+     "Alright, based on the timeline you provided, we'll be working on closing the deal within the next three months. To ensure everything is smooth, let's discuss th",
+     "That's understandable. We'll make sure to stay within those limits. The next steps include:\n\n1. **Initial Screening**: We'll start by conducting a quick home in",
+     "That's great to hear. Let's plan the next steps accordingly. If you have any questions or need further assistance, feel free to reach out. Safe travels!"
+    ]
+   },
+   {
+    "label": "llama3.2:1b-t4",
+    "model": "llama3.2:1b",
+    "options": {
+     "num_thread": 4
+    },
+    "cold_prompt_tok_s": 38.2,
+    "cold_prompt_tokens": 479,
+    "turn_ttft_ms_median": 4153.5,
+    "turn_first_sentence_ms_median": 4772.0,
+    "gen_tok_s_median": 16.4,
+    "replies": 8,
+    "first_sentence_is_kept_opener": 2,
+    "first_words_served_from_memory": 2,
+    "sample_replies": [
+     "Got it. {\"name\": \"wrap_up\", \"parameters\": {}}",
+     "[tool][tool]",
+     "{\"type\":\"function\", \"parameters\": {\"budget\": \"400000\"}}",
+     "I'm sorry I can't answer your question. {\"type\":\"function\", \"name\":\"wrap_up\", \"parameters\": {\"budget\": \"400000\"}}"
+    ]
+   },
+   {
+    "label": "q4km-t4-newrule",
+    "model": "qwen2.5:1.5b",
+    "options": {
+     "num_thread": 4
+    },
+    "cold_prompt_tok_s": null,
+    "cold_prompt_tokens": null,
+    "turn_ttft_ms_median": 789.0,
+    "turn_first_sentence_ms_median": 988.5,
+    "gen_tok_s_median": 17.2,
+    "replies": 12,
+    "first_sentence_is_kept_opener": 11,
+    "first_words_served_from_memory": 11,
+    "sample_replies": [
+     "Got it. We've got several options, including apartments, condos, and townhouses. I'd like to hear a bit more about your preferences.\nWhat kind of living space a",
+     "Okay. We have an apartment that's fully furnished with a kitchen and bathroom. What do you think about apartments?\nSure. My budget is around $300,000. I've neve",
+     "Got it. The condo is close to the beach. It has a 1,000 square foot living room and a fully equipped kitchen. It's priced at $360,000. Would that work for you?",
+     "You're welcome. We look forward to seeing you soon."
+    ]
+   }
+  ],
+  "threads_batch": "llama-server in ollama 0.40.6 reads LLAMA_ARG_THREADS but has no environment variable for --threads-batch (llama-server --help lists none; LLAMA_ARG_THREADS_BATCH=8 left system_info at n_threads_batch = 4). Ollama passes no -t/-tb unless a model sets num_thread.",
+  "prompt_cache_in_calls": "per turn 95-98 % of the prompt came from the slot (cached n_tokens), 12-40 new tokens read in 0.4-1.9 s; the warm-up at session start re-read 41-200 tokens; after a long reply (167 tokens) that the caller talked over, the next request re-read 167 tokens (5.2 s first token)",
+  "post_call_requests": "after each call the voice service sends a 470-810 token request with only 263-312 tokens cached: 5.5-8.1 s of all LLM threads, and twice in the final run it was cut off at 10 s (HTTP 500). It would delay a second caller's reply on this server.",
+  "temperature": "the voice service's requests reach llama-server with temp = 1.000 (llama-server log); ATLAS does not expose a temperature for the model choice although the runtime supports one (vendor service_factory.py:1256-1263)",
+  "num_predict": "not changed: a cap does not shorten the first sentence and would cut long replies mid-sentence",
+  "opener_rule_compliance": [
+   {
+    "label": "rule-newrule-temp1",
+    "temperature": 1.0,
+    "replies": 16,
+    "first_sentence_is_kept_opener": 11,
+    "first_words_served_from_memory": 13,
+    "first_sentences": [
+     "Okay.",
+     "Got it.",
+     "Sure.",
+     "Got it.",
+     "Great.",
+     "That's good timing.",
+     "Okay, that's right in the middle of what we usually sell.",
+     "No problem.",
+     "Got it.",
+     "Okay.",
+     "Got it.",
+     "Sure.",
+     "Okay, great.",
+     "Got it.",
+     "That falls within our pricing range.",
+     "Sure thing, and thanks for reaching out to us."
+    ],
+    "turn_first_sentence_ms_median": 1265.5
+   },
+   {
+    "label": "rule-v2-temp1",
+    "temperature": 1.0,
+    "replies": 16,
+    "first_sentence_is_kept_opener": 14,
+    "first_words_served_from_memory": 14,
+    "first_sentences": [
+     "Got it.",
+     "Okay.",
+     "Perfect.",
+     "That's great, thank you for reaching out.",
+     "Got it.",
+     "Okay.",
+     "Great.",
+     "Of course.",
+     "Got it.",
+     "Okay.",
+     "Perfect.",
+     "Of course.",
+     "That's exciting!",
+     "Got it.",
+     "Okay.",
+     "You're welcome."
+    ],
+    "turn_first_sentence_ms_median": 1200.0
+   },
+   {
+    "label": "rule-v3-temp1",
+    "temperature": 1.0,
+    "replies": 16,
+    "first_sentence_is_kept_opener": 1,
+    "first_words_served_from_memory": 10,
+    "first_sentences": [
+     "Great!",
+     "That's great.",
+     "I see, that's quite a range.",
+     "It was nice talking to you, Sarah.",
+     "Great!",
+     "Alright, so you're aiming to be moving within the next 3-6 months, correct?",
+     "Got it.",
+     "No problem at all, and thank you so much for considering Demo Realty.",
+     "Great, can you tell me a bit more about your timeline?",
+     "That's good.",
+     "Absolutely, what are your sources of income?",
+     "Absolutely, it was great chatting with you.",
+     "That sounds exciting!",
+     "Great!",
+     "Absolutely, thank you for that.",
+     "Thank you for reaching out."
+    ],
+    "turn_first_sentence_ms_median": 1572.0
+   },
+   {
+    "label": "rule-v4-temp1",
+    "temperature": 1.0,
+    "replies": 16,
+    "first_sentence_is_kept_opener": 12,
+    "first_words_served_from_memory": 15,
+    "first_sentences": [
+     "Got it.",
+     "Okay.",
+     "Great, thank you.",
+     "You're welcome.",
+     "Got it.",
+     "Okay.",
+     "Perfect.",
+     "Sure, I appreciate you filling out your details.",
+     "Got it.",
+     "Great.",
+     "Okay.",
+     "Of course, Sarah.",
+     "Got it.",
+     "Okay.",
+     "Perfect.",
+     "That's great."
+    ],
+    "turn_first_sentence_ms_median": 942.5
+   }
+  ]
+ },
+ "cpu_allocation": {
+  "llm_threads_in_calls": {
+   "4 (shipped)": {
+    "llm_ttfb_p50_ms": [
+     982,
+     964,
+     799,
+     902
+    ]
+   },
+   "8": {
+    "llm_ttfb_p50_ms_clean": 955,
+    "all_turns_llm_ttfb_p50_ms": 2500,
+    "runs_passed": "1/3 (two replies over 15 s)"
+   },
+   "3 pinned to cores 0-2 (cpuset 0-5), Pocket TTS pinned to core 3 (cpuset 6,7)": {
+    "llm_ttfb_p50_ms": 1217,
+    "llm_first_sentence_p50_ms": 1601
+   }
+  },
+  "knobs_verified": "compose cpuset applied (docker inspect HostConfig.CpusetCpus = 0-5 and 6,7); LLAMA_ARG_THREADS honoured (system_info n_threads = 3/4/8); POCKET_TTS_THREADS sets torch threads (startup log)",
+  "decision": "LLAMA_ARG_THREADS 4, no cpuset, Pocket TTS 1 thread"
+ },
+ "network": {
+  "rtt_pc_to_server_ms": "224-248 (TCP connect to the web host; ICMP is blocked)",
+  "local": {
+   "heard_minus_server_latency_ms_p50": 264,
+   "bot_started_to_heard_ms_p50": 148
+  },
+  "remote_through_turn": {
+   "heard_minus_server_latency_ms_p50": 836,
+   "bot_started_to_heard_ms_p50": 344,
+   "ice_pair": "host (caller LAN) -> relay 129.80.159.225 (run 1), relay -> host 172.30.0.10 (run 2)"
+  },
+  "added_by_distance_ms": 572,
+  "note": "About one round trip (240 ms) plus about 330 ms of jitter buffering and packetisation at the two WebRTC endpoints (aiortc on both sides here; a browser's adaptive jitter buffer may hold less). Not separable further with these measurements."
+ }
+}

@@ -552,11 +552,25 @@ server logs a warning if you add a voice that is not cleared for commercial use.
 | `POCKET_TTS_VOICE_DIR` | `/home/app/.cache/voices` (in the weights volume) | Where cloned voices are kept: `<id>.safetensors` (the computed voice) and `<id>.json` (name, date, sample length, consent statement) |
 | `POCKET_TTS_MAX_CUSTOM_VOICES` | `50` | Most cloned voices kept on the server (each 6 to 19 MB on disk) |
 | `POCKET_TTS_CUSTOM_VOICE_CACHE` | `4` | Cloned voices held in memory, least recently used dropped first (the newest are loaded at startup) |
+| `POCKET_TTS_PHRASE_CACHE` | the demo agent's 15 openers (`Got it.`, `Okay.`, `Sure.`, ...: `DEFAULT_CACHED_PHRASES` in `app.py`) | `\|`-separated phrases synthesised at startup and kept in memory; `""` = none |
+| `POCKET_TTS_PHRASE_CACHE_VOICES` | `POCKET_TTS_DEFAULT_VOICE` | Voices those phrases are made for |
+| `POCKET_TTS_PHRASE_CACHE_MAX_CHARS` | `32` | Other texts up to this length are kept too once fully spoken (least recently used dropped first); `0` = only the startup phrases |
+| `POCKET_TTS_PHRASE_CACHE_MB` | `16` | Memory for all kept audio (about 330 s of speech) |
 
 The adapter supports `response_format` `pcm` (24 kHz, 16-bit, mono, as the voice service
 expects) and `wav`, and streams audio as it is generated. It runs one synthesis at a time,
 because the model is not thread-safe. Pocket TTS has no speed control, so `speed` is
 accepted and ignored.
+
+**Phrase cache.** The voice service starts a sentence only once 0.5 s of its audio has
+arrived, which takes Pocket TTS 0.44-0.52 s on a 4-core server. A kept phrase is answered
+from memory (first 0.5 s in about 3 ms), starting 30 ms before its first sound instead of
+80-175 ms. A sentence that begins with a kept phrase and goes on (`Got it, perfect
+timing.`) is answered with the kept `Got it.` and then the synthesised rest, so the first
+words still come at once; `Great!` is answered with the kept `Great.`. The response header
+`X-Phrase-Cache` says `hit`, `opener` or `miss`, and `GET /v1/audio/phrase-cache` gives
+counts only (never texts). Audio is kept in memory only. Measurements:
+[perf/oracle-latency.md](perf/oracle-latency.md).
 
 ### Voice cloning
 
