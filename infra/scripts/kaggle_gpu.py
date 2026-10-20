@@ -1,0 +1,539 @@
+#!/usr/bin/env python3
+"""Testing only: run the language model on a Kaggle GPU and point ATLAS at it.
+
+  python infra/scripts/kaggle_gpu.py start     start a GPU session on Kaggle, connect ATLAS
+  python infra/scripts/kaggle_gpu.py connect --api https://atlas.example.com
+                                               connect another ATLAS to the running session
+  python infra/scripts/kaggle_gpu.py status    session and connections
+  python infra/scripts/kaggle_gpu.py stop      put every connected ATLAS back, end the session
+
+`start` pushes a private Kaggle notebook that runs Ollama (the same version as the
+self-hosted stack) on the notebook's GPU behind a token check and opens a temporary
+Cloudflare tunnel to it. ATLAS gets a connection "GPU test (Kaggle)" with that address and
+token, and the organisation's language model is switched to it; the model chosen before is
+kept and put back by `stop`. Speech-to-text and the voice stay where they are.
+
+For tests, not for real calls: a Kaggle session ends after --hours (at most 12), the address
+changes every session, the call's text goes through Kaggle and Cloudflare, and Kaggle's
+acceptable-use policy does not allow running a service's backend there.
+
+Needs: the Kaggle CLI (`pip install kaggle`; set KAGGLE_CLI if it is not on PATH) signed in
+with an API token (KAGGLE_API_TOKEN or ~/.kaggle/access_token) of a phone-verified account;
+the ATLAS demo password in ATLAS_DEMO_PASSWORD or the repository's .env. Session state, with
+the token, is kept in .cache/kaggle-gpu/session.json (git-ignored) and never printed.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
+STATE = ROOT / ".cache" / "kaggle-gpu" / "session.json"
+KERNEL_SLUG = "atlas-gpu-llm"
+CONNECTION_NAME = "GPU test (Kaggle)"
+DEMO_EMAIL = "demo@example.com"
+DEMO_ORG_NAME = "Demo Realty (demo data)"
+DEFAULT_MODELS = ["qwen2.5:7b", "qwen2.5:1.5b"]
+URL_LINE = re.compile(r"ATLAS_GPU_URL=(https://[a-z0-9-]+\.trycloudflare\.com)")
+FAILED_LINE = re.compile(r"ATLAS_GPU_FAILED: ([^\"\\]*)")
+
+# The notebook. Placeholders are filled by render_kernel(); it never holds the token itself,
+# only its SHA-256, so the notebook's source is useless to anyone who reads it.
+KERNEL = r'''# ATLAS GPU test session (testing only), started by infra/scripts/kaggle_gpu.py.
+# Ollama on this notebook's GPU behind a token check, reachable through a temporary
+# Cloudflare tunnel until the session is stopped or HOURS have passed.
+import os, re, subprocess, sys, time, urllib.error, urllib.request
+
+TOKEN_SHA256 = "@TOKEN_SHA256@"
+MODELS = @MODELS@
+HOURS = @HOURS@
+OLLAMA_VERSION = "0.40.6"
+PORT = 8000
+CLOUDFLARED = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+
+PROXY = r"""
+import hashlib, hmac, json, os, subprocess
+from aiohttp import ClientSession, ClientTimeout, web
+
+TOKEN_SHA256 = os.environ["ATLAS_TOKEN_SHA256"]
+UP = "http://127.0.0.1:11434"
+DROP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers",
+        "transfer-encoding", "upgrade", "host", "content-length", "authorization"}
+served = {"requests": 0}
+
+def allowed(req):
+    got = req.headers.get("Authorization", "")
+    digest = hashlib.sha256(got[7:].encode()).hexdigest() if got.startswith("Bearer ") else ""
+    return hmac.compare_digest(digest, TOKEN_SHA256)
+
+async def handle(req):
+    if not allowed(req):
+        return web.json_response({"error": "unauthorized"}, status=401)
+    if req.path == "/atlas/stop" and req.method == "POST":
+        open("/tmp/atlas-stop", "w").close()
+        return web.json_response({"stopping": True}, status=202)
+    if req.path == "/atlas/health":
+        gpu = subprocess.run("nvidia-smi --query-gpu=name,utilization.gpu,memory.used --format=csv,noheader",
+                             shell=True, capture_output=True, text=True).stdout.strip()
+        return web.json_response({"gpu": gpu, "requests": served["requests"]})
+    if not req.path.startswith("/v1/"):
+        return web.json_response({"error": "not found"}, status=404)
+    served["requests"] += 1
+    body = await req.read()
+    headers = {k: v for k, v in req.headers.items() if k.lower() not in DROP}
+    async with req.app["s"].request(req.method, UP + req.path_qs, data=body, headers=headers) as up:
+        resp = web.StreamResponse(
+            status=up.status, headers={k: v for k, v in up.headers.items() if k.lower() not in DROP})
+        await resp.prepare(req)
+        async for chunk in up.content.iter_any():
+            await resp.write(chunk)
+        await resp.write_eof()
+        return resp
+
+async def start(app):
+    app["s"] = ClientSession(timeout=ClientTimeout(total=None, sock_read=300))
+
+async def stop(app):
+    await app["s"].close()
+
+app = web.Application(client_max_size=8 * 1024 * 1024)
+app.on_startup.append(start)
+app.on_cleanup.append(stop)
+app.router.add_route("*", "/{tail:.*}", handle)
+web.run_app(app, host="127.0.0.1", port=int(os.environ["ATLAS_PORT"]), access_log=None, print=None)
+"""
+
+
+def sh(cmd):
+    print("+", cmd, flush=True)
+    subprocess.run(cmd, shell=True, check=True)
+
+
+def fail(msg):
+    print(f"ATLAS_GPU_FAILED: {msg}", flush=True)
+    sys.exit(1)
+
+
+def wait_http(url, tries):
+    for _ in range(tries):
+        try:
+            urllib.request.urlopen(url, timeout=3)
+            return True
+        except urllib.error.HTTPError:
+            return True  # it answers
+        except OSError:
+            time.sleep(1)
+    return False
+
+
+gpu = subprocess.run("nvidia-smi --query-gpu=name --format=csv,noheader", shell=True,
+                     capture_output=True, text=True).stdout.strip()
+print("GPU:", gpu or "none", flush=True)
+if not gpu:
+    fail("no GPU in this session (accelerator not granted)")
+sh("command -v zstd >/dev/null || (apt-get update -qq && apt-get install -y -qq zstd >/dev/null)")
+sh(f"curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION={OLLAMA_VERSION} sh >/dev/null")
+env = dict(os.environ, OLLAMA_HOST="127.0.0.1:11434", OLLAMA_KEEP_ALIVE="-1", OLLAMA_FLASH_ATTENTION="1",
+           OLLAMA_CONTEXT_LENGTH="4096", OLLAMA_NUM_PARALLEL="1", OLLAMA_MAX_LOADED_MODELS=str(len(MODELS)),
+           CUDA_VISIBLE_DEVICES="0")
+ollama = subprocess.Popen(["ollama", "serve"], env=env, stdout=open("/tmp/ollama.log", "w"), stderr=subprocess.STDOUT)
+if not wait_http("http://127.0.0.1:11434/api/version", 120):
+    fail("Ollama did not start")
+for m in MODELS:
+    sh(f"ollama pull {m} 2>&1 | tail -n 1")
+    # Load it onto the GPU now, so the first call does not wait for it.
+    req = urllib.request.Request("http://127.0.0.1:11434/api/generate", method="POST",
+                                 data=('{"model": "%s", "prompt": "hi", "stream": false, "options": {"num_predict": 1}}' % m).encode())
+    urllib.request.urlopen(req, timeout=600).read()
+
+try:
+    import aiohttp  # noqa: F401
+except ImportError:
+    sh(f"{sys.executable} -m pip install -q aiohttp")
+with open("/tmp/atlas_proxy.py", "w") as f:
+    f.write(PROXY)
+proxy = subprocess.Popen([sys.executable, "/tmp/atlas_proxy.py"],
+                         env=dict(os.environ, ATLAS_TOKEN_SHA256=TOKEN_SHA256, ATLAS_PORT=str(PORT)))
+if not wait_http(f"http://127.0.0.1:{PORT}/v1/models", 30):
+    fail("the token check did not start")
+
+sh(f"curl -fsSL -o /tmp/cloudflared {CLOUDFLARED} && chmod +x /tmp/cloudflared")
+# Its log goes to a file: a pipe nobody reads would fill up and stall the tunnel.
+tunnel = subprocess.Popen(["/tmp/cloudflared", "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{PORT}"],
+                          stdout=open("/tmp/cloudflared.log", "w"), stderr=subprocess.STDOUT)
+url = None
+for _ in range(90):
+    time.sleep(1)
+    m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", open("/tmp/cloudflared.log").read())
+    if m:
+        url = m.group(0)
+        break
+if url is None:
+    fail("the tunnel did not start")
+# Reachable from outside: an unauthenticated request must come back 401 from the token check.
+reachable = False
+for _ in range(40):
+    try:
+        urllib.request.urlopen(url + "/v1/models", timeout=10)
+    except urllib.error.HTTPError as e:
+        reachable = e.code == 401
+    except OSError:
+        pass
+    if reachable:
+        break
+    time.sleep(3)
+if not reachable:
+    fail("the tunnel does not answer")
+print(f"ATLAS_GPU_URL={url}", flush=True)
+
+end = time.time() + HOURS * 3600
+reason = "time limit reached"
+while time.time() < end:
+    if os.path.exists("/tmp/atlas-stop"):
+        reason = "stopped by kaggle_gpu.py stop"
+        break
+    if any(p.poll() is not None for p in (ollama, proxy, tunnel)):
+        reason = "a process exited"
+        break
+    time.sleep(20)
+    if int(time.time()) % 300 < 20:
+        print(time.strftime("%H:%M:%S"), "session running", flush=True)
+for p in (tunnel, proxy, ollama):
+    p.terminate()
+print("ATLAS GPU session ended:", reason, flush=True)
+'''
+
+
+# ------------------------------------------------------------------ helpers
+
+
+def say(msg: str) -> None:
+    print(f"    {msg}", flush=True)
+
+
+def die(msg: str) -> None:
+    raise SystemExit(f"error: {msg}")
+
+
+def now() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+
+
+def load_state() -> dict[str, Any] | None:
+    try:
+        return json.loads(STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def save_state(state: dict[str, Any]) -> None:
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = STATE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, indent=1), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(STATE)
+
+
+def read_dotenv(path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            out[key.strip().removeprefix("export ").strip()] = value.strip().strip("'\"")
+    return out
+
+
+def http(method: str, url: str, body: Any = None, headers: dict[str, str] | None = None,
+         timeout: float = 60) -> tuple[int, Any]:
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json", **(headers or {})})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
+            return r.status, json.loads(raw) if raw else None
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        try:
+            return e.code, json.loads(raw)
+        except ValueError:
+            return e.code, raw.decode(errors="replace")[:300]
+
+
+# ------------------------------------------------------------------ Kaggle
+
+
+def kaggle_cli() -> str:
+    cli = os.environ.get("KAGGLE_CLI") or shutil.which("kaggle")
+    if not cli:
+        die("the Kaggle CLI was not found: `pip install kaggle`, or set KAGGLE_CLI to its path")
+    return cli
+
+
+def kaggle(*args: str, timeout: float = 120) -> str:
+    r = subprocess.run([kaggle_cli(), *args], capture_output=True, text=True, timeout=timeout,
+                       encoding="utf-8", errors="replace")
+    if r.returncode != 0:
+        die(f"kaggle {args[0]} {args[1] if len(args) > 1 else ''} failed: {(r.stderr or r.stdout).strip()[-400:]}")
+    return r.stdout
+
+
+def kaggle_user() -> str:
+    user = os.environ.get("KAGGLE_USERNAME")
+    if user:
+        return user
+    m = re.search(r"username:\s*(\S+)", kaggle("config", "view"))
+    if not m or m.group(1) == "None":
+        die("could not read the Kaggle username (`kaggle config view`); set KAGGLE_USERNAME")
+    return m.group(1)
+
+
+def gpu_hours_left() -> float | None:
+    m = re.search(r"^GPU\s+[\d.]+h\s+([\d.]+)h", kaggle("quota"), re.M)
+    return float(m.group(1)) if m else None
+
+
+def render_kernel(token: str, models: list[str], hours: float) -> str:
+    return (KERNEL.replace("@TOKEN_SHA256@", hashlib.sha256(token.encode()).hexdigest())
+            .replace("@MODELS@", json.dumps(models)).replace("@HOURS@", repr(hours)))
+
+
+def push_kernel(ref: str, source: str) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        Path(tmp, "atlas_gpu_llm.py").write_text(source, encoding="utf-8")
+        meta = {"id": ref, "title": KERNEL_SLUG, "code_file": "atlas_gpu_llm.py", "language": "python",
+                "kernel_type": "script", "is_private": True, "enable_gpu": True, "enable_tpu": False,
+                "enable_internet": True, "dataset_sources": [], "competition_sources": [],
+                "kernel_sources": [], "model_sources": []}
+        Path(tmp, "kernel-metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+        kaggle("kernels", "push", "-p", tmp, "--accelerator", "NvidiaTeslaT4", timeout=300)
+
+
+def wait_for_url(ref: str, timeout_s: float) -> str:
+    """Follow the notebook's live log until it prints its tunnel address."""
+    proc = subprocess.Popen([kaggle_cli(), "kernels", "logs", "-f", ref], stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+    deadline = time.time() + timeout_s
+    last_note = 0.0
+    try:
+        while time.time() < deadline:
+            line = proc.stdout.readline() if proc.stdout else ""
+            if not line:
+                if proc.poll() is not None:  # the log stream ended (not started yet, or finished)
+                    status = kaggle("kernels", "status", ref)
+                    if re.search(r"error|cancel|complete", status, re.I):
+                        die(f"the Kaggle session ended before it was ready ({status.strip()}); "
+                            f"see https://www.kaggle.com/code/{ref}")
+                    time.sleep(10)
+                    proc = subprocess.Popen([kaggle_cli(), "kernels", "logs", "-f", ref], stdout=subprocess.PIPE,
+                                            stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+                continue
+            if (m := URL_LINE.search(line)) is not None:
+                return m.group(1)
+            if (m := FAILED_LINE.search(line)) is not None:
+                die(f"the Kaggle session failed: {m.group(1)}")
+            if time.time() - last_note > 60:
+                last_note = time.time()
+                say("still starting on Kaggle (installing, downloading the models)...")
+        die(f"no address from Kaggle after {timeout_s / 60:.0f} minutes; see https://www.kaggle.com/code/{ref}")
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+    return ""  # unreachable
+
+
+# ------------------------------------------------------------------ ATLAS
+
+
+class Atlas:
+    def __init__(self, base: str, password: str) -> None:
+        self.base = base.rstrip("/") + "/api/v1"
+        code, data = http("POST", self.base + "/auth/login", {"email": DEMO_EMAIL, "password": password})
+        if code != 200:
+            die(f"sign-in to {base} as {DEMO_EMAIL} failed (HTTP {code})")
+        orgs = [m["organization"] for m in data.get("memberships") or []]
+        org = next((o for o in orgs if o["name"] == DEMO_ORG_NAME), orgs[0] if orgs else None)
+        if org is None:
+            die(f"{DEMO_EMAIL} has no organization at {base}")
+        self.headers = {"Authorization": f"Bearer {data['access_token']}", "X-Organization-Id": org["id"]}
+
+    def call(self, method: str, path: str, body: Any = None, ok: tuple[int, ...] = (200, 201, 204)) -> Any:
+        code, data = http(method, self.base + path, body, self.headers, timeout=120)
+        if code not in ok:
+            msg = data.get("error", {}).get("message") if isinstance(data, dict) else data
+            die(f"{method} {path}: HTTP {code} {msg}")
+        return data
+
+
+def atlas_password(explicit: str | None) -> str:
+    pw = explicit or os.environ.get("ATLAS_DEMO_PASSWORD") or read_dotenv(ROOT / ".env").get("ATLAS_DEMO_PASSWORD")
+    if not pw:
+        die("no ATLAS demo password: set ATLAS_DEMO_PASSWORD or put it in .env")
+    return pw
+
+
+def connect(state: dict[str, Any], api_base: str, password: str, model: str) -> None:
+    atlas = Atlas(api_base, password)
+    conns = atlas.call("GET", "/ai/connections")
+    existing = next((c for c in conns if c["name"] == CONNECTION_NAME), None)
+    settings = {"base_url": state["url"] + "/v1"}
+    credentials = {"api_key": state["token"]}
+    if existing:
+        conn = atlas.call("PATCH", f"/ai/connections/{existing['id']}",
+                          {"connection_settings": settings, "credentials": credentials})
+    else:
+        conn = atlas.call("POST", "/ai/connections", {"name": CONNECTION_NAME, "provider": "speaches",
+                                                      "connection_settings": settings, "credentials": credentials})
+    selection = atlas.call("GET", "/ai/models")
+    previous = state["connected"].get(api_base, {}).get("previous_llm")
+    if previous is None:
+        previous = selection.get("llm")
+        if previous and previous.get("connection_id") == conn["id"]:
+            previous = None  # left over from an earlier session that was not stopped
+    selection["llm"] = {"connection_id": conn["id"], "settings": {"model": model, "temperature": 0.3}}
+    atlas.call("PUT", "/ai/models", selection)
+    state["connected"][api_base] = {"connection_id": conn["id"], "previous_llm": previous, "model": model}
+    save_state(state)
+    check = atlas.call("POST", "/ai/models/check")
+    say(f"{api_base}: language model is now {model} on the Kaggle GPU "
+        f"(models check: {'ok' if check.get('ok') else check.get('problems')})")
+
+
+def disconnect(api_base: str, info: dict[str, Any], password: str) -> None:
+    atlas = Atlas(api_base, password)
+    selection = atlas.call("GET", "/ai/models")
+    if info.get("previous_llm"):
+        selection["llm"] = info["previous_llm"]
+        atlas.call("PUT", "/ai/models", selection)
+        say(f"{api_base}: language model put back")
+    elif (selection.get("llm") or {}).get("connection_id") == info["connection_id"]:
+        say(f"{api_base}: no earlier language model was recorded; choose one under AI providers")
+    atlas.call("DELETE", f"/ai/connections/{info['connection_id']}", ok=(200, 204, 404, 409))
+
+
+# ------------------------------------------------------------------ commands
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    if load_state():
+        die("a GPU session is already recorded: run `stop` first (or `status`)")
+    hours = min(max(args.hours, 0.25), 11.5)
+    password = atlas_password(args.password)
+    Atlas(args.api, password)  # fail early if ATLAS is not reachable
+    left = gpu_hours_left()
+    if left is not None:
+        say(f"Kaggle GPU hours left this week: {left:.1f}")
+        if left < hours:
+            die(f"only {left:.1f} GPU hours left; use --hours {max(left - 0.1, 0.25):.1f} or less")
+    user = kaggle_user()
+    ref = f"{user}/{KERNEL_SLUG}"
+    token = secrets.token_urlsafe(32)
+    models = args.model or DEFAULT_MODELS
+    say(f"starting {ref} on a T4 GPU with {', '.join(models)} for at most {hours:g} h")
+    push_kernel(ref, render_kernel(token, models, hours))
+    state = {"kernel": ref, "token": token, "models": models, "hours": hours, "started": now(),
+             "url": None, "connected": {}}
+    save_state(state)
+    url = wait_for_url(ref, timeout_s=args.wait_minutes * 60)
+    code_ok, _ = http("GET", url + "/v1/models", headers={"Authorization": f"Bearer {token}"})
+    code_no, _ = http("GET", url + "/v1/models")
+    if code_ok != 200 or code_no != 401:
+        die(f"the GPU address does not answer as expected (with token {code_ok}, without {code_no})")
+    state["url"] = url
+    save_state(state)
+    say("GPU address is up and refuses requests without the token")
+    connect(state, args.api, password, models[0])
+    say(f"Done. Test calls now use the GPU. When finished: python {Path(__file__).name} stop")
+    return 0
+
+
+def cmd_connect(args: argparse.Namespace) -> int:
+    state = load_state()
+    if not state or not state.get("url"):
+        die("no running GPU session: run `start` first")
+    connect(state, args.api, atlas_password(args.password), args.model[0] if args.model else state["models"][0])
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    state = load_state()
+    if not state:
+        say("no GPU session recorded")
+        return 0
+    say(f"session {state['kernel']} started {state['started']} for at most {state['hours']:g} h; "
+        f"models {', '.join(state['models'])}")
+    say("Kaggle: " + kaggle("kernels", "status", state["kernel"]).strip())
+    if state.get("url"):
+        code, data = http("GET", state["url"] + "/atlas/health", headers={"Authorization": f"Bearer {state['token']}"},
+                          timeout=20)
+        say(f"GPU address: {'up, ' + json.dumps(data) if code == 200 else f'not answering (HTTP {code})'}")
+    for api_base, info in state["connected"].items():
+        say(f"connected: {api_base} (model {info.get('model')})")
+    return 0
+
+
+def cmd_stop(args: argparse.Namespace) -> int:
+    state = load_state()
+    if not state:
+        say("no GPU session recorded")
+        return 0
+    password = atlas_password(args.password)
+    for api_base, info in list(state["connected"].items()):
+        try:
+            disconnect(api_base, info, password)
+            del state["connected"][api_base]
+            save_state(state)
+        except SystemExit as exc:
+            say(f"{api_base}: could not put the model back ({exc}); run stop again")
+            return 1
+    if state.get("url"):
+        code, _ = http("POST", state["url"] + "/atlas/stop", headers={"Authorization": f"Bearer {state['token']}"},
+                       timeout=20)
+        say("GPU session asked to stop" if code == 202 else
+            f"the GPU address did not answer (HTTP {code}); the session ends by itself after {state['hours']:g} h, "
+            f"or stop it at https://www.kaggle.com/code/{state['kernel']}")
+    STATE.unlink(missing_ok=True)
+    say("session record removed")
+    return 0
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
+                                formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
+    sub = p.add_subparsers(dest="command", required=True)
+    for name in ("start", "connect", "status", "stop"):
+        s = sub.add_parser(name)
+        s.add_argument("--password", default=None, help=argparse.SUPPRESS)
+        if name in ("start", "connect"):
+            s.add_argument("--api", default="http://127.0.0.1:8080", help="ATLAS base URL (default: local)")
+            s.add_argument("--model", action="append",
+                           help=f"model(s) to load; the first is used (default: {', '.join(DEFAULT_MODELS)})")
+        if name == "start":
+            s.add_argument("--hours", type=float, default=2.0, help="end the session after this long (default 2)")
+            s.add_argument("--wait-minutes", type=float, default=20.0, help="give up if not ready by then")
+    args = p.parse_args()
+    return {"start": cmd_start, "connect": cmd_connect, "status": cmd_status, "stop": cmd_stop}[args.command](args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
