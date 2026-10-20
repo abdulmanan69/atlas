@@ -603,7 +603,8 @@ def test_streaming_server_is_used_only_by_the_private_streaming_preset() -> None
     model = preset.choices.stt.settings["model"]
     assert model == ai_speed.STREAMING_STT_MODEL
     assert model not in ("flux-general-en", "flux-general-multi"), "Flux uses /v2/listen"
-    assert preset.choices.llm.settings == {"model": ai_speed.SELF_HOSTED_LLM_MODEL}
+    assert preset.choices.llm.settings == ai_speed.SELF_HOSTED_LLM_SETTINGS
+    assert ai_speed.SELF_HOSTED_LLM_SETTINGS["temperature"] == 0.3
     pocket = next(p for p in ai_speed.PRESETS if p.id == "private_pocket_tts")
     assert preset.choices.tts == pocket.choices.tts
     assert set(preset.requires) == {"deepgram", "speaches"}
@@ -637,7 +638,7 @@ async def test_apply_private_streaming_preset(
     }
     assert selection["llm"] == {
         "connection_id": llm,
-        "settings": {"model": ai_speed.SELF_HOSTED_LLM_MODEL},
+        "settings": {"model": ai_speed.SELF_HOSTED_LLM_MODEL, "temperature": 0.3},
     }
     assert selection["tts"] == {
         "connection_id": tts,

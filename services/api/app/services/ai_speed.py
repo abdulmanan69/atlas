@@ -246,6 +246,14 @@ GUIDE: tuple[LatencyGuideProvider, ...] = (
 # speaches 0.8.3 only accepts the full Kokoro id; the short "kokoro" returns 404.
 SELF_HOSTED_STT_MODEL = "Systran/faster-whisper-base"
 SELF_HOSTED_LLM_MODEL = "qwen2.5:1.5b"
+# At a low temperature the small model keeps its first sentence short, as the prompt asks:
+# with 0.3 instead of the server default, the slowest tenth of replies on the Oracle server
+# was heard 1.7 s sooner (p90 3.8 -> 2.1 s; median 2.3 -> 1.9 s, partly run-to-run
+# variation at 12 turns) (docs/perf/oracle-latency.md).
+SELF_HOSTED_LLM_SETTINGS: dict[str, str | float] = {
+    "model": SELF_HOSTED_LLM_MODEL,
+    "temperature": 0.3,
+}
 KOKORO_MODEL = "speaches-ai/Kokoro-82M-v1.0-ONNX"
 PRESETS: tuple[LatencyPreset, ...] = (
     LatencyPreset(
@@ -285,7 +293,7 @@ PRESETS: tuple[LatencyPreset, ...] = (
         ),
         choices=PresetChoices(
             stt=PresetChoice(provider="speaches", settings={"model": SELF_HOSTED_STT_MODEL}),
-            llm=PresetChoice(provider="speaches", settings={"model": SELF_HOSTED_LLM_MODEL}),
+            llm=PresetChoice(provider="speaches", settings=dict(SELF_HOSTED_LLM_SETTINGS)),
             tts=PresetChoice(
                 provider="speaches", settings={"model": KOKORO_MODEL, "voice": "af_heart"}
             ),
@@ -302,7 +310,7 @@ PRESETS: tuple[LatencyPreset, ...] = (
         ),
         choices=PresetChoices(
             stt=PresetChoice(provider="speaches", settings={"model": SELF_HOSTED_STT_MODEL}),
-            llm=PresetChoice(provider="speaches", settings={"model": SELF_HOSTED_LLM_MODEL}),
+            llm=PresetChoice(provider="speaches", settings=dict(SELF_HOSTED_LLM_SETTINGS)),
             tts=PresetChoice(
                 provider="speaches", settings={"model": "pocket-tts", "voice": "alba"}
             ),
@@ -322,7 +330,7 @@ PRESETS: tuple[LatencyPreset, ...] = (
             stt=PresetChoice(
                 provider="deepgram", settings={"model": STREAMING_STT_MODEL, "language": "en"}
             ),
-            llm=PresetChoice(provider="speaches", settings={"model": SELF_HOSTED_LLM_MODEL}),
+            llm=PresetChoice(provider="speaches", settings=dict(SELF_HOSTED_LLM_SETTINGS)),
             tts=PresetChoice(
                 provider="speaches", settings={"model": "pocket-tts", "voice": "alba"}
             ),

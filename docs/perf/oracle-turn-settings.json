@@ -1,0 +1,290 @@
+{
+ "meta": {
+  "measured": "2026-10-20, Oracle Cloud VM.Standard.E2.4 (AMD EPYC 7551, 8 vCPU = 4 cores, 32 GB, no GPU)",
+  "how": "infra/scripts/e2e_test_call.py inside the voice service container: 1 warm-up call, then 3 calls x 4 caller lines per setting (same caller WAVs as oracle-latency.json), 15 s between calls, inside the bench lock",
+  "stack": "speech-to-text Parakeet TDT 110M (local-stt, live), qwen2.5:1.5b (4 threads), Pocket TTS with kept openers",
+  "times": "ms after the caller's last speech frame; heard = first agent audio at or above -45 dBFS at the caller; turn_gap = final transcript to language-model request"
+ },
+ "settings": {
+  "pk-balanced": {
+   "setting": "Balanced preset (min_words 2, speech timeout 0.6 s), server-default temperature",
+   "runs_ok": "3/3",
+   "choppy_turns": 1,
+   "stats": {
+    "stt_final": {
+     "n": 12,
+     "p50": 672,
+     "p90": 782,
+     "min": 456,
+     "max": 803
+    },
+    "turn_gap": {
+     "n": 11,
+     "p50": 397,
+     "p90": 423,
+     "min": 292,
+     "max": 425
+    },
+    "llm_start": {
+     "n": 11,
+     "p50": 1081,
+     "p90": 1102,
+     "min": 881,
+     "max": 1122
+    },
+    "llm_first": {
+     "n": 11,
+     "p50": 1957,
+     "p90": 2091,
+     "min": 1223,
+     "max": 2178
+    },
+    "llm_ttfb": {
+     "n": 11,
+     "p50": 951,
+     "p90": 1034,
+     "min": 121,
+     "max": 1076
+    },
+    "tts_start": {
+     "n": 11,
+     "p50": 2334,
+     "p90": 3159,
+     "min": 1455,
+     "max": 3214
+    },
+    "tts_ttfb": {
+     "n": 11,
+     "p50": 18,
+     "p90": 23,
+     "min": 12,
+     "max": 719
+    },
+    "bot_started": {
+     "n": 11,
+     "p50": 2394,
+     "p90": 3264,
+     "min": 1504,
+     "max": 3424
+    },
+    "heard": {
+     "n": 12,
+     "p50": 2418,
+     "p90": 3331,
+     "min": 148,
+     "max": 3793
+    }
+   }
+  },
+  "pk-ta10": {
+   "setting": "Custom: min_words 2, turn analyzer, 1.0 s fallback; server-default temperature",
+   "runs_ok": "3/3",
+   "choppy_turns": 2,
+   "stats": {
+    "stt_final": {
+     "n": 12,
+     "p50": 650,
+     "p90": 846,
+     "min": 434,
+     "max": 965
+    },
+    "turn_gap": {
+     "n": 12,
+     "p50": 112,
+     "p90": 182,
+     "min": 6,
+     "max": 206
+    },
+    "llm_start": {
+     "n": 12,
+     "p50": 731,
+     "p90": 904,
+     "min": 640,
+     "max": 973
+    },
+    "llm_first": {
+     "n": 12,
+     "p50": 1826,
+     "p90": 1954,
+     "min": 697,
+     "max": 1977
+    },
+    "llm_ttfb": {
+     "n": 12,
+     "p50": 960,
+     "p90": 1222,
+     "min": 57,
+     "max": 1255
+    },
+    "tts_start": {
+     "n": 12,
+     "p50": 2084,
+     "p90": 3134,
+     "min": 1074,
+     "max": 3686
+    },
+    "tts_ttfb": {
+     "n": 12,
+     "p50": 17,
+     "p90": 596,
+     "min": 13,
+     "max": 918
+    },
+    "bot_started": {
+     "n": 12,
+     "p50": 2176,
+     "p90": 3660,
+     "min": 1133,
+     "max": 4114
+    },
+    "heard": {
+     "n": 12,
+     "p50": 2326,
+     "p90": 3809,
+     "min": 1282,
+     "max": 4283
+    }
+   }
+  },
+  "pk-default": {
+   "setting": "Custom: VAD turn start, speech timeout 0.6 s; server-default temperature",
+   "runs_ok": "3/3",
+   "choppy_turns": 3,
+   "stats": {
+    "stt_final": {
+     "n": 12,
+     "p50": 560,
+     "p90": 673,
+     "min": 466,
+     "max": 685
+    },
+    "turn_gap": {
+     "n": 12,
+     "p50": 348,
+     "p90": 418,
+     "min": 237,
+     "max": 431
+    },
+    "llm_start": {
+     "n": 12,
+     "p50": 911,
+     "p90": 922,
+     "min": 880,
+     "max": 922
+    },
+    "llm_first": {
+     "n": 12,
+     "p50": 1838,
+     "p90": 2014,
+     "min": 1019,
+     "max": 2072
+    },
+    "llm_ttfb": {
+     "n": 12,
+     "p50": 926,
+     "p90": 1093,
+     "min": 98,
+     "max": 1171
+    },
+    "tts_start": {
+     "n": 12,
+     "p50": 2196,
+     "p90": 2512,
+     "min": 1668,
+     "max": 2600
+    },
+    "tts_ttfb": {
+     "n": 12,
+     "p50": 14,
+     "p90": 18,
+     "min": 12,
+     "max": 20
+    },
+    "bot_started": {
+     "n": 12,
+     "p50": 2228,
+     "p90": 2569,
+     "min": 1698,
+     "max": 2660
+    },
+    "heard": {
+     "n": 12,
+     "p50": 2372,
+     "p90": 2706,
+     "min": 156,
+     "max": 2805
+    }
+   }
+  },
+  "pk-t03": {
+   "setting": "Custom: min_words 2, turn analyzer, 1.0 s fallback; temperature 0.3",
+   "runs_ok": "3/3",
+   "choppy_turns": 0,
+   "stats": {
+    "stt_final": {
+     "n": 12,
+     "p50": 562,
+     "p90": 664,
+     "min": 501,
+     "max": 801
+    },
+    "turn_gap": {
+     "n": 12,
+     "p50": 124,
+     "p90": 178,
+     "min": 6,
+     "max": 189
+    },
+    "llm_start": {
+     "n": 12,
+     "p50": 691,
+     "p90": 729,
+     "min": 628,
+     "max": 807
+    },
+    "llm_first": {
+     "n": 12,
+     "p50": 1640,
+     "p90": 1819,
+     "min": 840,
+     "max": 1833
+    },
+    "llm_ttfb": {
+     "n": 12,
+     "p50": 968,
+     "p90": 1134,
+     "min": 110,
+     "max": 1155
+    },
+    "tts_start": {
+     "n": 12,
+     "p50": 1792,
+     "p90": 2133,
+     "min": 1059,
+     "max": 2451
+    },
+    "tts_ttfb": {
+     "n": 12,
+     "p50": 16,
+     "p90": 17,
+     "min": 14,
+     "max": 691
+    },
+    "bot_started": {
+     "n": 12,
+     "p50": 1836,
+     "p90": 2434,
+     "min": 1111,
+     "max": 2869
+    },
+    "heard": {
+     "n": 12,
+     "p50": 1939,
+     "p90": 2102,
+     "min": 45,
+     "max": 2140
+    }
+   }
+  }
+ }
+}

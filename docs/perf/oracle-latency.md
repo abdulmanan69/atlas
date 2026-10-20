@@ -12,6 +12,35 @@ agent audio at or above -45 dBFS. Speech-to-text during this work was the organi
 choice, Whisper small.en (being replaced by another workstream), so it is shown but was not
 tuned here.
 
+## Update 2026-10-20: live speech-to-text, turn analyzer, temperature 0.3
+
+Same server and caller lines, after speech-to-text moved to Parakeet TDT 110M (live, local;
+[local-stt-real-voice.json](local-stt-real-voice.json)). 3 calls x 4 lines per row, all
+passed. Raw summaries: [oracle-turn-settings.json](oracle-turn-settings.json).
+
+| Setting | Reply heard p50 / p90 | Final transcript p50 | Transcript to LLM request p50 | Choppy turns |
+|---|---:|---:|---:|---:|
+| Balanced (min words 2, 0.6 s speech timeout) | 2.42 / 3.33 s | 672 ms | 397 ms | 1 |
+| VAD turn start, 0.6 s speech timeout | 2.37 / 2.71 s | 560 ms | 348 ms | 3 |
+| Turn analyzer, 1.0 s fallback | 2.33 / 3.81 s | 650 ms | 112 ms | 2 |
+| **Turn analyzer, 1.0 s fallback, temperature 0.3** | **1.94 / 2.10 s** | 562 ms | 124 ms | **0** |
+
+- The turn analyzer (local smart-turn model) ends a finished sentence as soon as the final
+  transcript arrives instead of after the 0.6 s speech timeout: 0.3 s less per turn. The
+  demo setup now uses it for agents on live speech-to-text (`demo_configure.py`).
+- Temperature 0.3 (sent to the model; before, none was sent and the server default applied)
+  kept the first sentence short: LLM request to first sentence p90 1.42 s instead of 2.49 s,
+  so the slowest tenth of replies came 1.7 s sooner. Replies opened with a kept phrase about
+  as often either way (11 of 12 turns with 0.3; 10-12 of 12 in the other rows). With 12
+  turns per row, part of the 0.4 s difference in the median may be run-to-run variation.
+  The self-hosted presets now set it (`ai_speed.py`, `SELF_HOSTED_LLM_SETTINGS`).
+- What is left, p50: 0.56 s final transcript, 0.13 s to the LLM request, **0.95 s to the
+  first token** (the model reads about 35 new tokens per turn at 37-40 tokens/s on these
+  Zen 1 cores; it writes 18-19 tokens/s), 0.15 s to finish the opener, 0.15 s playout.
+  The language model is now the largest part.
+
+(The sections below are the measurements before this update, with Whisper small.en.)
+
 ## Result
 
 | | before | after |
@@ -70,7 +99,8 @@ this Ollama build. A `num_predict` cap does not shorten the first sentence.
 | Output audio chunk | 40 ms | `pipecat/transports/base_transport.py:79` |
 
 The workflow setting `turn_stop_strategy: turn_analyzer` replaces the 0.6 s timeout with the
-local smart-turn model (`run_pipeline.py:247-257`); it was not measured here.
+local smart-turn model (`run_pipeline.py:247-257`); measured in the update above: 0.3 s less
+per turn with live speech-to-text.
 
 ## Network
 

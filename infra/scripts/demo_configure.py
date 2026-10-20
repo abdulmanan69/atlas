@@ -223,7 +223,7 @@ def ensure_agent(api: Api) -> dict:
     return agent
 
 
-def browser_only_settings(api: Api, agent: dict) -> None:
+def browser_only_settings(api: Api, agent: dict, live_stt: bool = False) -> None:
     """The demo agent only takes browser test calls, where there is never an answering
     machine. Voicemail detection would still ask the language model to classify the
     caller's first words and wait up to 3 s for it, delaying the first reply (measured).
@@ -248,6 +248,17 @@ def browser_only_settings(api: Api, agent: dict) -> None:
             rules = "\n\n".join(p for p in rules.replace(old, "").split("\n\n") if p.strip())
         config["global_rules"] = (rules + "\n\n" + QUICK_OPENER_RULE).strip()
         changes.append("replies open with a short acknowledgement (faster first words)")
+    # With live transcription the final words arrive about 0.2 s after Finalize, so the
+    # fixed 0.6 s speech timeout of the Balanced preset is what the reply waits for. The
+    # turn analyzer (a small local end-of-turn model) ends a finished sentence at once and
+    # waits up to 1 s when the caller seems to pause mid-sentence: on the Oracle server the
+    # gap between the final transcript and the language model fell from 0.40 to 0.12 s
+    # (median, docs/perf/oracle-latency.md). Only an agent still on Balanced is changed.
+    cs = config.setdefault("call_settings", {})
+    if live_stt and cs.get("response_speed", "balanced") == "balanced":
+        cs.update(response_speed="custom", turn_start="min_words", turn_start_min_words=2,
+                  turn_stop="turn_analyzer", smart_turn_stop_seconds=1.0)
+        changes.append("turn analyzer ends the caller's turn as soon as they finish")
     if not changes:
         say("demo agent settings already in place")
         return
@@ -326,7 +337,7 @@ def phase_finish(
         for p in check.get("problems") or []:
             say(f"  - {api.redact(str(p))}")
     agent = ensure_agent(api)
-    browser_only_settings(api, agent)
+    browser_only_settings(api, agent, live_stt=stt == "streaming")
     try:
         published = api.call("POST", f"/agents/{agent['id']}/publish", {"note": "setup_local_demo"})
         say(f"agent published (version {published.get('published_version')}): "
