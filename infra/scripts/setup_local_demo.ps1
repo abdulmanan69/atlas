@@ -563,7 +563,7 @@ Step "Docker services"
 $wantStreaming = ($Preset -eq "streaming") -or ([bool]$key -and $Preset -ne "pocket")
 $services = @($CoreServices)
 if ($wantStreaming) { $services += "local-stt" }
-$built = @{ "local-tts" = "atlas/local-tts:pocket-tts-3.3.0"; "local-stt" = "atlas/local-stt:sherpa-onnx-1.13.8" }
+$built = @{ "local-tts" = "atlas/local-tts:pocket-tts-3.3.0"; "local-stt" = "atlas/local-stt:2-sherpa-onnx-1.13.8" }
 foreach ($svc in @($built.Keys)) {
   if ($services -notcontains $svc) { continue }
   docker image inspect $built[$svc] 1>$null 2>$null
@@ -743,9 +743,17 @@ if ($DryRun) {
       $target = "private_pocket_tts"
     }
   }
-  $out = Invoke-ApiPython @($helper, "finish", "--stt-model", $SttModel, "--preset", $target, "--web", $WebUrl)
+  # The preset is applied on the first setup, or when -Preset/-FastStt was given; a re-run
+  # keeps the models the organisation chose (e.g. in the web app).
+  $finishArgs = @($helper, "finish", "--stt-model", $SttModel, "--preset", $target, "--web", $WebUrl)
+  if ($PSBoundParameters.ContainsKey("Preset") -and $Preset -ne "auto") { $finishArgs += "--force" }
+  elseif ($FastStt) { $finishArgs += "--force" }
+  $out = Invoke-ApiPython $finishArgs
   $line = $out | Where-Object { $_ -like "PRESET=*" } | Select-Object -Last 1
   if ($line) { $activePreset = $line.Substring(7) }
+  $sttLine = $out | Where-Object { $_ -like "STT=*" } | Select-Object -Last 1
+  if ($sttLine -eq "STT=streaming") { $activePreset = "private_streaming" }
+  elseif ($sttLine -like "STT=whisper:?*") { $SttModel = $sttLine.Substring(12); $activePreset = "private_pocket_tts" }
   if ($script:LastPyExit -ne 0) { Warn "the demo agent could not be published (see above); fix it in the web app under Agents" }
 }
 

@@ -39,7 +39,7 @@ STT_MODEL="Systran/faster-whisper-base"
 CORE_SERVICES=(postgres redis voice-db voice-redis voice-storage voice-runtime local-llm local-speech local-tts)
 REQUIRED_SERVICES=" postgres redis voice-db voice-redis voice-storage voice-runtime "
 
-STOP=0 RESTART=0 DRY_RUN=0 SKIP_WARM=0 REBUILD=0 PRESET=auto
+STOP=0 RESTART=0 DRY_RUN=0 SKIP_WARM=0 REBUILD=0 PRESET=auto FORCE=""
 KEY="${ATLAS_DEMO_DEEPGRAM_KEY:-}"
 HF_TOKEN_ARG="${ATLAS_DEMO_HF_TOKEN:-}"
 while [ $# -gt 0 ]; do
@@ -48,9 +48,9 @@ while [ $# -gt 0 ]; do
     --restart) RESTART=1 ;;
     --dry-run|--what-if) DRY_RUN=1 ;;
     --skip-warm) SKIP_WARM=1 ;;
-    --fast-stt) STT_MODEL=Systran/faster-whisper-tiny.en ;;
+    --fast-stt) STT_MODEL=Systran/faster-whisper-tiny.en; FORCE=--force ;;
     --rebuild) REBUILD=1 ;;
-    --preset) PRESET="${2:-}"; shift ;;
+    --preset) PRESET="${2:-}"; [ "$PRESET" != auto ] && FORCE=--force; shift ;;
     --deepgram-key) KEY="${2:-}"; shift ;;
     --hf-token) HF_TOKEN_ARG="${2:-}"; shift ;;
     -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
@@ -479,7 +479,7 @@ WANT_STREAMING=0
 if [ "$PRESET" = streaming ] || { [ -n "$KEY" ] && [ "$PRESET" != pocket ]; }; then WANT_STREAMING=1; fi
 SERVICES=("${CORE_SERVICES[@]}")
 [ "$WANT_STREAMING" = 1 ] && SERVICES+=(local-stt)
-for pair in local-tts=atlas/local-tts:pocket-tts-3.3.0 local-stt=atlas/local-stt:sherpa-onnx-1.13.8; do
+for pair in local-tts=atlas/local-tts:pocket-tts-3.3.0 local-stt=atlas/local-stt:2-sherpa-onnx-1.13.8; do
   svc="${pair%%=*}" img="${pair#*=}"
   case " ${SERVICES[*]} " in *" $svc "*) ;; *) continue ;; esac
   docker image inspect "$img" >/dev/null 2>&1 || info "image $img is not here yet: it is built now (needs internet; import the offline bundle to skip this)"
@@ -639,9 +639,16 @@ else
     fi
   fi
   rm -f "$PY_OUT"
-  api_python "$HELPER" finish --stt-model "$STT_MODEL" --preset "$TARGET" --web "$WEB_URL"
+  # The preset is applied on the first setup, or when --preset/--fast-stt was given; a
+  # re-run keeps the models the organisation chose (e.g. in the web app).
+  api_python "$HELPER" finish --stt-model "$STT_MODEL" --preset "$TARGET" --web "$WEB_URL" $FORCE
   line="$(grep '^PRESET=' "$PY_OUT" | tail -n 1)"
   [ -n "$line" ] && ACTIVE_PRESET="${line#PRESET=}"
+  STT_IN_USE="$(sed -n 's/^STT=//p' "$PY_OUT" | tail -n 1)"
+  case "$STT_IN_USE" in
+    streaming) ACTIVE_PRESET=private_streaming ;;
+    whisper:?*) STT_MODEL="${STT_IN_USE#whisper:}"; ACTIVE_PRESET=private_pocket_tts ;;
+  esac
   [ "$PY_EXIT" = 0 ] || warn "the demo agent could not be published (see above); fix it in the web app under Agents"
   rm -f "$PY_OUT"
   unset ATLAS_DEMO_PASSWORD

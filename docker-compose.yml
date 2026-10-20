@@ -240,7 +240,9 @@ services:
       # busy, 4 threads started replies 0.5 s sooner than 6 (all cores) and kept the
       # voice smooth, while 5 or 6 left audible pauses mid-reply and 5 also stutter
       # (docs/perf/local-turn-contention.json).
-      # Set LOCAL_LLM_THREADS to your physical core count minus 2; -1 = all cores.
+      # Set LOCAL_LLM_THREADS to your physical core count minus 2; -1 = all cores. With two
+      # threads per core (most cloud vCPUs), use the physical core count: on 8 vCPU = 4
+      # cores, 4 threads beat 2, 3 and 8 in real calls (docs/perf/oracle-latency.md).
       LLAMA_ARG_THREADS: "${LOCAL_LLM_THREADS:-4}"
     ports:
       - "127.0.0.1:11434:11434"
@@ -289,6 +291,9 @@ services:
       # library's own choice, measured best while the language model runs: with 2 the
       # voice stuttered 26 times in 10 turns, with 1 never (docs/perf/local-turn-contention.json).
       POCKET_TTS_THREADS: "${LOCAL_TTS_THREADS:-1}"
+      # Reply openers ("Got it.", "Okay.", ...) are synthesised at startup and kept in memory,
+      # so a reply that starts with one is heard at once (POCKET_TTS_PHRASE_CACHE* in
+      # infra/docker/pocket-tts/app.py; docs/perf/oracle-latency.md).
       # Optional voice cloning: a Hugging Face token of an account that accepted the terms
       # of the gated kyutai/pocket-tts weights (docs/local-models.md, "Voice cloning").
       # Empty = no cloning; built-in voices work either way. Cloned voices are kept in the
@@ -304,19 +309,23 @@ services:
           memory: 1536m
     restart: unless-stopped
 
-  # Live (streaming) English speech-to-text that answers the Deepgram live-listen protocol,
-  # built locally from infra/docker/streaming-stt (sherpa-onnx streaming Zipformer, CPU).
-  # In ATLAS add a Deepgram connection with base URL http://local-stt:8000.
-  # The model (about 75 MB) downloads on first start into the volume.
+  # Live English speech-to-text that answers the Deepgram live-listen protocol, built
+  # locally from infra/docker/streaming-stt (sherpa-onnx, CPU). In ATLAS add a Deepgram
+  # connection with base URL http://local-stt:8000. The model downloads on first start
+  # into the volume (about 140 MB for the default). See docs/local-models.md.
   local-stt:
     profiles: ["local-ai"]
     build:
       context: infra/docker/streaming-stt
-    image: atlas/local-stt:sherpa-onnx-1.13.8
+    image: atlas/local-stt:2-sherpa-onnx-1.13.8
     environment:
-      STT_MODEL_ID: zipformer-en-streaming
+      # parakeet-110m (default): NVIDIA Parakeet TDT 110M, transcribes each utterance when
+      # the caller pauses, with live words while they speak. Also: nemotron-en-560
+      # (streaming 0.6B, needs about 1.5 GB of memory: raise the limit below),
+      # parakeet-tdt-v2 (0.6B), zipformer-en (the first model; failed on real callers).
+      STT_MODEL: "${LOCAL_STT_MODEL:-parakeet-110m}"
       # Threads per decode. Recognition runs while the caller talks, the LLM after.
-      STT_NUM_THREADS: "2"
+      STT_NUM_THREADS: "${LOCAL_STT_STREAM_THREADS:-2}"
       STT_MAX_SESSIONS: "4"
       # Silence after words that ends a segment when the voice service does not send
       # Finalize first (it does, 0.2 s after the caller stops).
@@ -329,8 +338,8 @@ services:
     deploy:
       resources:
         limits:
-          # Measured peak 217 MiB with 4 calls at once; flat over an 8-minute call.
-          memory: 384m
+          # Parakeet 110M: measured peak 346 MiB with two calls at once (Nemotron: 980 MiB).
+          memory: 768m
     restart: unless-stopped
 
 volumes:

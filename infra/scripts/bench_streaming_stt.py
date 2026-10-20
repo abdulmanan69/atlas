@@ -19,11 +19,20 @@ Measured per run (wall clock, perf_counter):
   finalized               whether the voice service marked the transcript finalized
                           (that lets the turn end without its safety-net wait)
 
+Word error rate is computed after normalising both texts (lower case, no punctuation,
+numbers written as words, "$400,000" -> "four hundred thousand dollars"), and summed over
+all clips of a rate (errors / reference words).
+
 Usage (from the repo root):
   docker cp speech.wav <voice-runtime-container>:/tmp/stt-bench/s1.wav
   docker compose --profile voice exec -T voice-runtime /opt/venv/bin/python - \
       --wav /tmp/stt-bench/s1.wav --text "the sentence that was spoken" \
       < infra/scripts/bench_streaming_stt.py > result.json
+
+Many clips: --manifest clips.json, a list of {"wav": "/path/in/container.wav", "text": "..."}
+(add --runs 1 --skip-endpoint for a quick pass, --no-text to leave transcripts and
+references out of the output, e.g. for recordings of real callers).
+Concurrent calls: --concurrency 2 runs two clients at once on every clip.
 """
 
 from __future__ import annotations
@@ -39,6 +48,7 @@ import sys
 import time
 import wave
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -103,18 +113,58 @@ def prepare(speech: np.ndarray, src_rate: int, rate: int) -> tuple[bytes, float,
     return pcm, LEAD_S + start, LEAD_S + end
 
 
+_ONES = [
+    *("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"),
+    *("eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen"),
+    *("eighteen", "nineteen"),
+]
+_TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+_SPELL = {"ok": "okay", "yeah": "yes", "uh": "", "um": "", "hmm": "", "ah": ""}
+
+
+def _num(n: int) -> str:
+    if n < 20:
+        return _ONES[n]
+    if n < 100:
+        return _TENS[n // 10] + ("" if n % 10 == 0 else " " + _ONES[n % 10])
+    if n < 1000:
+        return _ONES[n // 100] + " hundred" + ("" if n % 100 == 0 else " " + _num(n % 100))
+    for div, name in ((10**9, "billion"), (10**6, "million"), (1000, "thousand")):
+        if n >= div:
+            return _num(n // div) + " " + name + ("" if n % div == 0 else " " + _num(n % div))
+    return str(n)
+
+
+def _money(m: re.Match[str]) -> str:
+    return f" {_num(int(m.group(1).replace(',', '')))} {m.group(2) or ''} dollars "
+
+
 def words(text: str) -> list[str]:
-    return re.sub(r"[^a-z0-9' ]+", " ", text.lower()).split()
+    t = text.lower().replace("%", " percent ")
+    t = re.sub(r"\$\s?(\d[\d,]*)(?:\s?(thousand|million)\b)?", _money, t)
+    t = re.sub(r"(\d+)(st|nd|rd|th)\b", r"\1", t)
+    t = re.sub(r"\d[\d,]*", lambda m: " " + _num(int(m.group(0).replace(",", ""))) + " ", t)
+    t = re.sub(r"[^a-z' ]+", " ", t.replace("-", " "))
+    out: list[str] = []
+    for w in t.split():
+        w = _SPELL.get(w.strip("'"), w.strip("'"))
+        out.extend(w.split())
+    return out
 
 
-def wer(ref: str, hyp: str) -> float:
+def word_errors(ref: str, hyp: str) -> tuple[int, int]:
     r, h = words(ref), words(hyp)
     d = list(range(len(h) + 1))
     for i, rw in enumerate(r, 1):
         prev, d[0] = d[0], i
         for j, hw in enumerate(h, 1):
             prev, d[j] = d[j], min(d[j] + 1, d[j - 1] + 1, prev + (rw != hw))
-    return d[len(h)] / max(len(r), 1)
+    return d[len(h)], len(r)
+
+
+def wer(ref: str, hyp: str) -> float:
+    errors, n = word_errors(ref, hyp)
+    return errors / max(n, 1)
 
 
 class Collector(FrameProcessor):
@@ -229,39 +279,82 @@ def median(values: list[float | None], digits: int = 1) -> float | None:
     return round(statistics.median(clean), digits) if clean else None
 
 
+def percentile(values: list[float | None], q: float) -> float | None:
+    clean = sorted(v for v in values if v is not None)
+    return round(clean[min(int(q * len(clean)), len(clean) - 1)], 1) if clean else None
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://local-stt:8000")
-    parser.add_argument("--model", default="zipformer-en-streaming")
-    parser.add_argument("--wav", action="append", required=True)
-    parser.add_argument("--text", action="append", required=True, help="reference, per --wav")
+    parser.add_argument("--model", default="parakeet-en-110m")
+    parser.add_argument("--wav", action="append", default=[])
+    parser.add_argument("--text", action="append", default=[], help="reference, per --wav")
+    parser.add_argument("--manifest", help='JSON list of {"wav": ..., "text": ...}')
     parser.add_argument("--rates", default="16000,8000")
     parser.add_argument("--runs", type=int, default=3)
+    parser.add_argument("--concurrency", type=int, default=1, help="clients at once per run")
+    parser.add_argument("--skip-endpoint", action="store_true", help="no run without Finalize")
+    parser.add_argument("--no-warm", action="store_true", help="no warm-up run per clip")
+    parser.add_argument("--no-text", action="store_true", help="leave transcripts out")
     args = parser.parse_args()
     if len(args.wav) != len(args.text):
         raise SystemExit("one --text per --wav")
+    clips = [{"wav": w, "text": t} for w, t in zip(args.wav, args.text, strict=False)]
+    if args.manifest:
+        clips.extend(json.loads(Path(args.manifest).read_text()))  # before any await
+    if not clips:
+        raise SystemExit("give --wav/--text or --manifest")
     logger.remove()
     logger.add(sys.stderr, level="WARNING")
 
+    async def runs_at_once(pcm: bytes, rate: int, start: float, end: float) -> list[dict[str, Any]]:
+        return list(
+            await asyncio.gather(
+                *(
+                    run_once(args.base_url, args.model, pcm, rate, start, end, finalize=True)
+                    for _ in range(args.concurrency)
+                )
+            )
+        )
+
     results = []
-    for path, ref in zip(args.wav, args.text, strict=False):
+    totals: dict[int, dict[str, Any]] = {}
+    for clip in clips:
+        path, ref = clip["wav"], clip["text"]
         speech, src_rate = read_wav(path)
         for rate in (int(r) for r in args.rates.split(",")):
             pcm, start, end = prepare(speech, src_rate, rate)
-            await run_once(args.base_url, args.model, pcm, rate, start, end, finalize=True)  # warm
-            runs = [
+            if not args.no_warm:
                 await run_once(args.base_url, args.model, pcm, rate, start, end, finalize=True)
-                for _ in range(args.runs)
-            ]
-            endpoint = await run_once(
-                args.base_url, args.model, pcm, rate, start, end, finalize=False
+            runs: list[dict[str, Any]] = []
+            for _ in range(args.runs):
+                runs.extend(await runs_at_once(pcm, rate, start, end))
+            endpoint = None
+            if not args.skip_endpoint:
+                endpoint = await run_once(
+                    args.base_url, args.model, pcm, rate, start, end, finalize=False
+                )
+            tot = totals.setdefault(
+                rate, {"errors": 0, "words": 0, "final": [], "interim": [], "finalized": []}
             )
-            for r in [*runs, endpoint]:
-                r["wer"] = round(wer(ref, r["transcript"]), 3)
+            for r in runs:
+                errors, n = word_errors(ref, r["transcript"])
+                r["wer"] = round(errors / max(n, 1), 3)
+                tot["errors"] += errors
+                tot["words"] += n
+                tot["final"].append(r["final_after_speech_ms"])
+                tot["interim"].append(r["first_interim_ms"])
+                tot["finalized"].append(bool(r["finalized"]))
+            if endpoint is not None:
+                endpoint["wer"] = round(wer(ref, endpoint["transcript"]), 3)
+            if args.no_text:
+                for r in [*runs, *([endpoint] if endpoint else [])]:
+                    r.pop("transcript", None)
             results.append(
                 {
                     "wav": os.path.basename(path),
-                    "reference": ref,
+                    **({} if args.no_text else {"reference": ref}),
                     "sample_rate": rate,
                     "speech_s": round(end - start, 2),
                     "median": {
@@ -277,6 +370,18 @@ async def main() -> None:
                     "endpoint_run": endpoint,
                 }
             )
+    summary = {
+        str(rate): {
+            "runs": len(t["final"]),
+            "wer": round(t["errors"] / max(t["words"], 1), 3),
+            "word_errors": f"{t['errors']} of {t['words']} words",
+            "final_after_speech_ms_median": median(t["final"]),
+            "final_after_speech_ms_p90": percentile(t["final"], 0.9),
+            "first_interim_ms_median": median(t["interim"]),
+            "all_finalized": all(t["finalized"]),
+        }
+        for rate, t in totals.items()
+    }
     print(
         json.dumps(
             {
@@ -290,8 +395,10 @@ async def main() -> None:
                     "frame_ms": FRAME_S * 1000,
                     "vad_stop_s": VAD_STOP_S,
                     "runs": args.runs,
+                    "concurrency": args.concurrency,
                     "phone_audio": "8 kHz runs use a G.711 mu-law round trip",
                 },
+                "summary": summary,
                 "results": results,
             },
             indent=2,

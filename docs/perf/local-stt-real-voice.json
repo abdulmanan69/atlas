@@ -1,0 +1,929 @@
+{
+ "meta": {
+  "date": "2026-10-20",
+  "machine": "Oracle Cloud VM.Standard.E2.4: 8 vCPU (4 cores) AMD EPYC 7551, 32 GB RAM, no GPU; the other ATLAS services running",
+  "software": "sherpa-onnx 1.13.8 (int8 ONNX models unless noted), faster-whisper 1.2.1, speaches 0.8.3 for Whisper small.en",
+  "reference": "caller utterances: Whisper large-v3 (float32, beam 5, language detection, then English); test-caller lines: the exact text the automated caller speaks",
+  "clear_english": "reference language en, average log-probability above -0.6 and no-speech probability below 0.6; the other caller utterances are side talk in Urdu or Hindi, mumbling or background voices",
+  "wer": "word errors / reference words after normalising both (lower case, no punctuation, numbers as words), summed over utterances",
+  "offline_eval": "each utterance decoded once (streaming models fed in 0.1 s pieces); decode_after_speech_ms = time after the last sample: flushing the last chunk (streaming) or decoding the whole utterance (others); cpu = CPU seconds per second of audio; threads per model key suffix (-t2 = 2)",
+  "live_path": "the deployed local-stt fed in 20 ms frames in real time through the voice service's own Deepgram client (infra/scripts/bench_streaming_stt.py), Finalize 0.2 s after speech ends; STT_NUM_THREADS=2; parakeet-110m with STT_MIN_CONFIDENCE=0.6",
+  "phone_audio": "8 kHz runs use a G.711 mu-law round trip",
+  "privacy": "the caller's audio, transcripts and references stay on the server; this file holds numbers only",
+  "whisper_http": "http-whisper-small.en: the deployed speech server (local-speech, 4 threads) called as the voice service calls it; its decode and cpu figures are wall-clock time of the request"
+ },
+ "data": {
+  "caller_recordings": "the caller's side (separate user track) of 6 browser test calls made by a person on the live server, 2026-10-19; kept on the server only",
+  "caller_segments": 55,
+  "caller_speech_s": 109.1,
+  "caller_segments_clear_english": 18,
+  "caller_words_clear_english": 76,
+  "caller_segment_language_by_reference": {
+   "en": 27,
+   "other": 23,
+   "hi": 3,
+   "ur": 2
+  },
+  "test_caller_segments": 28,
+  "test_caller_words": 259
+ },
+ "offline_eval": {
+  "fastconformer-24500-t2": {
+   "threads": 2,
+   "rss_mib": 362.3,
+   "16000": {
+    "caller_clear_english": {
+     "wer": 0.25,
+     "word_errors": "19 of 76",
+     "decode_after_speech_ms_median": 190,
+     "decode_after_speech_ms_p90": 288,
+     "cpu_seconds_per_audio_second": 0.081
+    },
+    "test_caller_lines": {
+     "wer": 0.116,
+     "word_errors": "30 of 259",
+     "decode_after_speech_ms_median": 263,
+     "decode_after_speech_ms_p90": 303,
+     "cpu_seconds_per_audio_second": 0.082
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 134,
+     "segments_with_words": 33
+    }
+   },
+   "8000": {
+    "caller_clear_english": {
+     "wer": 0.368,
+     "word_errors": "28 of 76",
+     "decode_after_speech_ms_median": 186,
+     "decode_after_speech_ms_p90": 276,
+     "cpu_seconds_per_audio_second": 0.081
+    },
+    "test_caller_lines": {
+     "wer": 0.116,
+     "word_errors": "30 of 259",
+     "decode_after_speech_ms_median": 254,
+     "decode_after_speech_ms_p90": 285,
+     "cpu_seconds_per_audio_second": 0.079
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 149,
+     "segments_with_words": 35
+    }
+   }
+  },
+  "http-whisper-small.en": {
+   "threads": null,
+   "rss_mib": null,
+   "16000": {
+    "caller_clear_english": {
+     "wer": 0.658,
+     "word_errors": "50 of 76",
+     "decode_after_speech_ms_median": 4037,
+     "decode_after_speech_ms_p90": 4205,
+     "cpu_seconds_per_audio_second": 1.535
+    },
+    "test_caller_lines": {
+     "wer": 0.104,
+     "word_errors": "27 of 259",
+     "decode_after_speech_ms_median": 4300,
+     "decode_after_speech_ms_p90": 5102,
+     "cpu_seconds_per_audio_second": 1.411
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 485,
+     "segments_with_words": 36
+    }
+   },
+   "8000": {
+    "caller_clear_english": {
+     "wer": 1.974,
+     "word_errors": "150 of 76",
+     "decode_after_speech_ms_median": 4038,
+     "decode_after_speech_ms_p90": 4319,
+     "cpu_seconds_per_audio_second": 1.666
+    },
+    "test_caller_lines": {
+     "wer": 0.143,
+     "word_errors": "37 of 259",
+     "decode_after_speech_ms_median": 4239,
+     "decode_after_speech_ms_p90": 4480,
+     "cpu_seconds_per_audio_second": 1.334
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 199,
+     "segments_with_words": 30
+    }
+   }
+  },
+  "moonshine-base-v2-t2": {
+   "threads": 2,
+   "rss_mib": 286.3,
+   "16000": {
+    "caller_clear_english": {
+     "wer": 0.421,
+     "word_errors": "32 of 76",
+     "decode_after_speech_ms_median": 138,
+     "decode_after_speech_ms_p90": 253,
+     "cpu_seconds_per_audio_second": 0.065
+    },
+    "test_caller_lines": {
+     "wer": 0.147,
+     "word_errors": "38 of 259",
+     "decode_after_speech_ms_median": 229,
+     "decode_after_speech_ms_p90": 298,
+     "cpu_seconds_per_audio_second": 0.077
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 120,
+     "segments_with_words": 21
+    }
+   },
+   "8000": {
+    "caller_clear_english": {
+     "wer": 0.342,
+     "word_errors": "26 of 76",
+     "decode_after_speech_ms_median": 137,
+     "decode_after_speech_ms_p90": 244,
+     "cpu_seconds_per_audio_second": 0.064
+    },
+    "test_caller_lines": {
+     "wer": 0.17,
+     "word_errors": "44 of 259",
+     "decode_after_speech_ms_median": 234,
+     "decode_after_speech_ms_p90": 295,
+     "cpu_seconds_per_audio_second": 0.076
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 79,
+     "segments_with_words": 15
+    }
+   }
+  },
+  "moonshine-tiny-v2-t2": {
+   "threads": 2,
+   "rss_mib": 155.9,
+   "16000": {
+    "caller_clear_english": {
+     "wer": 0.855,
+     "word_errors": "65 of 76",
+     "decode_after_speech_ms_median": 74,
+     "decode_after_speech_ms_p90": 146,
+     "cpu_seconds_per_audio_second": 0.04
+    },
+    "test_caller_lines": {
+     "wer": 0.185,
+     "word_errors": "48 of 259",
+     "decode_after_speech_ms_median": 133,
+     "decode_after_speech_ms_p90": 156,
+     "cpu_seconds_per_audio_second": 0.042
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 244,
+     "segments_with_words": 36
+    }
+   },
+   "8000": {
+    "caller_clear_english": {
+     "wer": 0.842,
+     "word_errors": "64 of 76",
+     "decode_after_speech_ms_median": 72,
+     "decode_after_speech_ms_p90": 169,
+     "cpu_seconds_per_audio_second": 0.039
+    },
+    "test_caller_lines": {
+     "wer": 0.216,
+     "word_errors": "56 of 259",
+     "decode_after_speech_ms_median": 121,
+     "decode_after_speech_ms_p90": 162,
+     "cpu_seconds_per_audio_second": 0.042
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 261,
+     "segments_with_words": 36
+    }
+   }
+  },
+  "nemo-fc-1040-t2": {
+   "threads": 2,
+   "rss_mib": 268.4,
+   "16000": {
+    "caller_clear_english": {
+     "wer": 0.368,
+     "word_errors": "28 of 76",
+     "decode_after_speech_ms_median": 1,
+     "decode_after_speech_ms_p90": 239,
+     "cpu_seconds_per_audio_second": 0.215
+    },
+    "test_caller_lines": {
+     "wer": 0.135,
+     "word_errors": "35 of 259",
+     "decode_after_speech_ms_median": 1,
+     "decode_after_speech_ms_p90": 150,
+     "cpu_seconds_per_audio_second": 0.164
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 16,
+     "segments_with_words": 9
+    }
+   },
+   "8000": {
+    "caller_clear_english": {
+     "wer": 0.382,
+     "word_errors": "29 of 76",
+     "decode_after_speech_ms_median": 1,
+     "decode_after_speech_ms_p90": 181,
+     "cpu_seconds_per_audio_second": 0.209
+    },
+    "test_caller_lines": {
+     "wer": 0.147,
+     "word_errors": "38 of 259",
+     "decode_after_speech_ms_median": 1,
+     "decode_after_speech_ms_p90": 244,
+     "cpu_seconds_per_audio_second": 0.209
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 23,
+     "segments_with_words": 12
+    }
+   }
+  },
+  "nemo-fc-480-t2": {
+   "threads": 2,
+   "rss_mib": 267.8,
+   "16000": {
+    "caller_clear_english": {
+     "wer": 0.342,
+     "word_errors": "26 of 76",
+     "decode_after_speech_ms_median": 1,
+     "decode_after_speech_ms_p90": 105,
+     "cpu_seconds_per_audio_second": 0.178
+    },
+    "test_caller_lines": {
+     "wer": 0.139,
+     "word_errors": "36 of 259",
+     "decode_after_speech_ms_median": 1,
+     "decode_after_speech_ms_p90": 105,
+     "cpu_seconds_per_audio_second": 0.184
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 8,
+     "segments_with_words": 4
+    }
+   },
+   "8000": {
+    "caller_clear_english": {
+     "wer": 0.434,
+     "word_errors": "33 of 76",
+     "decode_after_speech_ms_median": 1,
+     "decode_after_speech_ms_p90": 104,
+     "cpu_seconds_per_audio_second": 0.177
+    },
+    "test_caller_lines": {
+     "wer": 0.154,
+     "word_errors": "40 of 259",
+     "decode_after_speech_ms_median": 1,
+     "decode_after_speech_ms_p90": 105,
+     "cpu_seconds_per_audio_second": 0.183
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 7,
+     "segments_with_words": 4
+    }
+   }
+  },
+  "nemo-fc-80-t2": {
+   "threads": 2,
+   "rss_mib": 266.0,
+   "16000": {
+    "caller_clear_english": {
+     "wer": 0.289,
+     "word_errors": "22 of 76",
+     "decode_after_speech_ms_median": 79,
+     "decode_after_speech_ms_p90": 155,
+     "cpu_seconds_per_audio_second": 0.5
+    },
+    "test_caller_lines": {
+     "wer": 0.154,
+     "word_errors": "40 of 259",
+     "decode_after_speech_ms_median": 79,
+     "decode_after_speech_ms_p90": 155,
+     "cpu_seconds_per_audio_second": 0.499
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 19,
+     "segments_with_words": 8
+    }
+   },
+   "8000": {
+    "caller_clear_english": {
+     "wer": 0.355,
+     "word_errors": "27 of 76",
+     "decode_after_speech_ms_median": 78,
+     "decode_after_speech_ms_p90": 157,
+     "cpu_seconds_per_audio_second": 0.497
+    },
+    "test_caller_lines": {
+     "wer": 0.166,
+     "word_errors": "43 of 259",
+     "decode_after_speech_ms_median": 79,
+     "decode_after_speech_ms_p90": 156,
+     "cpu_seconds_per_audio_second": 0.499
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 24,
+     "segments_with_words": 8
+    }
+   }
+  },
+  "nemotron-en-160-t2": {
+   "threads": 2,
+   "rss_mib": 986.2,
+   "16000": {
+    "caller_clear_english": {
+     "wer": 0.197,
+     "word_errors": "15 of 76",
+     "decode_after_speech_ms_median": 356,
+     "decode_after_speech_ms_p90": 712,
+     "cpu_seconds_per_audio_second": 2.252
+    },
+    "test_caller_lines": {
+     "wer": 0.124,
+     "word_errors": "32 of 259",
+     "decode_after_speech_ms_median": 356,
+     "decode_after_speech_ms_p90": 710,
+     "cpu_seconds_per_audio_second": 2.248
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 11,
+     "segments_with_words": 3
+    }
+   },
+   "8000": {
+    "caller_clear_english": {
+     "wer": 0.25,
+     "word_errors": "19 of 76",
+     "decode_after_speech_ms_median": 355,
+     "decode_after_speech_ms_p90": 708,
+     "cpu_seconds_per_audio_second": 2.253
+    },
+    "test_caller_lines": {
+     "wer": 0.143,
+     "word_errors": "37 of 259",
+     "decode_after_speech_ms_median": 359,
+     "decode_after_speech_ms_p90": 709,
+     "cpu_seconds_per_audio_second": 2.247
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 9,
+     "segments_with_words": 3
+    }
+   }
+  },
+  "nemotron-en-560-t2": {
+   "threads": 2,
+   "rss_mib": 979.1,
+   "16000": {
+    "caller_clear_english": {
+     "wer": 0.184,
+     "word_errors": "14 of 76",
+     "decode_after_speech_ms_median": 1,
+     "decode_after_speech_ms_p90": 470,
+     "cpu_seconds_per_audio_second": 0.783
+    },
+    "test_caller_lines": {
+     "wer": 0.12,
+     "word_errors": "31 of 259",
+     "decode_after_speech_ms_median": 1,
+     "decode_after_speech_ms_p90": 468,
+     "cpu_seconds_per_audio_second": 0.801
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 6,
+     "segments_with_words": 2
+    }
+   },
+   "8000": {
+    "caller_clear_english": {
+     "wer": 0.197,
+     "word_errors": "15 of 76",
+     "decode_after_speech_ms_median": 1,
+     "decode_after_speech_ms_p90": 479,
+     "cpu_seconds_per_audio_second": 0.781
+    },
+    "test_caller_lines": {
+     "wer": 0.131,
+     "word_errors": "34 of 259",
+     "decode_after_speech_ms_median": 1,
+     "decode_after_speech_ms_p90": 468,
+     "cpu_seconds_per_audio_second": 0.801
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 4,
+     "segments_with_words": 1
+    }
+   }
+  },
+  "nemotron-en-560-t4": {
+   "threads": 4,
+   "rss_mib": 971.4,
+   "16000": {
+    "caller_clear_english": {
+     "wer": 0.184,
+     "word_errors": "14 of 76",
+     "decode_after_speech_ms_median": 1,
+     "decode_after_speech_ms_p90": 283,
+     "cpu_seconds_per_audio_second": 0.517
+    },
+    "test_caller_lines": {
+     "wer": 0.12,
+     "word_errors": "31 of 259",
+     "decode_after_speech_ms_median": 1,
+     "decode_after_speech_ms_p90": 329,
+     "cpu_seconds_per_audio_second": 0.523
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 6,
+     "segments_with_words": 2
+    }
+   },
+   "8000": {
+    "caller_clear_english": {
+     "wer": 0.197,
+     "word_errors": "15 of 76",
+     "decode_after_speech_ms_median": 1,
+     "decode_after_speech_ms_p90": 286,
+     "cpu_seconds_per_audio_second": 0.501
+    },
+    "test_caller_lines": {
+     "wer": 0.131,
+     "word_errors": "34 of 259",
+     "decode_after_speech_ms_median": 1,
+     "decode_after_speech_ms_p90": 325,
+     "cpu_seconds_per_audio_second": 0.532
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 4,
+     "segments_with_words": 1
+    }
+   }
+  },
+  "parakeet-110m-fp32-t2": {
+   "threads": 2,
+   "rss_mib": 663.6,
+   "16000": {
+    "caller_clear_english": {
+     "wer": 0.197,
+     "word_errors": "15 of 76",
+     "decode_after_speech_ms_median": 167,
+     "decode_after_speech_ms_p90": 243,
+     "cpu_seconds_per_audio_second": 0.072
+    },
+    "test_caller_lines": {
+     "wer": 0.089,
+     "word_errors": "23 of 259",
+     "decode_after_speech_ms_median": 237,
+     "decode_after_speech_ms_p90": 262,
+     "cpu_seconds_per_audio_second": 0.072
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 150,
+     "segments_with_words": 32
+    }
+   },
+   "8000": {
+    "caller_clear_english": {
+     "wer": 0.237,
+     "word_errors": "18 of 76",
+     "decode_after_speech_ms_median": 164,
+     "decode_after_speech_ms_p90": 243,
+     "cpu_seconds_per_audio_second": 0.071
+    },
+    "test_caller_lines": {
+     "wer": 0.1,
+     "word_errors": "26 of 259",
+     "decode_after_speech_ms_median": 227,
+     "decode_after_speech_ms_p90": 261,
+     "cpu_seconds_per_audio_second": 0.071
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 155,
+     "segments_with_words": 32
+    }
+   }
+  },
+  "parakeet-110m-t2": {
+   "threads": 2,
+   "rss_mib": 364.8,
+   "16000": {
+    "caller_clear_english": {
+     "wer": 0.184,
+     "word_errors": "14 of 76",
+     "decode_after_speech_ms_median": 186,
+     "decode_after_speech_ms_p90": 285,
+     "cpu_seconds_per_audio_second": 0.08
+    },
+    "test_caller_lines": {
+     "wer": 0.093,
+     "word_errors": "24 of 259",
+     "decode_after_speech_ms_median": 254,
+     "decode_after_speech_ms_p90": 286,
+     "cpu_seconds_per_audio_second": 0.079
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 144,
+     "segments_with_words": 34
+    }
+   },
+   "8000": {
+    "caller_clear_english": {
+     "wer": 0.237,
+     "word_errors": "18 of 76",
+     "decode_after_speech_ms_median": 190,
+     "decode_after_speech_ms_p90": 270,
+     "cpu_seconds_per_audio_second": 0.08
+    },
+    "test_caller_lines": {
+     "wer": 0.108,
+     "word_errors": "28 of 259",
+     "decode_after_speech_ms_median": 251,
+     "decode_after_speech_ms_p90": 282,
+     "cpu_seconds_per_audio_second": 0.078
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 144,
+     "segments_with_words": 32
+    }
+   }
+  },
+  "parakeet-110m-t4": {
+   "threads": 4,
+   "rss_mib": 363.6,
+   "16000": {
+    "caller_clear_english": {
+     "wer": 0.184,
+     "word_errors": "14 of 76",
+     "decode_after_speech_ms_median": 149,
+     "decode_after_speech_ms_p90": 219,
+     "cpu_seconds_per_audio_second": 0.071
+    },
+    "test_caller_lines": {
+     "wer": 0.093,
+     "word_errors": "24 of 259",
+     "decode_after_speech_ms_median": 217,
+     "decode_after_speech_ms_p90": 255,
+     "cpu_seconds_per_audio_second": 0.069
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 144,
+     "segments_with_words": 34
+    }
+   },
+   "8000": {
+    "caller_clear_english": {
+     "wer": 0.237,
+     "word_errors": "18 of 76",
+     "decode_after_speech_ms_median": 164,
+     "decode_after_speech_ms_p90": 234,
+     "cpu_seconds_per_audio_second": 0.07
+    },
+    "test_caller_lines": {
+     "wer": 0.108,
+     "word_errors": "28 of 259",
+     "decode_after_speech_ms_median": 215,
+     "decode_after_speech_ms_p90": 260,
+     "cpu_seconds_per_audio_second": 0.069
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 144,
+     "segments_with_words": 32
+    }
+   }
+  },
+  "parakeet-tdt-v2-t2": {
+   "threads": 2,
+   "rss_mib": 1100.4,
+   "16000": {
+    "caller_clear_english": {
+     "wer": 0.25,
+     "word_errors": "19 of 76",
+     "decode_after_speech_ms_median": 797,
+     "decode_after_speech_ms_p90": 1174,
+     "cpu_seconds_per_audio_second": 0.334
+    },
+    "test_caller_lines": {
+     "wer": 0.108,
+     "word_errors": "28 of 259",
+     "decode_after_speech_ms_median": 1082,
+     "decode_after_speech_ms_p90": 1200,
+     "cpu_seconds_per_audio_second": 0.334
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 100,
+     "segments_with_words": 24
+    }
+   },
+   "8000": {
+    "caller_clear_english": {
+     "wer": 0.289,
+     "word_errors": "22 of 76",
+     "decode_after_speech_ms_median": 782,
+     "decode_after_speech_ms_p90": 1150,
+     "cpu_seconds_per_audio_second": 0.331
+    },
+    "test_caller_lines": {
+     "wer": 0.116,
+     "word_errors": "30 of 259",
+     "decode_after_speech_ms_median": 1059,
+     "decode_after_speech_ms_p90": 1197,
+     "cpu_seconds_per_audio_second": 0.331
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 110,
+     "segments_with_words": 25
+    }
+   }
+  },
+  "zipformer-t2": {
+   "threads": 2,
+   "rss_mib": 181.5,
+   "16000": {
+    "caller_clear_english": {
+     "wer": 0.579,
+     "word_errors": "44 of 76",
+     "decode_after_speech_ms_median": 35,
+     "decode_after_speech_ms_p90": 44,
+     "cpu_seconds_per_audio_second": 0.115
+    },
+    "test_caller_lines": {
+     "wer": 0.212,
+     "word_errors": "55 of 259",
+     "decode_after_speech_ms_median": 34,
+     "decode_after_speech_ms_p90": 44,
+     "cpu_seconds_per_audio_second": 0.111
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 90,
+     "segments_with_words": 25
+    }
+   },
+   "8000": {
+    "caller_clear_english": {
+     "wer": 0.658,
+     "word_errors": "50 of 76",
+     "decode_after_speech_ms_median": 34,
+     "decode_after_speech_ms_p90": 35,
+     "cpu_seconds_per_audio_second": 0.109
+    },
+    "test_caller_lines": {
+     "wer": 0.274,
+     "word_errors": "71 of 259",
+     "decode_after_speech_ms_median": 34,
+     "decode_after_speech_ms_p90": 36,
+     "cpu_seconds_per_audio_second": 0.109
+    },
+    "caller_unclear_segments": {
+     "segments": 37,
+     "words_output": 95,
+     "segments_with_words": 26
+    }
+   }
+  }
+ },
+ "live_path": {
+  "parakeet-110m": {
+   "test_caller_lines": {
+    "summary": {
+     "16000": {
+      "runs": 28,
+      "wer": 0.104,
+      "word_errors": "27 of 259 words",
+      "final_after_speech_ms_median": 420.6,
+      "final_after_speech_ms_p90": 533.6,
+      "first_interim_ms_median": 646.4,
+      "all_finalized": false
+     },
+     "8000": {
+      "runs": 28,
+      "wer": 0.108,
+      "word_errors": "28 of 259 words",
+      "final_after_speech_ms_median": 436.4,
+      "final_after_speech_ms_p90": 609.7,
+      "first_interim_ms_median": 515.7,
+      "all_finalized": false
+     }
+    },
+    "final_after_finalize_ms_median": {
+     "16000": 208,
+     "8000": 230
+    }
+   },
+   "caller": {
+    "caller_utterances": {
+     "8000": {
+      "clear_utterances": 17,
+      "wer": 0.26,
+      "word_errors": "19 of 73",
+      "final_after_speech_ms_median": 405,
+      "final_after_speech_ms_p90": 546,
+      "final_after_finalize_ms_median": 205,
+      "first_interim_ms_median": 940,
+      "unclear_utterances": 31,
+      "unclear_with_words": 12,
+      "unclear_words": 42
+     },
+     "16000": {
+      "clear_utterances": 17,
+      "wer": 0.288,
+      "word_errors": "21 of 73",
+      "final_after_speech_ms_median": 309,
+      "final_after_speech_ms_p90": 571,
+      "final_after_finalize_ms_median": 99,
+      "first_interim_ms_median": 1096,
+      "unclear_utterances": 31,
+      "unclear_with_words": 5,
+      "unclear_words": 23
+     }
+    }
+   },
+   "two_calls_at_once": {
+    "summary": {
+     "16000": {
+      "runs": 20,
+      "wer": 0.021,
+      "word_errors": "4 of 192 words",
+      "final_after_speech_ms_median": 495.2,
+      "final_after_speech_ms_p90": 584.5,
+      "first_interim_ms_median": 680.9,
+      "all_finalized": true
+     },
+     "8000": {
+      "runs": 20,
+      "wer": 0.031,
+      "word_errors": "6 of 192 words",
+      "final_after_speech_ms_median": 489.1,
+      "final_after_speech_ms_p90": 766.8,
+      "first_interim_ms_median": 538.4,
+      "all_finalized": true
+     }
+    },
+    "final_after_finalize_ms_median": {
+     "16000": 289,
+     "8000": 278
+    }
+   },
+   "48_khz": {
+    "summary": {
+     "48000": {
+      "runs": 10,
+      "wer": 0.042,
+      "word_errors": "4 of 96 words",
+      "final_after_speech_ms_median": 406.2,
+      "final_after_speech_ms_p90": 567.0,
+      "first_interim_ms_median": 445.2,
+      "all_finalized": true
+     }
+    },
+    "final_after_finalize_ms_median": {
+     "48000": 195
+    }
+   },
+   "resources_during_runs": {
+    "cpu_percent_peak": 244.91,
+    "memory_mib_peak": 346.1
+   }
+  },
+  "nemotron-en-560": {
+   "test_caller_lines": {
+    "summary": {
+     "16000": {
+      "runs": 28,
+      "wer": 0.178,
+      "word_errors": "46 of 259 words",
+      "final_after_speech_ms_median": 624.2,
+      "final_after_speech_ms_p90": 806.7,
+      "first_interim_ms_median": 1293.1,
+      "all_finalized": false
+     },
+     "8000": {
+      "runs": 28,
+      "wer": 0.178,
+      "word_errors": "46 of 259 words",
+      "final_after_speech_ms_median": 614.2,
+      "final_after_speech_ms_p90": 698.3,
+      "first_interim_ms_median": 1139.6,
+      "all_finalized": false
+     }
+    },
+    "final_after_finalize_ms_median": {
+     "16000": 413,
+     "8000": 404
+    }
+   },
+   "caller": {
+    "caller_utterances": {
+     "8000": {
+      "clear_utterances": 17,
+      "wer": 0.192,
+      "word_errors": "14 of 73",
+      "final_after_speech_ms_median": 653,
+      "final_after_speech_ms_p90": 702,
+      "final_after_finalize_ms_median": 452,
+      "first_interim_ms_median": 1672,
+      "unclear_utterances": 31,
+      "unclear_with_words": 1,
+      "unclear_words": 6
+     },
+     "16000": {
+      "clear_utterances": 17,
+      "wer": 0.26,
+      "word_errors": "19 of 73",
+      "final_after_speech_ms_median": 602,
+      "final_after_speech_ms_p90": 736,
+      "final_after_finalize_ms_median": 396,
+      "first_interim_ms_median": 1550,
+      "unclear_utterances": 31,
+      "unclear_with_words": 3,
+      "unclear_words": 9
+     }
+    }
+   },
+   "resources_during_runs": {
+    "cpu_percent_peak": 254.1,
+    "memory_mib_peak": 977.5
+   }
+  }
+ },
+ "licences": {
+  "parakeet-110m": "CC BY 4.0, https://huggingface.co/nvidia/parakeet-tdt_ctc-110m",
+  "nemotron-en-560 / nemotron-en-160": "NVIDIA Open Model License, https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b",
+  "parakeet-tdt-v2": "CC BY 4.0, https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2",
+  "fastconformer-24500": "CC BY 4.0, NVIDIA stt_en_fastconformer_hybrid_large_pc (sherpa-onnx export)",
+  "nemo-fc-80 / 480 / 1040": "CC BY 4.0, https://huggingface.co/nvidia/stt_en_fastconformer_hybrid_large_streaming_multi",
+  "moonshine-base-v2 / tiny-v2": "MIT for English models, https://github.com/moonshine-ai/moonshine",
+  "zipformer": "Apache 2.0, https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26",
+  "whisper small.en / large-v3": "MIT"
+ },
+ "end_to_end": {
+  "how": "infra/scripts/e2e_test_call.py on the server after the demo organisation's speech-to-text was switched to the live speech server (parakeet-en-110m): full browser-style test calls through the voice service, the self-hosted language model and Pocket TTS",
+  "test_caller_runs": {
+   "runs": 2,
+   "passed": 2,
+   "voice_service_heard_every_line_correctly": true,
+   "stt_first_byte_ms_per_turn": [
+    538,
+    569,
+    548,
+    324,
+    580,
+    544,
+    328,
+    328
+   ],
+   "reply_heard_after_ms_p50": 2358,
+   "reply_heard_after_ms_max": 3294
+  },
+  "caller_recordings_as_caller_lines": {
+   "runs": 1,
+   "passed": 1,
+   "turns": 4,
+   "stt_first_byte_ms_per_turn": [
+    281,
+    304,
+    279,
+    429
+   ],
+   "heard_as_reference": "2 of 4 word for word; 1 word for word plus 3 words the reference does not have; 1 with 3 of 8 words wrong"
+  },
+  "note": "stt_first_byte is the voice service's own speech-to-text measure for the turn; replies are dominated by the language model on this CPU"
+ }
+}

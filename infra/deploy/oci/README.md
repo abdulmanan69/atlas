@@ -76,13 +76,16 @@ bash infra/deploy/oci/deploy.sh
 unset ATLAS_DEMO_DEEPGRAM_KEY
 ```
 
-Without a key the agent uses Whisper with Pocket TTS (`--preset pocket` forces it).
+Without a key the first setup uses Whisper with Pocket TTS. The speed preset is applied
+on the first setup only: later runs keep the demo organisation's models, including a
+speech-to-text chosen in the web app, and the last lines say which one is in use. Pass
+`--preset pocket` or `--preset streaming` to apply one again.
 
 | Option | Meaning |
 |---|---|
 | `--public-ip IP` | the server's public IPv4 (saved in `.env`) |
 | `--web-host`, `--voice-host` | your own hostnames instead of sslip.io |
-| `--preset auto\|pocket\|streaming` | speed preset of the demo organization |
+| `--preset pocket\|streaming` | apply this speed preset to the demo organization now (default: only on the first setup) |
 | `--no-pull` | deploy the checked-out code as it is |
 | `--rebuild` | rebuild the Pocket TTS and live-transcription images |
 | `--skip-warm` | do not load the models into memory at the end |
@@ -110,7 +113,7 @@ uv run --no-project --python 3.12 --with aiortc --with numpy --with websockets \
 ```
 
 Each run prints the ICE pair; through the relay it reads like
-`host 192.168.1.10:64352 -> relay <public IP>:49252`. Without a Pocket TTS server, give the
+`host <caller LAN IP>:64352 -> relay <public IP>:49252`. Without a Pocket TTS server, give the
 caller's lines as WAV files (`--utterance-wav`, see
 [docs/testing-voice.md](../../../docs/testing-voice.md)).
 

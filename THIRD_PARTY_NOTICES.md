@@ -40,6 +40,29 @@ The runtime itself bundles further open-source components (including the
 Pipecat framework, BSD 2-Clause). Their notices ship inside the runtime's own
 distribution and container images.
 
+## Self-hosted speech models (optional `local-stt` server)
+
+The live transcription server (`infra/docker/streaming-stt`) downloads one speech model
+and a voice activity detector on first start; none of them is stored in this repository.
+Details and the measurements behind the default: `docs/local-models.md`.
+
+- **Parakeet TDT-CTC 110M** (default, `STT_MODEL=parakeet-110m`), by NVIDIA, licensed
+  under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+  ([nvidia/parakeet-tdt_ctc-110m](https://huggingface.co/nvidia/parakeet-tdt_ctc-110m)).
+  Used as the int8 ONNX export published by the sherpa-onnx project; ATLAS does not
+  modify the model.
+- **Silero VAD**, MIT License, Copyright (c) 2020-present Silero Team
+  ([snakers4/silero-vad](https://github.com/snakers4/silero-vad)), as published by the
+  sherpa-onnx project.
+- **sherpa-onnx** (Apache License 2.0, [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)),
+  which bundles ONNX Runtime (MIT).
+- Optional alternatives, only downloaded when selected:
+  - Nemotron Speech Streaming EN 0.6B (`nemotron-en-560`, `nemotron-en-160`): Licensed by
+    NVIDIA Corporation under the NVIDIA Open Model License
+    ([agreement](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/)).
+  - Parakeet TDT 0.6B v2 (`parakeet-tdt-v2`), by NVIDIA, CC BY 4.0.
+  - Streaming Zipformer EN 2023-06-26 (`zipformer-en`), k2-fsa, Apache License 2.0.
+
 ## Application dependencies
 
 Python and JavaScript dependencies are listed with exact versions in

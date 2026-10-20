@@ -49,14 +49,17 @@ DISCLAIMER = (
 # offered. Add provider ids here once the voice service implements the cache for them.
 TTS_CACHE_PROVIDERS: tuple[str, ...] = ()
 
-# The self-hosted streaming server (infra/docker/streaming-stt) answers the Deepgram live
+# The self-hosted live speech server (infra/docker/streaming-stt) answers the Deepgram live
 # protocol, so it is used through a Deepgram connection whose base URL points at it. This
-# is the model name it reports; any name outside the Flux models keeps the voice service
-# on its /v1/listen client. Median figures from docs/perf/local-streaming-stt.json (8 kHz
-# phone audio, real-time feed through the voice service's own client).
-STREAMING_STT_MODEL = "zipformer-en-streaming"
-STREAMING_STT_FIRST_WORDS_MS = 780
-STREAMING_STT_FINAL_MS = 296
+# is the name of the model it runs by default (NVIDIA Parakeet TDT 110M); any name outside
+# the Flux models keeps the voice service on its /v1/listen client, and the server answers
+# with its configured model whatever the name. Median figures from
+# docs/perf/local-stt-real-voice.json (8 kHz phone audio, real-time feed through the voice
+# service's own client, 8-vCPU cloud server without a GPU). It replaced a streaming
+# Zipformer that was fast but misheard real callers (same file).
+STREAMING_STT_MODEL = "parakeet-en-110m"
+STREAMING_STT_FIRST_WORDS_MS = 520
+STREAMING_STT_FINAL_MS = 440
 
 GUIDE: tuple[LatencyGuideProvider, ...] = (
     LatencyGuideProvider(
@@ -115,7 +118,8 @@ GUIDE: tuple[LatencyGuideProvider, ...] = (
         note=(
             "Self-hosted Whisper. Not streaming: audio is transcribed after the person "
             "stops speaking, so every turn waits for the whole utterance (measured: about "
-            "2 s for a 5 s sentence on a 6-core CPU). No live words either: with Snappy "
+            "2 s for a 5 s sentence with base on a 6-core CPU; small.en, more accurate, "
+            "about 4 s per utterance on an 8-vCPU cloud server). No live words either: with Snappy "
             "or Balanced response speed, which wait for the caller's first words before "
             "treating speech as an interruption, a caller can only interrupt the agent "
             "once they stop talking. Snappy and Balanced also add 0.6 s to every reply "
@@ -125,7 +129,8 @@ GUIDE: tuple[LatencyGuideProvider, ...] = (
             "the microphone picks up, including the agent's own voice from a speaker, "
             "interrupts the agent at once. Streaming speech-to-text has neither problem. "
             "For English calls use the self-hosted streaming server (Private streaming "
-            "preset); keep Whisper for Urdu and other languages."
+            "preset), which also misheard real callers less often than Whisper small.en; "
+            "keep Whisper for Urdu and other languages."
         ),
     ),
     LatencyGuideProvider(
@@ -137,12 +142,15 @@ GUIDE: tuple[LatencyGuideProvider, ...] = (
         streaming=True,
         turn_aware=False,
         note=(
-            "Self-hosted streaming speech-to-text (local-stt server, sherpa-onnx "
-            "Zipformer, Apache 2.0), added as a Deepgram connection with base URL "
-            f"http://local-stt:8000. Measured on phone audio: first words about "
+            "Self-hosted live speech-to-text (local-stt server, NVIDIA Parakeet TDT 110M, "
+            "CC BY 4.0), added as a Deepgram connection with base URL "
+            "http://local-stt:8000. Chosen on recordings of real callers (accented English, "
+            "browser microphone): it misheard fewer words than Whisper small.en and the "
+            "first streaming model. Measured on phone audio: first live words about "
             f"{STREAMING_STT_FIRST_WORDS_MS} ms after the caller starts, final transcript "
             f"{STREAMING_STT_FINAL_MS} ms after the caller stops (including the 0.2 s "
-            "silence that ends a turn). English only."
+            "silence that ends a turn). Speech it is unsure of, such as background talk, "
+            "is dropped instead of becoming a turn. English only."
         ),
     ),
     LatencyGuideProvider(

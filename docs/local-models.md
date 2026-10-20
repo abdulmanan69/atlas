@@ -15,7 +15,7 @@ The `local-ai` Docker profile runs OpenAI-compatible servers on CPU:
 | `local-llm` | `ollama/ollama:0.40.6` | Language model | `qwen2.5:1.5b` (≈1 GB, Apache 2.0) |
 | `local-speech` | `ghcr.io/speaches-ai/speaches:0.8.3-cpu` | Speech-to-text and Kokoro voice | Whisper base (multilingual, MIT) + Kokoro 82M (Apache 2.0) |
 | `local-tts` (optional) | built from `infra/docker/pocket-tts` | Pocket TTS voice | Kyutai Pocket TTS 100M (CC BY 4.0) |
-| `local-stt` (optional) | built from `infra/docker/streaming-stt` | Live (streaming) English speech-to-text | sherpa-onnx streaming Zipformer (Apache 2.0) |
+| `local-stt` (optional) | built from `infra/docker/streaming-stt` | Live English speech-to-text (Deepgram protocol) | NVIDIA Parakeet TDT-CTC 110M via sherpa-onnx (CC BY 4.0) |
 
 Model files are stored in Docker volumes (`local_llm_models`, `local_speech_models`,
 `local_tts_models`, `local_stt_models`), which live on the Docker data disk, so nothing is
@@ -27,7 +27,7 @@ written to the system drive.
 make local-ai-up        # Windows: .\make.ps1 local-ai-up
 make local-ai-models    # downloads about 1.5 GB of models
 make local-tts-up       # optional: builds and starts Pocket TTS (weights ≈0.3 GB on first start)
-make local-stt-up       # optional: live English transcription (model ≈75 MB on first start)
+make local-stt-up       # optional: live English transcription (model ≈140 MB on first start)
 make local-ai-warm      # loads every model into memory; run before a test call
 ```
 
@@ -111,8 +111,8 @@ Three findings:
 - **Speech-to-text is now the largest delay.** Self-hosted Whisper waits for the caller to
   finish and then transcribes everything (0.4× real time). Streaming speech-to-text
   transcribes while the caller is still talking, which is why hosted stacks answer in
-  under a second. For English, the self-hosted streaming server cuts this to 0.1 s; see
-  [Live transcription (streaming)](#live-transcription-streaming).
+  under a second. For English, the self-hosted live server has the text about 0.2 s after
+  the turn ends; see [Live transcription (streaming)](#live-transcription-streaming).
 
 A faster CPU, a GPU or hosted speech-to-text changes these numbers a lot; re-run the
 benchmark on the machine you deploy to.
@@ -304,82 +304,174 @@ about one sentence of tokens counts, not the full reply.
 ## Live transcription (streaming)
 
 Whisper cannot transcribe while the caller is still talking. It waits for the end of the
-utterance and then reads all of it, which costs 2.0 s for a 5 s sentence on this CPU. The
-optional `local-stt` server recognises speech **while the caller speaks**. It sends live
-partial words as they form, and has the final text ready almost as soon as the caller stops.
+utterance and then reads all of it: 2.0 s for a 5 s sentence with Whisper base on the
+6-core PC, about 4 s per utterance with Whisper small.en on the 8-vCPU cloud server. The
+optional `local-stt` server works **while the caller speaks**: it sends live words as they
+form and has the final text ready a fraction of a second after the caller stops.
 
 It speaks the same live protocol as Deepgram, which the voice service already supports,
 so it is added as a **Deepgram connection whose base URL points at your own server**. No
 audio leaves your network during calls.
 
-### Measured
+### Which model, and why
 
-Same machine as above (i5-8500T, 6 cores, no GPU) on 2026-10-19. The test fed speech in 20 ms
-frames in real time through the voice service's own Deepgram client, built with the same
-settings a call uses. The voice service ends a turn 0.2 s after the caller goes quiet and
-sends Finalize at that moment, and the test did the same. 8 kHz is the phone rate; that
-audio also went through the μ-law coding a phone line applies. Speech was made by Pocket TTS
-(voice `alba`): two sentences (3.4 s and 5.7 s), five runs each, median shown. Raw results:
-`docs/perf/local-streaming-stt.json`.
+The server runs **NVIDIA Parakeet TDT-CTC 110M** (`STT_MODEL=parakeet-110m`, CC BY 4.0) by
+default. It was chosen on recordings of real calls, not on clean test speech.
 
-| | Phone audio (8 kHz) | 16 kHz audio |
-|---|---|---|
-| First live words, after the caller starts speaking | 0.78 s | 0.78 s |
-| **Final transcript, after the caller stops** | **0.30 s** (0.26–0.32) | **0.28 s** (0.26–0.32) |
-| of which: after Finalize (the rest is the 0.2 s silence that ends the turn) | 85 ms (52–105) | 73 ms (49–107) |
-| Without Finalize (the server's own end-of-speech detection, 400 ms of silence) | 1.15–1.25 s | 1.16–1.26 s |
-| Word error rate on the test sentences | 2.6 % (1 of 38 words: "Hi" heard as "Ay") | 2.6 % (same) |
-| Memory (peak) | 215 MiB; 217 MiB with 4 calls at once; flat over an 8-minute call | |
-| CPU | about 1.2 cores at peak while one caller speaks | |
+The first version used a streaming Zipformer trained only on LibriSpeech (read
+audiobooks). It scored 2.6 % word error rate on clean synthetic speech, but on the first
+real test calls (a South Asian English speaker, a laptop microphone in a browser, WebRTC
+through the TURN relay) it heard "Hello, can you hear me?" as "Hell opening hear me" and
+much of the rest as nonsense. As a stopgap the demo organisation was switched to Whisper
+small.en, which is slow on CPU (about 4 s per utterance) and, as it turned out, invents
+whole sentences from background talk.
 
-With four calls finishing at the same moment (the worst case), the final transcript came
-214 ms (median, 134–289) after Finalize. A fifth simultaneous call is refused with HTTP
-503 (`STT_MAX_SESSIONS`) and the voice service retries. Eight minutes of audio were
-transcribed in 49 s, ten times faster than real time.
+How the candidates were compared (2026-10-19/20, Oracle Cloud VM.Standard.E2.4: 8 vCPU AMD
+EPYC 7551, 32 GB RAM, no GPU; raw numbers in `docs/perf/local-stt-real-voice.json`):
 
-Compared with Whisper (`Systran/faster-whisper-base`, int8): **0.30 s instead of about
-2.2 s** from the caller stopping to the final text, for a 5 s sentence (Whisper: the same
-0.2 s wait, then 2.0 s to transcribe). Whisper's delay
-grows with the length of the sentence; the streaming server's does not, because it has
-already processed everything except the last fraction of a second. The voice service marks
-the result as finalized, so the turn ends without its extra safety wait.
+- **The caller's own voice.** The caller's side of the person's 6 browser test calls (the
+  voice service records it as a separate track), cut into 55 utterances with a voice
+  activity detector: 109 s of speech. Reference text: Whisper large-v3 (beam 5, offline,
+  about 50 s per utterance on this CPU), checked against what the voice service had heard
+  at the time. Only **18 utterances (76 words) were clear English**; the other 37 were
+  side talk in Urdu or Hindi, mumbling or background voices, which large-v3 itself could
+  not read with confidence. WER below is on the clear ones; for the rest the table counts
+  how many words each model made up.
+- **The automated test caller.** The 4 fixed lines of `e2e_test_call.py` (synthetic
+  speech) as received by the voice service over WebRTC in 7 recorded calls: 28 utterances,
+  259 words, exact text known (a few recordings lost words in transit, which counts
+  against every model alike).
+- Every utterance at 16 kHz (browser calls) and at 8 kHz after G.711 μ-law (phone line).
+  "Final" is the time the model needs once the caller stops: flushing the last chunk for
+  streaming models, transcribing the whole utterance for the others. CPU is seconds of
+  CPU time per second of speech, 2 threads.
 
-Live words matter for more than speed. Snappy and Balanced response speeds treat the caller's
-speech as an interruption only once the first words are recognised. With Whisper there are
-no words until the caller stops, so a caller cannot interrupt the agent mid-sentence. With
-the streaming server, the first words arrive about 0.8 s after the caller starts talking,
-and the interruption is recognised as soon as the required number of words has been heard.
+| Model (licence) | Kind | Caller's clear English, 16 kHz / 8 kHz | Words made up on the 37 unclear utterances | Test caller, 16 kHz / 8 kHz | Final, median (p90) | CPU | Memory |
+|---|---|---|---|---|---|---|---|
+| **Parakeet TDT-CTC 110M** (CC BY 4.0) | whole utterance | **18.4 % / 23.7 %** | 144; through the server, which drops unsure text: 23 (16 kHz), 42 (8 kHz) | **9.3 % / 10.8 %** | 254 ms (286) | 0.08 | 365 MB |
+| Nemotron Speech Streaming 0.6B, 560 ms (NVIDIA Open Model License) | streaming | **18.4 % / 19.7 %** | 6 | 12.0 % / 13.1 % | 0 or 470 ms, by where the last chunk ends (468) | 0.80 | 980 MB |
+| Nemotron Speech Streaming 0.6B, 160 ms | streaming | 19.7 % / 25.0 % | 11 | 12.4 % / 14.3 % | 356 ms (710) | 2.25: slower than real time | 990 MB |
+| Parakeet TDT 0.6B v2 (CC BY 4.0) | whole utterance | 25.0 % / 28.9 % | 100 | 10.8 % / 11.6 % | 1,082 ms (1,200) | 0.33 | 1.1 GB |
+| FastConformer hybrid large PC 114M (CC BY 4.0) | whole utterance | 25.0 % / 36.8 % | 134 | 11.6 % / 11.6 % | 263 ms (303) | 0.08 | 360 MB |
+| NeMo streaming FastConformer 114M, 80 ms (CC BY 4.0) | streaming | 28.9 % / 35.5 % | 19 | 15.4 % / 16.6 % | 79 ms (155) | 0.50 | 270 MB |
+| NeMo streaming FastConformer 114M, 480 ms | streaming | 34.2 % / 43.4 % | 8 | 13.9 % / 15.4 % | 0 or 105 ms | 0.18 | 270 MB |
+| NeMo streaming FastConformer 114M, 1040 ms | streaming | 36.8 % / 38.2 % | 16 | 13.5 % / 14.7 % | 0 or 150 ms | 0.16 | 270 MB |
+| Moonshine base, 2026 export (MIT) | whole utterance | 42.1 % / 34.2 % | 120 | 14.7 % / 17.0 % | 229 ms (298) | 0.08 | 290 MB |
+| Moonshine tiny, 2026 export (MIT) | whole utterance | 85.5 % / 84.2 % | 244 | 18.5 % / 21.6 % | 133 ms (156) | 0.04 | 160 MB |
+| Zipformer EN 2023-06-26 (Apache 2.0), the first model | streaming | 57.9 % / 65.8 % | 90 | 21.2 % / 27.4 % | 34 ms (44) | 0.11 | 180 MB |
+| Whisper small.en via the speech server (MIT), the stopgap | whole utterance | 65.8 % / 197 % | 485 | 10.4 % / 14.3 % | 4,300 ms (5,102) | 1.4 s per s (wall time, 4 threads) | in `local-speech` |
 
-What one reply costs on this CPU, after the caller stops talking (later turns; the first
-reply of a call adds the ~6 s prompt read described above):
+Word error rates above 100 % mean the model wrote more wrong words than the caller said
+(Whisper repeated invented phrases, for example "Very well. Very well. …"). "Final" here is
+measured on the test caller's lines; Parakeet's 4-thread final was 217 ms (255), Nemotron's
+329 ms (p90) with 4 threads but still 0.52 s of CPU per second of speech.
 
-| Part | Streaming + Pocket TTS | Whisper + Pocket TTS | Whisper + Kokoro |
-|---|---|---|---|
-| Speech-to-text, for a 5 s sentence (after the 0.2 s that ends the turn) | 0.1 s | 2.0 s | 2.0 s |
-| Language model to its first sentence (≈10 tokens), later turns | 1.0 s | 1.0 s | 1.0 s |
-| Voice to first audio | 0.2 s | 0.2 s | 1.8 s |
-| **Reply starts after** | **≈ 1.3 s** | **≈ 3.2 s** | **≈ 4.8 s** |
+What the table says:
 
-Accuracy is the trade-off. The model was trained only on LibriSpeech (read audiobooks), so
-it is weaker than Whisper on accents, noisy lines, names and numbers. It also has no
-punctuation: the server lower-cases the text and capitalises the first word. Check it with
-your own callers before relying on it.
+- **Parakeet 110M and Nemotron 0.6B are the two that understand this caller**, with about
+  one word in five wrong against more than one in two for the Zipformer and Whisper
+  small.en. They tie at 16 kHz (14 of 76 words each); on phone audio Nemotron was 3 words
+  better. Parakeet is the most accurate on the test caller's lines, gives the final text
+  about 0.2 s sooner through the voice service (below), and needs a tenth of the CPU and
+  a third of the memory. Nemotron is truly streaming, but on this CPU it spends 0.8 s of
+  CPU per second of speech on every call, on the cores the language model and the voice
+  also need; Parakeet re-reads the utterance a few times while the caller speaks and
+  spends 0.08.
+- **The made-up words matter as much as WER.** When the caller's line carries side talk
+  in another language or background voices, Whisper small.en writes whole sentences
+  ("Assalamu alaikum…", "We'll see you next week.") that reach the agent as if the caller
+  said them; Zipformer writes nonsense. Nemotron stays silent. Parakeet writes short wrong
+  phrases, but with a low confidence: the server drops text whose mean token probability
+  is under 0.6 (`STT_MIN_CONFIDENCE`). On these recordings the test caller's lines all
+  scored 0.71 or more and the caller's clear English 0.72 or more, except one utterance
+  Parakeet had wrong anyway (0.50); 24 of the 34 unclear utterances it wrote words for
+  scored under 0.6.
+- Whisper large-v3-turbo was not tried live: it has the same 32-layer encoder as large-v3,
+  which took about 50 s per utterance here.
+- **How sure is this?** Eighteen utterances from one speaker are thin evidence, and the
+  reference is itself a model: on two utterances large-v3 wrote only "Hello." and "Yes."
+  where other models heard more, and some clear ones it may have wrong ("Where is the gun
+  going?" for a line the other models heard as some form of "what is going on"). The
+  test caller's lines back up the ranking with exact references. Re-check with your own
+  callers; `infra/scripts/bench_streaming_stt.py --manifest` runs any recordings through
+  the server the way a call does.
+- **End to end.** With the demo organisation switched to the live server, two automated
+  test calls passed and the voice service heard every caller line correctly; its own
+  speech-to-text measure was 324 to 580 ms per turn (Whisper small.en: about 4 s). A third
+  call used four of the caller's recorded utterances as the caller's lines: "Hello, can
+  you hear me?", "What is your name?" and "Where are you calling from?" came through word
+  for word (the first followed by three words the reference does not have), where the
+  Zipformer had heard "Hell opening hear me".
+
+### Measured through the voice service
+
+The test fed the recordings in 20 ms frames in real time through the voice service's own
+Deepgram client, built with the same settings a call uses; the voice service ends a turn
+0.2 s after the caller goes quiet and sends Finalize at that moment, and the test did the
+same. Same server as above, `STT_NUM_THREADS=2`.
+
+| Through the voice service's client | Parakeet 110M, 16 kHz | Parakeet 110M, 8 kHz phone | Nemotron 0.6B, 16 kHz | Nemotron 0.6B, 8 kHz |
+|---|---|---|---|---|
+| **Final transcript after the caller stops**, test caller (28 lines), median (p90) | **421 ms** (534) | **436 ms** (610) | 624 ms (807) | 614 ms (698) |
+| of which after Finalize (the rest is the 0.2 s that ends the turn) | 208 ms | 221 ms | 413 ms | 404 ms |
+| Same, the caller's clear English (17 utterances), median (p90) | 309 ms (571) | 405 ms (546) | 602 ms (736) | 653 ms (702) |
+| First live words after the caller starts, test caller / caller | 646 / 1,096 ms | 516 / 940 ms | 1,293 / 1,550 ms | 1,140 / 1,672 ms |
+| Word error rate, test caller | **10.4 %** | **10.8 %** | 17.8 % | 17.8 % |
+| Word error rate, the caller's clear English (73 words) | 28.8 % | 26.0 % | 26.0 % | 19.2 % |
+| Words made up on the caller's 31 unclear utterances | 23 | 42 | 9 | 6 |
+| CPU peak / memory peak over the runs | 2.4 cores (two calls at once) / 346 MiB | | 2.5 cores (one call) / 978 MiB | |
+
+More from the same runs, with Parakeet:
+
+- **Two calls finishing at the same moment** (10 lines, both calls at once): final 495 ms
+  after the caller stops (p90 585) at 16 kHz, 489 ms (p90 767) at 8 kHz; every final was
+  delivered and marked finalized. CPU peaked at 2.45 cores, memory at 346 MiB.
+- **48 kHz input** (10 lines): word error rate 4.2 %, final 406 ms after the caller stops.
+- The live path is less accurate on the caller than decoding each recorded utterance
+  whole (28.8 % against 18.4 % at 16 kHz): the server cuts at pauses, so a long
+  utterance with a pause becomes two pieces, and the second piece sometimes picks up
+  quiet speech the reference left out. The test caller's lines, spoken without pauses,
+  came out the same (10.4 % against 9.3 %).
+- Nemotron did worse through the server than on whole recordings (17.8 % against 12.0 %
+  on the test caller): flushed with 0.2 s of silence on Finalize, its last 560 ms chunk
+  was cut short and most lines lost their last word ("doll" for "dollars"). The server now
+  pads Nemotron with 0.6 s, which costs one more chunk on every final (about 0.47 s on 2
+  threads here); that setting was not re-measured.
+
+The first version of this server (Zipformer) delivered the final 0.30 s after the caller
+stopped on clean synthetic speech, 0.1 s sooner than Parakeet; on the caller's speech it
+was wrong on more than half the words.
+
+### How the server does it
+
+- A **voice activity detector** (Silero VAD) watches the audio. When speech starts, the
+  audio from 0.6 s before is kept, so the first word is not cut off; between utterances
+  the model does no work. Phone audio is brought up to 16 kHz once as it arrives
+  (windowed-sinc filter). The Silero model in sherpa-onnx misses much speech on narrowband
+  audio (23 of 55 utterances never detected at 8 kHz, 0 at 16 kHz), so for phone calls a
+  loudness detector (15 dB above the background, above −50 dBFS) also counts as speech.
+- **Live words**: while the caller speaks, the utterance so far is transcribed again every
+  0.4 s, and never more often than its own cost allows (at most about 40 % of a thread).
+- **The final text** is started as soon as the detector hears the pause, about 0.1 s
+  before Finalize arrives, so the voice service gets it 0.1 to 0.2 s after Finalize.
+- Text the model is unsure of is dropped (above). An utterance longer than 20 s is cut
+  and finalised anyway.
 
 ### Why not stream Whisper
 
 Whisper has no streaming mode. Projects that make it look live re-transcribe a growing
-window of audio every fraction of a second. On this CPU that costs more than it saves:
+window of audio every fraction of a second. On these CPUs that costs more than it saves:
 
 - Whisper's encoder always processes a fixed 30-second window, so each re-run costs about
-  as much as a full transcription. That is 2.0 s here, measured.
-- Updating every 0.5 s during a 5 s sentence means 10 re-runs: roughly 20 s of CPU work
-  for 5 s of speech. It cannot keep up in real time.
-- It would also take the cores the language model needs.
+  as much as a full transcription: 2.0 s with base on the 6-core PC, about 4 s with
+  small.en on the cloud server, measured.
+- Updating every 0.5 s during a 5 s sentence means 10 re-runs: 20 to 40 s of CPU work for
+  5 s of speech. It cannot keep up in real time, and it takes the cores the language model
+  needs.
 
-A streaming transducer such as Zipformer processes each new 0.32 s chunk of audio once and
-keeps its state, so its cost grows with the audio, not with how often results are read.
-**Whisper stays the choice for Urdu and other languages**; the streaming server is English
-only.
+Parakeet's encoder only reads the audio there is, so re-reading a 3 s utterance costs
+about 0.2 s on 2 threads. **Whisper stays the choice for Urdu and other languages**; the
+live server is English only.
 
 ### Set it up
 
@@ -393,8 +485,9 @@ Then in **Voice AI → AI providers**:
 1. **Add connection → Deepgram**, name it "Live speech", base URL `http://local-stt:8000`.
 2. Under **Speed**, apply the **Private streaming (self-hosted)** preset. It needs this
    connection, the self-hosted language model connection and the Pocket TTS connection.
-   To choose by hand instead: Speech-to-text *Live speech*, model `zipformer-en-streaming`,
-   language `en`.
+   To choose by hand instead: Speech-to-text *Live speech*, model `parakeet-en-110m`,
+   language `en`. The server runs whatever `STT_MODEL` says; the model name in ATLAS only
+   has to avoid the two Flux names (below).
 
 **The API key is checked with Deepgram's cloud when the connection is saved.** The pinned
 voice service verifies every Deepgram key against `api.deepgram.com` when a connection is
@@ -408,47 +501,90 @@ The model name only has to avoid the two Flux names (`flux-general-en`,
 `flux-general-multi`): those make the voice service use a different protocol that this
 server does not speak. ATLAS never picks the streaming connection for the cloud presets.
 
+Re-deploying never changes an organisation's speech-to-text: `deploy.sh` and the demo
+setup apply a speed preset only on the first setup, or when you pass `--preset`
+(`-Preset` on Windows). An organisation that used the old Zipformer keeps its connection
+and model name; the server answers with the model it runs now.
+
+### Other models
+
+Set `LOCAL_STT_MODEL` in `.env` (read by `docker-compose.yml` as `STT_MODEL`) and restart
+`local-stt`; the model downloads on first start.
+
+| `STT_MODEL` | Download | Memory limit to set | Notes |
+|---|---|---|---|
+| `parakeet-110m` (default) | 108 MB archive (sherpa-onnx release, SHA-256 pinned) | 768 MB (default; 346 MiB measured with two calls) | as measured above |
+| `nemotron-en-560` | 660 MB | 1.5 GB | truly streaming, as accurate on the caller; needs a faster CPU (0.78 s CPU per s of speech here) |
+| `nemotron-en-160` | 660 MB | 1.5 GB | slower than real time on this CPU |
+| `parakeet-tdt-v2` | 660 MB | 1.5 GB | about 0.6–1.2 s per utterance here; for a GPU or a fast CPU |
+| `zipformer-en` | 75 MB | 512 MB | the first model; not recommended (above) |
+
 ### Licensing, checked at the source
 
-- Model: `sherpa-onnx-streaming-zipformer-en-2023-06-26`, **Apache 2.0** on its model card
-  ([csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26)).
-  It is published by the sherpa-onnx maintainers in the official model list
-  ([streaming Zipformer models](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/online-transducer/zipformer-transducer-models.html))
-  and as a release archive
-  ([sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2)).
-  It was trained with icefall on LibriSpeech, which is CC BY 4.0
-  ([openslr.org/12](https://www.openslr.org/12)). The upstream training repository
-  ([Zengwei/icefall-asr-librispeech-streaming-zipformer-2023-05-17](https://huggingface.co/Zengwei/icefall-asr-librispeech-streaming-zipformer-2023-05-17))
-  states no license of its own.
-- The server downloads only the four files it uses, about 75 MB, from the model repository
-  at a fixed commit (`672fbf1b`) and checks each file's SHA-256 (`fetch_model.py`).
+- Default model: **Parakeet TDT-CTC 110M**, by NVIDIA, **CC BY 4.0**, which allows
+  commercial use with attribution
+  ([nvidia/parakeet-tdt_ctc-110m](https://huggingface.co/nvidia/parakeet-tdt_ctc-110m);
+  [licence](https://creativecommons.org/licenses/by/4.0/)). Trained on about 36,000 hours
+  of English. The server uses the int8 ONNX export published by the sherpa-onnx
+  maintainers
+  ([release asset](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8.tar.bz2),
+  export script `scripts/nemo/fast-conformer-hybrid-transducer-ctc/run-transducer-non-streaming.sh`
+  in [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)). The archive's SHA-256
+  (`f628312e…`) is pinned and matches the digest GitHub publishes; only the four model
+  files are kept, each checked by SHA-256. Attribution is in `THIRD_PARTY_NOTICES.md`.
+- Voice activity detector: Silero VAD, **MIT**
+  ([snakers4/silero-vad](https://github.com/snakers4/silero-vad)), the copy published in
+  the sherpa-onnx release, SHA-256 pinned.
+- The alternatives, checked the same way:
+  - Nemotron Speech Streaming EN 0.6B: **NVIDIA Open Model License**, "ready for
+    commercial/non-commercial use" on the model card
+    ([nvidia/nemotron-speech-streaming-en-0.6b](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b),
+    [agreement](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/)).
+    Redistributing it requires the notice "Licensed by NVIDIA Corporation under the NVIDIA
+    Open Model License"; the licence ends if its guardrails are bypassed or if you sue
+    over it. Files from
+    [csukuangfj2/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25](https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25)
+    at a fixed commit.
+  - Parakeet TDT 0.6B v2: **CC BY 4.0**
+    ([nvidia/parakeet-tdt-0.6b-v2](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2)).
+  - NeMo streaming FastConformer 80/480/1040 ms and FastConformer hybrid large PC:
+    **CC BY 4.0** ([nvidia/stt_en_fastconformer_hybrid_large_streaming_multi](https://huggingface.co/nvidia/stt_en_fastconformer_hybrid_large_streaming_multi)).
+    Measured only, not offered in the server.
+  - Moonshine English models: **MIT** (the LICENSE in each sherpa-onnx archive and
+    [moonshine-ai/moonshine](https://github.com/moonshine-ai/moonshine); models for other
+    languages are under a non-commercial community licence). Measured only.
+  - Zipformer EN 2023-06-26: **Apache 2.0**
+    ([csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26)),
+    trained on LibriSpeech (CC BY 4.0).
+  - Not used: Nemotron 3.5 ASR Streaming 0.6B (OpenMDW-1.1, commercial use allowed)
+    adds 40 languages but not Urdu, and is the same size as Nemotron, which is already
+    too slow here; Parakeet unified 0.6B (NVIDIA Open Model License) likewise.
 - Software: sherpa-onnx (Apache 2.0, [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)),
-  which bundles ONNX Runtime (MIT); websockets (BSD 3-Clause); NumPy (BSD 3-Clause, with
-  bundled parts under 0BSD, MIT, Zlib and CC0).
-- Not used, because of their licenses:
-  - The LibriSpeech + GigaSpeech model `sherpa-onnx-streaming-zipformer-en-2023-06-21`.
-    GigaSpeech's terms allow only non-commercial research use of the audio, and say a
-    trained model only "may be eligible" for commercial use
-    ([speechcolab/gigaspeech](https://huggingface.co/datasets/speechcolab/gigaspeech)).
-  - The Kroko community models. They are CC BY-SA, presented for hobby, research and free
-    tiers, with a separate commercial licence ([Banafo/Kroko-ASR](https://huggingface.co/Banafo/Kroko-ASR)).
+  which bundles ONNX Runtime (MIT); websockets (BSD 3-Clause); NumPy (BSD 3-Clause).
+- Still not used, because of their licences: the LibriSpeech + GigaSpeech Zipformer
+  (GigaSpeech audio is for non-commercial research,
+  [speechcolab/gigaspeech](https://huggingface.co/datasets/speechcolab/gigaspeech)) and the
+  Kroko models (CC BY-SA with a separate commercial licence,
+  [Banafo/Kroko-ASR](https://huggingface.co/Banafo/Kroko-ASR)).
 
 ### Languages
 
 English only. For Urdu or mixed-language calls keep Whisper (`Systran/faster-whisper-small`
-or larger) on the speech server.
+or larger) on the speech server. Urdu side talk on an English call is dropped by the
+confidence filter rather than transcribed.
 
 ### What the server supports
 
 | Part of the protocol | Support |
 |---|---|
-| `wss/ws …/v1/listen`, 16-bit PCM (`encoding=linear16`), mono, any `sample_rate` from 8,000 to 48,000 Hz | Yes; audio is resampled to the model's 16 kHz |
-| Interim results (`interim_results=true`) | Yes, whenever the recognised words change (about every 0.32 s of audio) |
+| `wss/ws …/v1/listen`, 16-bit PCM (`encoding=linear16`), mono, any `sample_rate` from 8,000 to 48,000 Hz | Yes; audio is resampled to 16 kHz as it arrives |
+| Interim results (`interim_results=true`) | Yes, whenever the recognised words change (the utterance is re-read every 0.4 s or less often) |
 | Final results at a pause (`is_final`, `speech_final`) | Yes, after `STT_ENDPOINT_SILENCE_MS` of silence; `endpointing=false` turns this off |
 | `Finalize` → final result with `from_finalize: true` | Yes, immediately (an empty final if nothing was pending) |
 | `KeepAlive`, `CloseStream` (→ last final, then `Metadata`) | Yes |
-| `utterance_end_ms` (`UtteranceEnd`), `vad_events` (`SpeechStarted`) | Yes, approximated from recognised words |
-| `keyterm`, `punctuate`, `smart_format`, `diarize`, `language`, other options | Accepted and ignored |
+| `utterance_end_ms` (`UtteranceEnd`), `vad_events` (`SpeechStarted`) | Yes; `SpeechStarted` from the voice activity detector |
+| `confidence` | Mean token probability of the text |
+| `keyterm`, `punctuate`, `smart_format`, `diarize`, `language`, other options | Accepted and ignored (Parakeet writes punctuation and capitals itself) |
 | `Authorization` header | Accepted as is, unless `STT_API_KEY` is set |
 | Other encodings (μ-law, Opus), multichannel | Refused with HTTP 400 (the voice service sends linear16) |
 | Flux (`/v2/listen`) | No |
@@ -457,17 +593,22 @@ or larger) on the speech server.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `STT_NUM_THREADS` | `2` | CPU threads per decode. Recognition runs while the caller talks, the language model after. |
+| `STT_MODEL` | `parakeet-110m` | Which model (table above); `docker-compose.yml` reads it from `LOCAL_STT_MODEL` |
+| `STT_NUM_THREADS` | `2` | CPU threads per decode (`LOCAL_STT_STREAM_THREADS`). 4 threads made Parakeet's final about 15 % faster here. |
 | `STT_MAX_SESSIONS` | `4` | Calls transcribed at once; more are refused (HTTP 503) and the voice service retries |
 | `STT_ENDPOINT_SILENCE_MS` | `400` | Silence after words that ends a segment when no Finalize arrives first |
-| `STT_FINALIZE_PAD_MS` | `800` | Silence added on Finalize so the last word is fully processed. The model emits a word's last sound up to about half a second late; with 400 ms, the last letter of a sentence was measured spilling into the caller's next turn. |
+| `STT_MIN_CONFIDENCE` | `0.6` (Parakeet), `0` (others) | Text with a lower mean token probability is dropped |
+| `STT_VAD_THRESHOLD` | `0.5` | Speech probability that counts as speech |
+| `STT_PREROLL_MS` | `600` | Audio kept from before the detected start of speech |
+| `STT_INTERIM_MS` | `400` | Whole-utterance models: how often live words are refreshed, at most |
+| `STT_FINALIZE_PAD_MS` | `200` (Nemotron `600`, Zipformer `800`) | Streaming models: silence added on a final so the last word is processed |
 | `STT_MAX_UTTERANCE_S` | `20` | A segment longer than this is finalised anyway |
 | `STT_IDLE_TIMEOUT_S` | `30` | A connection that sends nothing (not even KeepAlive) for this long is closed |
-| `STT_STREAM_RECYCLE_S` | `300` | After this much audio a fresh recognizer stream is started between utterances, so memory stays flat on long calls |
-| `STT_MODEL_ID` | `zipformer-en-streaming` | Name reported in results and `/health` |
+| `STT_MODEL_ID` | per model | Name reported in results and `/health` |
 | `STT_API_KEY` | unset | If set, clients must send `Authorization: Token <key>` (or `Bearer`) |
 
-Transcripts are never written to the server log at the default level.
+Transcripts are never written to the server log at the default level. The server's own
+tests: `infra/docker/streaming-stt/test_app.py` (run command at the top of the file).
 
 To measure on your machine (the voice service must be running):
 
@@ -478,6 +619,8 @@ docker cp speech.wav atlas-voice-runtime-1:/tmp/stt-bench/speech.wav
 docker compose --profile voice exec -T voice-runtime /opt/venv/bin/python - \
   --wav /tmp/stt-bench/speech.wav --text "the words spoken" \
   < infra/scripts/bench_streaming_stt.py
+# many recordings: --manifest clips.json ([{"wav": "...", "text": "..."}]), --runs 1,
+# --concurrency 2 for two calls at once, --no-text to keep transcripts out of the output
 ```
 
 ## Pocket TTS or Kokoro
@@ -716,7 +859,7 @@ calls can use `Systran/faster-whisper-base.en`.
 
 | Where the models run | What callers notice |
 |---|---|
-| This kind of CPU (4–8 cores, no GPU) | Fine for building and testing agents. Measured here: replies start about 3.2 s after the caller stops with Whisper and Pocket TTS, about 1.3 s with the streaming server (English), and for the first reply of a call about the same when ATLAS's prompt warm-up finished in
+| This kind of CPU (4–8 cores, no GPU) | Fine for building and testing agents. Measured here: replies start about 3.2 s after the caller stops with Whisper and Pocket TTS, about 1.3 s with the streaming server (English; measured with its first model, the current one gives the text about 0.1 s later), and for the first reply of a call about the same when ATLAS's prompt warm-up finished in
 time (about 13.5 s when it did not). Too slow for production calls. |
 | A GPU server (for example one 24 GB GPU running an 8B model, Whisper and a voice) | Production-grade replies with fully self-hosted data. |
 | Hosted providers with streaming speech-to-text and end-of-turn detection | Usually the fastest replies; audio leaves your network. |
@@ -736,7 +879,7 @@ each call's response-time panel and in Reports. The design is in
 |---|---|
 | Better reasoning | `llama3.2:3b`, or 7–8B models on a GPU (check each model's license) |
 | Urdu or other languages | Multilingual Whisper `small` or larger; an LLM trained on the language |
-| Fastest speech recognition | English: the streaming server (`local-stt`). Other languages: `Systran/faster-whisper-base` (default) or `tiny` (much less accurate) |
+| Fastest speech recognition | English: the live server (`local-stt`, Parakeet 110M), also the most accurate on real callers in ATLAS's tests. Other languages: `Systran/faster-whisper-base` (default) or `tiny` (much less accurate) |
 | Fastest first audio on CPU | Try Pocket TTS and compare with the benchmark |
 
 Override the defaults when downloading:
@@ -748,8 +891,8 @@ LLM_MODEL=llama3.2:1b STT_MODEL=Systran/faster-whisper-small make local-ai-model
 ## Privacy note
 
 With self-hosted models selected, audio and text stay on your infrastructure. Pocket TTS
-and the streaming server contact Hugging Face only to download their models on first
-start. Saving the Deepgram connection for the streaming server sends its API key (no audio)
+and the live speech server contact Hugging Face (and, for the live server's default
+model, the sherpa-onnx release on GitHub) only to download their models on first start. Saving the Deepgram connection for the streaming server sends its API key (no audio)
 to Deepgram once, as described above. Two
 optional features of the underlying voice service contact an external service even then:
 knowledge-base document parsing, and the hosted trial models (disabled by default; see

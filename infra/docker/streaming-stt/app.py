@@ -1,4 +1,4 @@
-"""Streaming speech-to-text server that speaks the Deepgram v1 live-listen protocol (CPU).
+"""Live speech-to-text server that speaks the Deepgram v1 live-listen protocol (CPU).
 
 The voice service already streams call audio to Deepgram over a websocket and accepts a
 custom endpoint, so this server answers that same protocol from a local model. Callers
@@ -17,21 +17,35 @@ Wire protocol (what the Deepgram SDK used by the voice service sends and parses)
     closing on CloseStream, `Error` for a malformed control message.
   - `GET /health` returns JSON. `Authorization` is accepted as is unless STT_API_KEY is set.
 
-The model is a streaming (online) Zipformer transducer run by sherpa-onnx, one
-recognizer stream per connection. Audio at other rates (8 kHz phone audio) is resampled
-to the model's 16 kHz by sherpa-onnx itself.
+How audio becomes text. A voice activity detector (Silero VAD) watches the caller's audio;
+when speech starts, the audio from just before it is handed to the model, and it keeps
+receiving audio until the segment ends (Finalize from the voice service, a pause of
+STT_ENDPOINT_SILENCE_MS, or STT_MAX_UTTERANCE_S). Between segments the model does no work.
+  - Whole-utterance models (kind "offline", e.g. Parakeet TDT, the default) transcribe the
+    segment when it ends; live words come from re-reading the growing segment every
+    STT_INTERIM_MS. The detector notices a pause about 0.1 s before the voice service
+    sends Finalize, so the segment is already being transcribed when Finalize arrives.
+  - Streaming models (kind "online", e.g. Nemotron Speech Streaming) process each chunk as
+    it arrives, so a Finalize only has to flush the last chunk.
+One recognizer is shared by all connections; each segment gets its own model stream.
+Audio at other rates (8 kHz phone audio, 48 kHz) is resampled to the models' 16 kHz once,
+as it arrives (windowed-sinc filter), for the detector and the model alike.
 
 Environment (defaults in brackets):
-  STT_MODEL_DIR [/models]          where fetch_model.py stores the model
-  STT_MODEL_ID [zipformer-en-streaming]  name reported in results and /health
+  STT_MODEL [parakeet-110m]        which model (fetch_model.MODELS)
+  STT_MODEL_DIR [/models]          where fetch_model.py stores the models
+  STT_MODEL_ID [per model]         name reported in results and /health
   STT_NUM_THREADS [2]              CPU threads per decode
   STT_MAX_SESSIONS [4]             concurrent connections; more get HTTP 503
   STT_ENDPOINT_SILENCE_MS [400]    silence after speech that ends a segment
   STT_MAX_UTTERANCE_S [20]         a segment is finalised after this long regardless
-  STT_FINALIZE_PAD_MS [800]        silence appended on Finalize to flush the last words
+  STT_VAD_THRESHOLD [0.5]          speech probability that counts as speech
+  STT_PREROLL_MS [600]             audio before the detected start that is kept
+  STT_INTERIM_MS [400]             whole-utterance models: how often live words are refreshed
+  STT_FINALIZE_PAD_MS [per model]  silence added on a final to flush the last words
+  STT_MIN_CONFIDENCE [per model]   text the model is less sure of (mean token probability)
+                                   is dropped: background talk, another language, noise
   STT_IDLE_TIMEOUT_S [30]          close a connection that sends nothing for this long
-  STT_STREAM_RECYCLE_S [300]       start a fresh recognizer stream (between utterances)
-                                   after this much audio, so memory stays bounded
   STT_API_KEY [unset]              if set, require "Token <key>" or "Bearer <key>"
   LOG_LEVEL [INFO]                 transcripts are never logged at INFO
 """
@@ -39,10 +53,12 @@ Environment (defaults in brackets):
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import hashlib
 import json
 import logging
+import math
 import os
 import signal
 import time
@@ -52,12 +68,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
 import sherpa_onnx
-from fetch_model import FILES, REPO, REVISION, ensure_model
+from fetch_model import ModelSpec, ensure_model, spec_from_env
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
@@ -75,55 +91,235 @@ def _env_float(name: str, default: float) -> float:
     return float(os.environ.get(name, default))
 
 
+SPEC: ModelSpec = spec_from_env()
 MODEL_DIR = Path(os.environ.get("STT_MODEL_DIR", "/models"))
-MODEL_ID = os.environ.get("STT_MODEL_ID", "zipformer-en-streaming")
-MODEL_VERSION = f"{REPO.split('/')[-1]}@{REVISION[:8]}"
-MODEL_UUID = str(uuid.uuid5(uuid.NAMESPACE_URL, f"https://huggingface.co/{REPO}@{REVISION}"))
+MODEL_ID = os.environ.get("STT_MODEL_ID", SPEC.model_id)
+MODEL_VERSION = SPEC.version
+MODEL_UUID = str(
+    uuid.uuid5(uuid.NAMESPACE_URL, f"https://huggingface.co/{SPEC.repo}@{SPEC.revision}")
+)
 MODEL_RATE = 16000
 NUM_THREADS = int(os.environ.get("STT_NUM_THREADS", "2"))
 MAX_SESSIONS = int(os.environ.get("STT_MAX_SESSIONS", "4"))
 ENDPOINT_SILENCE_S = _env_float("STT_ENDPOINT_SILENCE_MS", 400) / 1000
 MAX_UTTERANCE_S = _env_float("STT_MAX_UTTERANCE_S", 20)
-FINALIZE_PAD_S = _env_float("STT_FINALIZE_PAD_MS", 800) / 1000
+VAD_THRESHOLD = _env_float("STT_VAD_THRESHOLD", 0.5)
+PREROLL_S = _env_float("STT_PREROLL_MS", 600) / 1000
+INTERIM_S = _env_float("STT_INTERIM_MS", 400) / 1000
+FINALIZE_PAD_S = _env_float("STT_FINALIZE_PAD_MS", SPEC.tail_pad_s * 1000) / 1000
 IDLE_TIMEOUT_S = _env_float("STT_IDLE_TIMEOUT_S", 30)
-STREAM_RECYCLE_S = _env_float("STT_STREAM_RECYCLE_S", 300)
 API_KEY = os.environ.get("STT_API_KEY") or None
 # 64 KiB per frame (2 s at 16 kHz); the voice service sends 20 ms frames. With QUEUE_LIMIT
 # this bounds buffered audio per connection to 16 MiB.
 MAX_MESSAGE_BYTES = 64 * 1024
-FEED_SLICE_S = 0.16  # half a model chunk: end-of-speech is checked at least this often
+FEED_SLICE_S = 0.1  # audio that queued up while decoding is processed in slices this long
 QUEUE_LIMIT = 256  # frames buffered per connection before the reader waits (backpressure)
-# CloseStream decodes everything still queued; a full queue is about 8.5 min of 16 kHz audio,
-# about 45 s of work on the reference CPU.
+# CloseStream decodes everything still queued (at most QUEUE_LIMIT frames).
 CLOSE_FLUSH_TIMEOUT_S = 60.0
+VAD_WINDOW = 512  # samples at 16 kHz (32 ms), what Silero VAD expects
+# Whole-utterance models: live words are re-read at most every STT_INTERIM_MS, and never
+# sooner than this many times the last read took, so re-reading a long segment uses at
+# most about 40 % of a session's CPU time and cannot fall behind the audio.
+INTERIM_COST_FACTOR = 2.5
+MIN_CONFIDENCE = _env_float("STT_MIN_CONFIDENCE", SPEC.min_confidence)
+# Trailing silence kept on a whole-utterance segment before it is transcribed.
+OFFLINE_TAIL_S = 0.3
 
-_recognizer: sherpa_onnx.OnlineRecognizer | None = None
+_paths: dict[str, Path] = {}
+_engine: Engine | None = None
 _pool = ThreadPoolExecutor(max_workers=MAX_SESSIONS, thread_name_prefix="decode")
 _active = 0
 _started_at = time.time()
 
 
-def _load_recognizer() -> sherpa_onnx.OnlineRecognizer:
-    names = list(FILES)
-    encoder, decoder, joiner, tokens = (str(MODEL_DIR / n) for n in names)
-    return sherpa_onnx.OnlineRecognizer.from_transducer(
-        tokens=tokens,
-        encoder=encoder,
-        decoder=decoder,
-        joiner=joiner,
-        num_threads=NUM_THREADS,
-        sample_rate=MODEL_RATE,
-        feature_dim=80,
-        decoding_method="greedy_search",
-        enable_endpoint_detection=True,
-        # rule1: nothing recognised and a long silence -> reset quietly (bounds memory).
-        rule1_min_trailing_silence=2.4,
-        # rule2: silence after words -> end of segment (final, speech_final).
-        rule2_min_trailing_silence=ENDPOINT_SILENCE_S,
-        # rule3: very long segment -> finalise anyway.
-        rule3_min_utterance_length=MAX_UTTERANCE_S,
-        provider="cpu",
-    )
+# ------------------------------------------------------------------ models
+
+
+@dataclass(slots=True)
+class Hypothesis:
+    text: str
+    tokens: list[str]
+    timestamps: list[float]  # seconds from the start of the segment
+    confidence: float = 1.0
+
+
+class Engine(Protocol):
+    """A model: `start` opens a segment, audio goes in with `accept`, `partial` returns new
+    live words (or None), `final` returns the segment's text and closes it. keep_s: the
+    seconds of the segment worth transcribing (trailing silence after it is ignored)."""
+
+    streaming: bool
+
+    def start(self, rate: int) -> Any: ...
+    def accept(self, seg: Any, samples: np.ndarray) -> None: ...
+    def partial(self, seg: Any) -> Hypothesis | None: ...
+    def prepare(self, seg: Any, mark: float) -> None: ...
+    def final(self, seg: Any, keep_s: float | None, mark: float | None = None) -> Hypothesis: ...
+
+
+def _clean(raw: str) -> str:
+    if SPEC.cased:
+        return " ".join(raw.split())
+    # Lower-case models without punctuation: make it read like a sentence.
+    words = raw.strip().lower().split()
+    words = ["I" if w == "i" else ("I" + w[1:] if w.startswith("i'") else w) for w in words]
+    if words:
+        words[0] = words[0][:1].upper() + words[0][1:]
+    return " ".join(words)
+
+
+class OnlineEngine:
+    """Streaming transducer: chunks are decoded as they arrive; a final flushes the last one."""
+
+    streaming = True
+
+    def __init__(self) -> None:
+        self.rec = sherpa_onnx.OnlineRecognizer.from_transducer(
+            tokens=str(_paths["tokens"]),
+            encoder=str(_paths["encoder"]),
+            decoder=str(_paths["decoder"]),
+            joiner=str(_paths["joiner"]),
+            num_threads=NUM_THREADS,
+            sample_rate=MODEL_RATE,
+            feature_dim=80,
+            decoding_method="greedy_search",
+            provider="cpu",
+        )
+
+    def start(self, rate: int) -> dict[str, Any]:
+        stream = self.rec.create_stream()
+        if lang := SPEC.extra.get("language"):
+            stream.set_option("language", lang)
+        return {"stream": stream, "rate": rate, "text": ""}
+
+    def accept(self, seg: dict[str, Any], samples: np.ndarray) -> None:
+        seg["stream"].accept_waveform(seg["rate"], samples)
+
+    def _hyp(self, seg: dict[str, Any]) -> Hypothesis:
+        while self.rec.is_ready(seg["stream"]):
+            self.rec.decode_stream(seg["stream"])
+        result = json.loads(self.rec.get_result_as_json_string(seg["stream"]))
+        return Hypothesis(
+            text=_clean(result.get("text", "")),
+            tokens=list(result.get("tokens") or []),
+            timestamps=[float(t) for t in result.get("timestamps") or []],
+            confidence=_confidence(list(result.get("ys_probs") or [])),  # log-probabilities
+        )
+
+    def partial(self, seg: dict[str, Any]) -> Hypothesis | None:
+        hyp = self._hyp(seg)
+        if hyp.text == seg["text"]:
+            return None
+        seg["text"] = hyp.text
+        return hyp
+
+    def prepare(self, seg: dict[str, Any], mark: float) -> None:
+        pass  # chunks are decoded as they arrive; only the last one is left for the final
+
+    def final(
+        self, seg: dict[str, Any], keep_s: float | None, mark: float | None = None
+    ) -> Hypothesis:
+        rate = seg["rate"]
+        seg["stream"].accept_waveform(rate, np.zeros(int(rate * FINALIZE_PAD_S), np.float32))
+        seg["stream"].input_finished()
+        return self._hyp(seg)
+
+
+class OfflineEngine:
+    """Whole-utterance transducer: the segment is transcribed when it ends."""
+
+    streaming = False
+
+    def __init__(self) -> None:
+        self.rec = sherpa_onnx.OfflineRecognizer.from_transducer(
+            encoder=str(_paths["encoder"]),
+            decoder=str(_paths["decoder"]),
+            joiner=str(_paths["joiner"]),
+            tokens=str(_paths["tokens"]),
+            num_threads=NUM_THREADS,
+            sample_rate=MODEL_RATE,
+            feature_dim=80,
+            decoding_method="greedy_search",
+            model_type=SPEC.model_type or "transducer",
+        )
+
+    def start(self, rate: int) -> dict[str, Any]:
+        return {
+            "chunks": [],
+            "n": 0,
+            "rate": rate,
+            "text": "",
+            "read_at": 0,
+            "cost": 0.0,
+            "spec": None,  # (mark, hypothesis) read as soon as the speaker paused
+        }
+
+    def accept(self, seg: dict[str, Any], samples: np.ndarray) -> None:
+        seg["chunks"].append(samples)
+        seg["n"] += samples.size
+
+    def _decode(self, seg: dict[str, Any], n: int | None = None) -> Hypothesis:
+        audio = np.concatenate(seg["chunks"]) if seg["chunks"] else np.zeros(0, np.float32)
+        seg["chunks"] = [audio]
+        if n is not None:
+            audio = audio[:n]
+        stream = self.rec.create_stream()
+        stream.accept_waveform(seg["rate"], audio)
+        started = time.perf_counter()
+        self.rec.decode_stream(stream)
+        seg["cost"] = time.perf_counter() - started
+        result = stream.result
+        return Hypothesis(
+            text=_clean(result.text),
+            tokens=list(result.tokens),
+            timestamps=[float(t) for t in result.timestamps],
+            confidence=_confidence(list(getattr(result, "ys_log_probs", None) or [])),
+        )
+
+    def partial(self, seg: dict[str, Any]) -> Hypothesis | None:
+        wait_s = max(INTERIM_S, INTERIM_COST_FACTOR * seg["cost"])
+        if seg["n"] - seg["read_at"] < wait_s * seg["rate"]:
+            return None
+        seg["read_at"] = seg["n"]
+        hyp = self._decode(seg)
+        if hyp.text == seg["text"]:
+            return None
+        seg["text"] = hyp.text
+        return hyp
+
+    def prepare(self, seg: dict[str, Any], mark: float) -> None:
+        """The speaker just paused: transcribe now, so a Finalize that follows finds the
+        text ready. mark identifies the pause (when the speech before it ended)."""
+        if seg["spec"] is None or seg["spec"][0] != mark:
+            seg["spec"] = (mark, self._decode(seg))
+
+    def final(
+        self, seg: dict[str, Any], keep_s: float | None, mark: float | None = None
+    ) -> Hypothesis:
+        if mark is not None and seg["spec"] is not None and seg["spec"][0] == mark:
+            return seg["spec"][1]  # nothing was said since the pause was transcribed
+        n = None if keep_s is None else max(int(keep_s * seg["rate"]), 0)
+        return self._decode(seg, n)
+
+
+def _confidence(log_probs: list[float]) -> float:
+    """Mean token probability, the geometric mean (1.0 when the model reports none)."""
+    return float(np.exp(np.mean(log_probs))) if log_probs else 1.0
+
+
+def _trusted(hyp: Hypothesis) -> Hypothesis:
+    """Drop text the model is unsure of. Measured with Parakeet 110M on real calls: clear
+    English scored 0.71 or more (one exception, transcribed wrongly anyway), while 24 of 34
+    stretches of background talk in another language, mumbling or noise scored under 0.6;
+    such text would otherwise reach the agent as words the caller never said."""
+    if hyp.text and hyp.confidence < MIN_CONFIDENCE:
+        logger.debug("dropped text with confidence %.2f", hyp.confidence)
+        return Hypothesis("", [], [], hyp.confidence)
+    return hyp
+
+
+def _load_engine() -> Engine:
+    return OnlineEngine() if SPEC.kind == "online" else OfflineEngine()
 
 
 # ------------------------------------------------------------------ request options
@@ -187,68 +383,180 @@ class Options:
         )
 
 
+# ------------------------------------------------------------------ audio
+
+
+class Resampler:
+    """Streaming resampler, so audio at any rate is converted once as it arrives; state is
+    kept between calls, so frame boundaries leave no clicks. Small ratios (8, 24, 32, 48
+    kHz to 16 kHz) use a windowed-sinc filter; others (11.025, 22.05, 44.1 kHz) a moving
+    average and linear interpolation, which is enough for speech."""
+
+    def __init__(self, src: int, dst: int, taps_per_phase: int = 16) -> None:
+        g = math.gcd(src, dst)
+        self.up, self.down = dst // g, src // g
+        self.exact = max(self.up, self.down) <= 6
+        if self.exact:
+            n = 2 * taps_per_phase * max(self.up, self.down) + 1
+            cutoff = 0.5 / max(self.up, self.down) * 0.92  # of the upsampled rate
+            t = np.arange(n) - (n - 1) / 2
+            h = 2 * cutoff * np.sinc(2 * cutoff * t) * np.hanning(n)
+            self.h = (h * self.up / h.sum()).astype(np.float32)
+        else:
+            k = max(round(src / dst), 1)
+            self.h = np.full(k, 1 / k, np.float32)
+        self.history = np.zeros(self.h.size - 1, np.float32)
+        self.phase = 0
+        self.step = src / dst
+        self.pos = 1.0  # next output position, in input samples after `history`'s last
+        self.last = np.zeros(1, np.float32)
+
+    def _filter(self, x: np.ndarray) -> np.ndarray:
+        buf = np.concatenate([self.history, x])
+        self.history = buf[buf.size - self.history.size :]
+        return np.convolve(buf, self.h, mode="valid")
+
+    def process(self, x: np.ndarray) -> np.ndarray:
+        if x.size == 0:
+            return x
+        if self.exact:
+            up = np.zeros(x.size * self.up, np.float32)
+            up[:: self.up] = x
+            y = self._filter(up)
+            out = y[self.phase :: self.down]
+            self.phase = (self.phase - y.size) % self.down
+            return out.astype(np.float32)
+        y = self._filter(x) if self.h.size > 1 else x
+        buf = np.concatenate([self.last, y])
+        points = np.arange(self.pos, buf.size - 1 + 1e-9, self.step)
+        out = np.interp(points, np.arange(buf.size), buf)
+        self.pos = (points[-1] + self.step - (buf.size - 1)) if points.size else self.pos - y.size
+        self.last = buf[-1:]
+        return out.astype(np.float32)
+
+
+class Vad:
+    """Silero VAD on 16 kHz windows, plus a loudness detector for narrowband (phone) audio.
+
+    The Silero model in sherpa-onnx takes 16 kHz only, and on 8 kHz audio brought up to
+    16 kHz it misses speech: measured on the caller recordings, 23 of 55 utterances were
+    never detected (0 of 55 at 16 kHz). For narrowband sessions a window also counts as
+    speech when it is 15 dB above the background level and louder than -50 dBFS; text from
+    noise that this lets through is caught by STT_MIN_CONFIDENCE.
+    """
+
+    ENERGY_OVER_FLOOR_DB = 15.0
+    ENERGY_MIN_DB = -50.0
+    ENERGY_HOLD = 3  # windows (about 0.1 s) that still count as speech after a loud one
+
+    def __init__(self, narrowband: bool = False) -> None:
+        cfg = sherpa_onnx.VadModelConfig()
+        cfg.silero_vad.model = str(_paths["vad"])
+        cfg.silero_vad.threshold = VAD_THRESHOLD
+        # Short hold times: the session measures pauses itself (ENDPOINT_SILENCE_S).
+        cfg.silero_vad.min_silence_duration = 0.1
+        cfg.silero_vad.min_speech_duration = 0.1
+        cfg.silero_vad.max_speech_duration = 3600
+        cfg.silero_vad.window_size = VAD_WINDOW
+        cfg.sample_rate = MODEL_RATE
+        cfg.num_threads = 1
+        self.model = sherpa_onnx.VadModel.create(cfg)
+        self.pending = np.zeros(0, np.float32)
+        self.narrowband = narrowband
+        self.floor_db: float | None = None
+        self.hold = 0
+
+    def _loud(self, window: np.ndarray) -> bool:
+        level = 10 * np.log10(float(np.mean(window**2)) + 1e-10)
+        if level < -90:  # digital silence (e.g. a muted line) says nothing about the noise
+            return self._held()
+        # Background level: follows quieter windows down at once, rises slowly (3 dB/s).
+        floor = level if self.floor_db is None else min(level, self.floor_db + 0.1)
+        self.floor_db = floor
+        if level > max(floor + self.ENERGY_OVER_FLOOR_DB, self.ENERGY_MIN_DB):
+            self.hold = self.ENERGY_HOLD
+            return True
+        return self._held()
+
+    def _held(self) -> bool:
+        if self.hold:
+            self.hold -= 1
+            return True
+        return False
+
+    def speech(self, x: np.ndarray) -> list[bool]:
+        """One verdict per complete 32 ms window in the audio received so far."""
+        self.pending = np.concatenate([self.pending, x])
+        out = []
+        while self.pending.size >= VAD_WINDOW:
+            window = self.pending[:VAD_WINDOW]
+            verdict = bool(self.model.is_speech(window))
+            if self.narrowband:
+                verdict = self._loud(window) or verdict
+            out.append(verdict)
+            self.pending = self.pending[VAD_WINDOW:]
+        return out
+
+
 # ------------------------------------------------------------------ one connection
 
 
-def _format(raw: str) -> str:
-    """Model output is upper case without punctuation; make it read like a sentence."""
-    words = raw.strip().lower().split()
-    words = ["I" if w == "i" else ("I" + w[1:] if w.startswith("i'") else w) for w in words]
-    if words:
-        words[0] = words[0][:1].upper() + words[0][1:]
-    return " ".join(words)
-
-
 class Session:
-    """Recognizer state for one websocket. All methods run in the decode pool, in order."""
+    """State for one websocket. All methods run in the decode pool, one at a time."""
 
     def __init__(self, opts: Options) -> None:
-        assert _recognizer is not None
-        self.rec = _recognizer
+        assert _engine is not None
+        self.engine = _engine
         self.opts = opts
+        # Everything below works on 16 kHz audio; other rates are converted on arrival.
+        self.rate = MODEL_RATE
+        self.resampler = (
+            None if opts.sample_rate == MODEL_RATE else Resampler(opts.sample_rate, MODEL_RATE)
+        )
         self.request_id = str(uuid.uuid4())
-        self.stream = self.rec.create_stream()
-        self.samples = 0  # input samples received
-        self.stream_started_s = 0.0
+        self.vad = Vad(narrowband=opts.sample_rate < MODEL_RATE)
+        self.preroll: collections.deque[np.ndarray] = collections.deque()
+        self.preroll_n = 0
+        self.seg: Any = None  # the model's state for the current segment
         self.seg_start_s = 0.0
-        self.last_text = ""
-        self.last_word_s: float | None = None  # audio time when the words last changed
-        self.speech_started = False
+        self.seg_n = 0  # samples handed to the model for this segment
+        self.samples = 0  # samples received (at 16 kHz)
+        self.last_speech_s: float | None = None  # end of the last speech window
+        self.speaking = False
+        self.last_word_s: float | None = None
+        self.had_words = False
         self.utterance_end_due = False
         self.sha = hashlib.sha256()
         self.leftover = b""
 
     @property
     def audio_s(self) -> float:
-        return self.samples / self.opts.sample_rate
+        return self.samples / self.rate
 
     # -------------------------------------------------------------- messages
 
-    def _words(self, text: str, result: dict[str, Any]) -> list[dict[str, Any]]:
-        words = text.split()
+    def _words(self, hyp: Hypothesis) -> list[dict[str, Any]]:
+        words = hyp.text.split()
         if not words:
             return []
         start_times: list[float] = []
-        tokens, stamps = result.get("tokens") or [], result.get("timestamps") or []
-        for token, ts in zip(tokens, stamps, strict=False):
+        for token, ts in zip(hyp.tokens, hyp.timestamps, strict=False):
             if token.startswith(("▁", " ")) or not start_times:
-                start_times.append(float(ts))
-        seg_end = max(self.audio_s - self.seg_start_s, 0.0)
+                start_times.append(ts)
+        seg_end = max(self.seg_n / self.rate, 0.0)
         if len(start_times) != len(words):  # fall back to an even split of the segment
             step = seg_end / max(len(words), 1)
             start_times = [i * step for i in range(len(words))]
-        probs = result.get("ys_probs") or []
-        conf = float(np.exp(np.mean(probs))) if probs else 1.0
         out = []
         for i, word in enumerate(words):
             start = self.seg_start_s + start_times[i]
             end = self.seg_start_s + (start_times[i + 1] if i + 1 < len(words) else seg_end)
             out.append(
                 {
-                    "word": word.lower(),
+                    "word": word.lower().strip(".,?!;:\"'"),
                     "start": round(start, 3),
                     "end": round(max(end, start), 3),
-                    "confidence": round(conf, 4),
+                    "confidence": round(hyp.confidence, 4),
                     "punctuated_word": word,
                 }
             )
@@ -256,18 +564,16 @@ class Session:
 
     def _results(
         self,
-        text: str,
-        result: dict[str, Any],
+        hyp: Hypothesis,
         *,
         is_final: bool,
         speech_final: bool = False,
         from_finalize: bool = False,
     ) -> dict[str, Any]:
-        probs = result.get("ys_probs") or []
         return {
             "type": "Results",
             "channel_index": [0, 1],
-            "duration": round(max(self.audio_s - self.seg_start_s, 0.0), 3),
+            "duration": round(self.seg_n / self.rate, 3),
             "start": round(self.seg_start_s, 3),
             "is_final": is_final,
             "speech_final": speech_final,
@@ -275,15 +581,15 @@ class Session:
             "channel": {
                 "alternatives": [
                     {
-                        "transcript": text,
-                        "confidence": round(float(np.exp(np.mean(probs))), 4) if probs else 1.0,
-                        "words": self._words(text, result),
+                        "transcript": hyp.text,
+                        "confidence": round(hyp.confidence, 4),
+                        "words": self._words(hyp),
                     }
                 ]
             },
             "metadata": {
                 "request_id": self.request_id,
-                "model_info": {"name": MODEL_ID, "version": MODEL_VERSION, "arch": "zipformer"},
+                "model_info": {"name": MODEL_ID, "version": MODEL_VERSION, "arch": SPEC.arch},
                 "model_uuid": MODEL_UUID,
             },
         }
@@ -299,82 +605,112 @@ class Session:
             "channels": 1,
             "models": [MODEL_UUID],
             "model_info": {
-                MODEL_UUID: {"name": MODEL_ID, "version": MODEL_VERSION, "arch": "zipformer"}
+                MODEL_UUID: {"name": MODEL_ID, "version": MODEL_VERSION, "arch": SPEC.arch}
             },
         }
 
-    # -------------------------------------------------------------- decoding
+    # -------------------------------------------------------------- segments
 
-    def _result(self) -> dict[str, Any]:
-        return json.loads(self.rec.get_result_as_json_string(self.stream))
-
-    def _reset(self) -> None:
-        self.rec.reset(self.stream)
+    def _start_segment(self, include_preroll: bool) -> list[dict[str, Any]]:
+        self.seg = self.engine.start(self.rate)
+        self.seg_n = 0
         self.seg_start_s = self.audio_s
-        self.last_text = ""
-        self.speech_started = False
-        if self.audio_s - self.stream_started_s >= STREAM_RECYCLE_S:
-            # A stream keeps its feature frames; a new one between utterances bounds memory.
-            self.stream = self.rec.create_stream()
-            self.stream_started_s = self.audio_s
+        if include_preroll and self.preroll:
+            audio = np.concatenate(self.preroll)
+            self.seg_start_s = self.audio_s - audio.size / self.rate
+            self.engine.accept(self.seg, audio)
+            self.seg_n = audio.size
+        self.preroll.clear()
+        self.preroll_n = 0
+        if self.opts.vad_events:
+            start = round(self.seg_start_s, 3)
+            return [{"type": "SpeechStarted", "channel": [0, 1], "timestamp": start}]
+        return []
 
     def _final(self, *, speech_final: bool, from_finalize: bool) -> dict[str, Any]:
-        result = self._result()
-        text = _format(result.get("text", ""))
+        if self.seg is None:
+            hyp = Hypothesis("", [], [])
+            self.seg_n = 0
+            self.seg_start_s = self.audio_s
+        else:
+            keep = None
+            if self.last_speech_s is not None:
+                keep = self.last_speech_s - self.seg_start_s + OFFLINE_TAIL_S
+            hyp = _trusted(self.engine.final(self.seg, keep, self.last_speech_s))
         msg = self._results(
-            text, result, is_final=True, speech_final=speech_final, from_finalize=from_finalize
+            hyp, is_final=True, speech_final=speech_final, from_finalize=from_finalize
         )
-        if text:
+        if hyp.text:
+            self.had_words = True
+            self.last_word_s = self.last_speech_s or self.audio_s
             self.utterance_end_due = self.opts.utterance_end_s is not None
-        self._reset()
+        self.seg = None
+        self.seg_n = 0
         return msg
 
-    def _decode(self) -> list[dict[str, Any]]:
+    def _step(self, part: np.ndarray, verdicts: list[bool]) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
-        while self.rec.is_ready(self.stream):
-            self.rec.decode_stream(self.stream)
-        result = self._result()
-        text = _format(result.get("text", ""))
-        if text != self.last_text:
-            self.last_text = text
-            if text:
-                self.last_word_s = self.audio_s
+        heard = any(verdicts)
+        if heard:
+            self.last_speech_s = self.audio_s
+        self.speaking = verdicts[-1] if verdicts else self.speaking
+        if self.seg is None:
+            self.preroll.append(part)
+            self.preroll_n += part.size
+            while self.preroll and self.preroll_n - self.preroll[0].size >= PREROLL_S * self.rate:
+                self.preroll_n -= self.preroll.popleft().size
+            if heard:
                 self.utterance_end_due = False
-                if self.opts.vad_events and not self.speech_started:
-                    self.speech_started = True
-                    events.append(
-                        {
-                            "type": "SpeechStarted",
-                            "channel": [0, 1],
-                            "timestamp": round(self.seg_start_s, 3),
-                        }
-                    )
-                if self.opts.interim_results:
-                    events.append(self._results(text, result, is_final=False))
-        if self.rec.is_endpoint(self.stream):
-            if text and self.opts.endpointing:
-                events.append(self._final(speech_final=True, from_finalize=False))
-            elif not text:
-                self._reset()  # long silence with nothing said: drop decoder state
-            elif self.audio_s - self.seg_start_s >= MAX_UTTERANCE_S:
-                # endpointing=false: only the length cap ends a segment besides Finalize.
-                events.append(self._final(speech_final=False, from_finalize=False))
+                events.extend(self._start_segment(include_preroll=True))
+        else:
+            self.engine.accept(self.seg, part)
+            self.seg_n += part.size
+        if self.seg is None:
+            return events
+
+        quiet_s = self.audio_s - (self.last_speech_s or self.seg_start_s)
+        if self.opts.interim_results and (self.engine.streaming or self.speaking):
+            hyp = self.engine.partial(self.seg)
+            if hyp is not None and _trusted(hyp).text:
+                self.utterance_end_due = False
+                events.append(self._results(hyp, is_final=False))
+        elif self.engine.streaming:
+            self.engine.partial(self.seg)  # keep decoding as audio arrives
+        if not self.speaking and self.last_speech_s is not None:
+            # The voice service sends Finalize about 0.2 s after the speaker stops; the
+            # detector notices the pause about 0.1 s sooner, so start on the text now.
+            self.engine.prepare(self.seg, self.last_speech_s)
+
+        if self.opts.endpointing and quiet_s >= ENDPOINT_SILENCE_S:
+            events.append(self._final(speech_final=True, from_finalize=False))
+        elif self.seg_n / self.rate >= MAX_UTTERANCE_S:
+            events.append(self._final(speech_final=False, from_finalize=False))
+            if self.speaking:
+                events.extend(self._start_segment(include_preroll=False))
+        elif not self.opts.endpointing and quiet_s >= max(ENDPOINT_SILENCE_S, 2.0):
+            # endpointing=false: no final at pauses, but a long silence still closes the
+            # segment quietly so the model does no work between turns.
+            hyp = _trusted(self.engine.final(self.seg, None))
+            if hyp.text:
+                events.append(self._results(hyp, is_final=True))
+                self.had_words = True
+                self.last_word_s = self.last_speech_s
+                self.utterance_end_due = self.opts.utterance_end_s is not None
+            self.seg = None
+        return events
+
+    def _utterance_end(self) -> list[dict[str, Any]]:
         if (
             self.utterance_end_due
+            and self.seg is None
             and self.last_word_s is not None
             and self.opts.utterance_end_s is not None
             and self.audio_s - self.last_word_s >= self.opts.utterance_end_s
-            and not self.last_text
         ):
             self.utterance_end_due = False
-            events.append(
-                {
-                    "type": "UtteranceEnd",
-                    "channel": [0, 1],
-                    "last_word_end": round(self.last_word_s, 3),
-                }
-            )
-        return events
+            last = round(self.last_word_s, 3)
+            return [{"type": "UtteranceEnd", "channel": [0, 1], "last_word_end": last}]
+        return []
 
     def feed(self, data: bytes) -> list[dict[str, Any]]:
         self.sha.update(data)
@@ -384,26 +720,22 @@ class Session:
         if not cut:
             return []
         pcm = np.frombuffer(data[:cut], dtype="<i2").astype(np.float32) / 32768.0
+        if self.resampler is not None:
+            pcm = self.resampler.process(pcm)
         # Audio that queued up while decoding arrives here in one piece. Feed it in short
-        # slices so a pause inside it still ends its segment (end-of-speech is checked
-        # after each slice) instead of two utterances running together.
+        # slices so a pause inside it still ends its segment instead of two utterances
+        # running together.
         events: list[dict[str, Any]] = []
-        step = max(int(self.opts.sample_rate * FEED_SLICE_S), 1)
+        step = max(int(self.rate * FEED_SLICE_S), 1)
         for start in range(0, pcm.size, step):
             part = pcm[start : start + step]
             self.samples += part.size
-            self.stream.accept_waveform(self.opts.sample_rate, part)
-            events.extend(self._decode())
+            events.extend(self._step(part, self.vad.speech(part)))
+            events.extend(self._utterance_end())
         return events
 
     def finalize(self, *, from_finalize: bool) -> list[dict[str, Any]]:
-        """Flush buffered audio through the model and emit what was said as final."""
-        # Silence pushes the last real frames through the encoder; same rate as the
-        # caller's audio, since sherpa-onnx refuses a rate change mid-stream.
-        pad = np.zeros(int(self.opts.sample_rate * FINALIZE_PAD_S), dtype=np.float32)
-        self.stream.accept_waveform(self.opts.sample_rate, pad)
-        while self.rec.is_ready(self.stream):
-            self.rec.decode_stream(self.stream)
+        """Transcribe what is pending and emit it as final (an empty one if nothing is)."""
         msg = self._final(speech_final=True, from_finalize=from_finalize)
         if not from_finalize and not msg["channel"]["alternatives"][0]["transcript"]:
             return []  # closing with nothing pending: no empty result
@@ -427,13 +759,16 @@ def _json_response(
 
 def _health() -> dict[str, Any]:
     return {
-        "status": "ok" if _recognizer is not None else "loading",
+        "status": "ok" if _engine is not None else "loading",
         "model": MODEL_ID,
+        "model_key": SPEC.key,
         "model_version": MODEL_VERSION,
+        "streaming": SPEC.kind == "online",
         "language": "en",
         "sample_rate": MODEL_RATE,
         "sessions": _active,
         "max_sessions": MAX_SESSIONS,
+        "min_confidence": MIN_CONFIDENCE,
         "uptime_s": round(time.time() - _started_at),
     }
 
@@ -458,7 +793,7 @@ def process_request(connection: ServerConnection, request: Request) -> Response 
         return _json_response(
             connection, HTTPStatus.BAD_REQUEST, {"err_code": "Bad Request", "err_msg": str(exc)}
         )
-    if _recognizer is None:
+    if _engine is None:
         return _json_response(
             connection, HTTPStatus.SERVICE_UNAVAILABLE, {"err_msg": "Model is loading"}
         )
@@ -581,20 +916,35 @@ async def handler(ws: ServerConnection) -> None:
         )
 
 
-async def main() -> None:
-    global _recognizer
-    started = time.perf_counter()
-    ensure_model(MODEL_DIR)
-    _recognizer = _load_recognizer()
-    # Warm-up: the first decode allocates ONNX buffers; do it before any caller waits.
-    warm = Session(Options.from_path("/v1/listen"))
-    warm.feed(np.zeros(MODEL_RATE, dtype="<i2").tobytes())
+def _warm_up() -> None:
+    """The first decode allocates ONNX buffers; do it before any caller waits."""
+    assert _engine is not None
+    noise = (np.random.default_rng(0).standard_normal(MODEL_RATE * 2) * 0.05).astype(np.float32)
+    seg = _engine.start(MODEL_RATE)
+    _engine.accept(seg, noise)
+    _engine.partial(seg)
+    _engine.final(seg, None)
+    # The detector and the 8 kHz resampler of a session, as a phone call would use them.
+    warm = Session(Options.from_path("/v1/listen?sample_rate=8000&interim_results=true"))
+    warm.feed((noise[::2] * 32767).astype("<i2").tobytes())
     warm.finalize(from_finalize=True)
+
+
+async def main() -> None:
+    global _engine, _paths
+    started = time.perf_counter()
+    _paths = ensure_model(MODEL_DIR, SPEC)
+    engine = _load_engine()
+    _engine = engine
+    _warm_up()
     logger.info(
-        "ready in %.1fs: model=%s (%s) threads=%d max_sessions=%d endpoint_silence=%.0fms",
+        "ready in %.1fs: model=%s key=%s (%s, %s) threads=%d max_sessions=%d "
+        "endpoint_silence=%.0fms",
         time.perf_counter() - started,
         MODEL_ID,
+        SPEC.key,
         MODEL_VERSION,
+        "streaming" if SPEC.kind == "online" else "whole utterance",
         NUM_THREADS,
         MAX_SESSIONS,
         ENDPOINT_SILENCE_S * 1000,

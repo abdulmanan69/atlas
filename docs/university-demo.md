@@ -18,7 +18,7 @@ on one machine (Docker, the models, the browser), with automated test calls
 |---|---|
 | Whisper base (default) | **4.4 s** / 5.1 s |
 | Whisper tiny.en (`.\make.ps1 demo -FastStt`) | **3.6 s** / 4.1 s |
-| Live transcription (`.\make.ps1 demo -DeepgramKey <key>`, needs internet once) | **3.3 s** / 5.1 s |
+| Live transcription (`.\make.ps1 demo -DeepgramKey <key>`, needs internet once) | **3.3 s** / 5.1 s (measured with the first live model; the current one, chosen because it understands real callers, gives the text about 0.1 s later) |
 
 The demo agent also opens every reply with a short acknowledgement ("Got it."): the voice
 starts as soon as the model finishes its first sentence, so a short first sentence is heard
@@ -190,15 +190,18 @@ $env:ATLAS_DEMO_DEEPGRAM_KEY = "<your key>"   # or: .\make.ps1 demo -DeepgramKey
 ```
 
 The script saves the connection only when a key is given **and** the internet is reachable.
-Otherwise it says so and uses Pocket TTS with Whisper. Once the connection exists, later runs
-use the streaming preset without a key or internet. The last lines of the run always say
-which preset is active. Force one with `-Preset pocket` or `-Preset streaming`.
+Otherwise it says so and uses Pocket TTS with Whisper. The preset is applied on the first
+setup only: later runs keep the models the organisation has (also any you chose in the web
+app) and say which speech-to-text is in use. Apply one again with `-Preset pocket` or
+`-Preset streaming` (`-FastStt` also applies the Pocket TTS preset, with Whisper tiny.en).
 
 To have live transcription at an offline university: run the setup with the key at home,
 then either take that PC, or move it with `-WithData` (above).
 
-Live transcription is English only and less accurate than Whisper on accents, names and
-numbers (see [local-models.md](local-models.md#live-transcription-streaming)).
+Live transcription is English only. Its model (NVIDIA Parakeet 110M) was chosen on
+recordings of a real caller with a South Asian accent, where it misheard far fewer words
+than Whisper small.en and the first live model; check it with your own voice before the
+demo (see [local-models.md](local-models.md#live-transcription-streaming)).
 
 ## Optional: clone a voice (needs a Hugging Face token once)
 
@@ -323,7 +326,7 @@ not start (for example your own `pnpm dev`) are left running.
 |---|---|---|
 | `-DryRun` (or `-WhatIf`) | `--dry-run` | Show the plan, change nothing |
 | `-Restart` | `--restart` | Also stop programs holding ports 8080 and 5173 that the script did not start |
-| `-Preset auto\|pocket\|streaming` | `--preset …` | Choose the speed preset (default `auto`) |
+| `-Preset auto\|pocket\|streaming` | `--preset …` | Speed preset: `auto` (default) applies one on the first setup only; `pocket` or `streaming` applies it now |
 | `-DeepgramKey <key>` | `--deepgram-key <key>` | Save the live-transcription connection (prefer the `ATLAS_DEMO_DEEPGRAM_KEY` variable) |
 | `-SkipWarm` | `--skip-warm` | Do not load the models at the end |
 | `-Rebuild` | `--rebuild` | Rebuild the Pocket TTS and live-transcription images (needs internet) |

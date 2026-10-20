@@ -6,8 +6,12 @@ Two phases, so the shell script can start the streaming speech server in between
                 exist (re-used by name or address, never duplicated). With a Deepgram key
                 (env ATLAS_DEMO_DEEPGRAM_KEY) and internet, also the live-transcription
                 connection to the local streaming server. Last line: STREAMING=yes|no
-  finish        apply the speed preset (--preset), check the models, create the demo
-                agent if missing and publish it. Last line: PRESET=<id that is active>
+  finish        on first setup apply the speed preset (--preset), check the models, create
+                the demo agent if missing and publish it. An organisation that already has
+                its models chosen keeps them, so a re-deploy never switches its
+                speech-to-text (or anything else) silently; --force applies the preset
+                anyway. Last lines: PRESET=<id applied, or "kept"> and
+                STT=streaming | whisper:<model> | other:<provider> (what calls now use)
 
 Reads the password from env ATLAS_DEMO_PASSWORD. Never prints a secret.
 Run from the API project so httpx is available:
@@ -26,9 +30,21 @@ import httpx
 DEMO_EMAIL = "demo@example.com"
 DEMO_ORG_NAME = "Demo Realty (demo data)"
 AGENT_NAME = "Mortgage lead qualifier"
+# The openers are the phrases the Pocket TTS server keeps ready in memory
+# (DEFAULT_CACHED_PHRASES in infra/docker/pocket-tts/app.py): keep the two lists in sync.
 QUICK_OPENER_RULE = (
+    'Start every reply with exactly one of these acknowledgements as its own sentence: "Got it.", '
+    '"Okay.", "Sure.", "Great.", "Alright.", "Perfect.", "Of course.", "I see.", "Understood.", '
+    '"That makes sense.", "No problem.", "Thanks." or "You\'re welcome." Pick the one that fits, '
+    "then continue. Keep every sentence short."
+)
+# Earlier versions of the rule, replaced when the demo is configured again.
+PREVIOUS_OPENER_RULES = (
     "Start every reply with a short acknowledgement of two to four words that ends with a full stop, "
-    'for example "Got it." or "That makes sense.", then continue. Keep every sentence short.'
+    'for example "Got it." or "That makes sense.", then continue. Keep every sentence short.',
+    'Start every reply with exactly one of these acknowledgements as its own sentence: "Got it.", '
+    '"Okay.", "Sure.", "Great.", "Alright.", "That makes sense.", "No problem." or "Thanks." '
+    "Pick the one that fits, then continue. Keep every sentence short.",
 )
 AGENT_TEMPLATE = "lead_qualifier"
 POCKET_PRESET = "private_pocket_tts"
@@ -222,9 +238,14 @@ def browser_only_settings(api: Api, agent: dict) -> None:
         changes.append("voicemail detection off (browser calls never reach one)")
     # The voice starts speaking only when the model has written a full sentence. A short
     # opener ends that first sentence almost at once: measured on a 6-core CPU, the median
-    # reply went from 3.9 s to 3.3 s (docs/perf/e2e-test-call-streaming.json).
+    # reply went from 3.9 s to 3.3 s (docs/perf/e2e-test-call-streaming.json). The listed
+    # openers are kept ready by Pocket TTS, so they are heard without waiting for synthesis:
+    # on the Oracle server the time from transcript to first audio fell from 3.0 to 1.9 s
+    # (median, docs/perf/oracle-latency.md).
     rules = (config.get("global_rules") or "").strip()
     if QUICK_OPENER_RULE not in rules:
+        for old in PREVIOUS_OPENER_RULES:
+            rules = "\n\n".join(p for p in rules.replace(old, "").split("\n\n") if p.strip())
         config["global_rules"] = (rules + "\n\n" + QUICK_OPENER_RULE).strip()
         changes.append("replies open with a short acknowledgement (faster first words)")
     if not changes:
@@ -251,13 +272,49 @@ def set_stt_model(api: Api, model: str) -> None:
     say(f"speech-to-text model set to {model} (was {current})")
 
 
-def phase_finish(api: Api, preset: str, web_url: str, stt_model: str = "") -> int:
-    active = apply_preset(api, preset)
-    if stt_model and active == POCKET_PRESET:
-        try:
-            set_stt_model(api, stt_model)
-        except ApiError as exc:
-            say(f"could not set the speech-to-text model ({exc.status}: {exc.message}); continuing")
+def models_chosen(selection: dict) -> bool:
+    return all((selection.get(kind) or {}).get("connection_id") for kind in ("stt", "llm", "tts"))
+
+
+def stt_in_use(api: Api, selection: dict) -> str:
+    """streaming | whisper:<model> | other:<provider> | none, for the shell scripts."""
+    stt = selection.get("stt") or {}
+    conn_id = stt.get("connection_id")
+    if not conn_id:
+        return "none"
+    conn = next((c for c in api.call("GET", "/ai/connections") if c["id"] == conn_id), None)
+    if conn is None:
+        return "none"
+    model = str((stt.get("settings") or {}).get("model") or "")
+    base_url = _norm(str(conn["connection_settings"].get("base_url", "")))
+    if conn["provider"] == "deepgram" and base_url == _norm(STREAMING[2]):
+        return "streaming"
+    if conn["provider"] == "speaches":
+        return f"whisper:{model}"
+    return f"other:{conn['provider']}"
+
+
+def phase_finish(
+    api: Api, preset: str, web_url: str, stt_model: str = "", force: bool = False
+) -> int:
+    selection = api.call("GET", "/ai/models")
+    if models_chosen(selection) and not force:
+        # Re-deploys and re-runs keep what the organisation chose (in the web app or with an
+        # earlier --preset); only an explicit --preset/--force changes it.
+        active = "kept"
+        say("the organisation already has its models chosen: kept as they are "
+            "(pass --preset to apply a preset again)")
+    else:
+        active = apply_preset(api, preset)
+        if stt_model and active == POCKET_PRESET:
+            try:
+                set_stt_model(api, stt_model)
+            except ApiError as exc:
+                say(f"could not set the speech-to-text model ({exc.status}: {exc.message}); "
+                    "continuing")
+        selection = api.call("GET", "/ai/models")
+    stt = stt_in_use(api, selection)
+    say(f"speech-to-text in use: {stt}")
     try:
         check = api.call("POST", "/ai/models/check")
     except ApiError as exc:
@@ -278,9 +335,9 @@ def phase_finish(api: Api, preset: str, web_url: str, stt_model: str = "") -> in
         say(f"publishing failed ({exc.status}: {exc.message})")
         if exc.details:
             say(f"  details: {api.redact(str(exc.details))[:800]}")
-        print(f"PRESET={active}", flush=True)
+        print(f"PRESET={active}\nSTT={stt}", flush=True)
         return 2
-    print(f"PRESET={active}", flush=True)
+    print(f"PRESET={active}\nSTT={stt}", flush=True)
     return 0
 
 
@@ -291,6 +348,8 @@ def main() -> int:
     p.add_argument("--web", default="http://localhost:5173")
     p.add_argument("--preset", default=POCKET_PRESET, choices=[POCKET_PRESET, STREAMING_PRESET])
     p.add_argument("--stt-model", default="", help="Whisper model for the Pocket TTS preset")
+    p.add_argument("--force", action="store_true",
+                   help="apply --preset even if the organisation already chose its models")
     args = p.parse_args()
 
     password = os.environ.get("ATLAS_DEMO_PASSWORD", "")
@@ -302,7 +361,7 @@ def main() -> int:
         api.login(password)
         if args.phase == "connections":
             return phase_connections(api, key)
-        return phase_finish(api, args.preset, args.web, args.stt_model)
+        return phase_finish(api, args.preset, args.web, args.stt_model, args.force)
     except ApiError as exc:
         print(f"ATLAS API error: {exc}", file=sys.stderr)
         return 1

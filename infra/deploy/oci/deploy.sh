@@ -7,7 +7,10 @@
 #   --public-ip IP     the server's public IPv4 (default: .env, else asked from the internet)
 #   --web-host NAME    web app + API hostname (default: atlas.<ip-with-dashes>.sslip.io)
 #   --voice-host NAME  voice signalling hostname (default: voice.<ip-with-dashes>.sslip.io)
-#   --preset P         auto (default) | pocket | streaming
+#   --preset P         pocket | streaming: apply this speed preset to the demo organisation
+#                      now, replacing its current model choice. Without it, a preset is
+#                      applied only on the first setup (streaming when available, else
+#                      pocket); later runs keep whatever the organisation chose.
 #   --no-pull          do not `git pull` first
 #   --rebuild          rebuild the two model images (Pocket TTS, live transcription)
 #   --skip-warm        do not load the models into memory at the end
@@ -15,7 +18,7 @@
 # Live transcription: put a Deepgram key in the environment variable ATLAS_DEMO_DEEPGRAM_KEY
 # (for example `read -rs ATLAS_DEMO_DEEPGRAM_KEY; export ATLAS_DEMO_DEEPGRAM_KEY`). It is
 # used once, to save the connection to the local streaming server, and never written or
-# printed. Without it the Pocket TTS + Whisper preset is used.
+# printed. Without it the first setup uses the Pocket TTS + Whisper preset.
 #
 # Secrets are generated on the first run into .env (mode 600) and never printed; the demo
 # password is printed once, on the run that generates it.
@@ -27,6 +30,7 @@ ENV_FILE="$ROOT/.env"
 COMPOSE_FILES="docker-compose.yml:infra/deploy/oci/docker-compose.prod.yml"
 NODE_IMAGE="node:22.23.2-bookworm-slim"
 LLM_MODEL="qwen2.5:1.5b"
+# Whisper model of the Pocket TTS preset (used when live transcription is not available).
 STT_MODEL="Systran/faster-whisper-base"
 WEB_VOLUME="atlas_web_dist"
 PNPM_VOLUME="atlas_pnpm_store"
@@ -42,7 +46,7 @@ while [ $# -gt 0 ]; do
     --no-pull) PULL=0 ;;
     --rebuild) REBUILD=1 ;;
     --skip-warm) SKIP_WARM=1 ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
   esac
   shift
@@ -211,7 +215,7 @@ need_disk 2 "pulling updated images"
 dc pull --ignore-buildable --quiet || die "pulling images failed"
 need_disk 2 "building the API image"
 dc build --quiet api worker || die "building the API image failed"
-for pair in local-tts=atlas/local-tts:pocket-tts-3.3.0 local-stt=atlas/local-stt:sherpa-onnx-1.13.8; do
+for pair in local-tts=atlas/local-tts:pocket-tts-3.3.0 local-stt=atlas/local-stt:2-sherpa-onnx-1.13.8; do
   svc="${pair%%=*}" img="${pair#*=}"
   if [ "$REBUILD" = 1 ] || ! have_image "$img"; then
     need_disk 4 "building $img"
@@ -257,11 +261,14 @@ api_python() {  # api_python <script> [args...]: run a repository script inside 
   local script="$1"; shift
   dc exec -T -e ATLAS_DEMO_PASSWORD -e ATLAS_DEMO_DEEPGRAM_KEY api python - "$@" <"$script"
 }
-code="$(dc exec -T api python -c "
+whisper_load() {  # whisper_load <model>: download it into the speech server (no-op if present)
+  local code
+  code="$(dc exec -T api python -c "
 import httpx
-r = httpx.post('http://local-speech:8000/v1/models/$STT_MODEL', timeout=900)
+r = httpx.post('http://local-speech:8000/v1/models/$1', timeout=900)
 print(r.status_code)" 2>/dev/null | tail -n 1 || true)"
-case "$code" in 200|201|409) info "$STT_MODEL ready" ;; *) warn "could not load $STT_MODEL into the speech server (HTTP $code)" ;; esac
+  case "$code" in 200|201|409) info "$1 ready in the speech server" ;; *) warn "could not load $1 into the speech server (HTTP $code)" ;; esac
+}
 
 # ------------------------------------------------------------------------- 8. demo
 step "AI providers, speed preset and demo agent"
@@ -276,20 +283,30 @@ DEEPGRAM_KEY=""
 TARGET=private_pocket_tts
 if grep -qx 'STREAMING=yes' "$OUT" && [ "$PRESET" != pocket ]; then TARGET=private_streaming; fi
 [ "$PRESET" = streaming ] && TARGET=private_streaming
+# The preset is applied on the first setup only, or when --preset was given: a re-deploy
+# never switches the organisation's chosen models (speech-to-text included) on its own.
+FORCE=""
+[ "$PRESET" != auto ] && FORCE=--force
 api_python infra/scripts/demo_configure.py finish --api http://127.0.0.1:8080 \
-  --preset "$TARGET" --stt-model "$STT_MODEL" --web "https://$WEB_HOST" | tee "$OUT" \
+  --preset "$TARGET" --stt-model "$STT_MODEL" --web "https://$WEB_HOST" $FORCE | tee "$OUT" \
   || warn "the demo agent could not be published (see above); fix it in the web app under Agents"
 ACTIVE="$(sed -n 's/^PRESET=//p' "$OUT" | tail -n 1)"
+STT_IN_USE="$(sed -n 's/^STT=//p' "$OUT" | tail -n 1)"
 rm -f "$OUT"
 unset ATLAS_DEMO_PASSWORD
 
 # ------------------------------------------------------------------------- 9. warm-up
 step "Loading the models into memory"
+# Whisper is loaded only when calls use it (STT=whisper:<model>); the streaming server
+# (STT=streaming) loaded its model when it started.
+WHISPER=""
+case "$STT_IN_USE" in whisper:?*) WHISPER="${STT_IN_USE#whisper:}" ;; esac
+[ -n "$WHISPER" ] && whisper_load "$WHISPER"
 if [ "$SKIP_WARM" = 1 ]; then info "skipped (--skip-warm)"
 else
   SKIP=kokoro
-  [ "$ACTIVE" = private_streaming ] && SKIP=kokoro,stt
-  api_python infra/scripts/bench_local_models.py --warm-only --stt-model "$STT_MODEL" --skip "$SKIP" \
+  [ -z "$WHISPER" ] && SKIP=kokoro,stt
+  api_python infra/scripts/bench_local_models.py --warm-only --stt-model "${WHISPER:-$STT_MODEL}" --skip "$SKIP" \
     --llm-url http://local-llm:11434/v1 --speech-url http://local-speech:8000/v1 --pocket-url http://local-tts:8000/v1 \
     | sed 's/^/    /' || warn "warming the models failed; the first reply of the first call will be slower"
 fi
@@ -313,7 +330,7 @@ if [ -n "$GENERATED_PASSWORD" ]; then
 else
   echo "  Sign in:     demo@example.com, password: ATLAS_DEMO_PASSWORD in $ENV_FILE"
 fi
-echo "  Preset:      ${ACTIVE:-unknown}"
+echo "  Preset:      ${ACTIVE:-unknown} (speech-to-text: ${STT_IN_USE:-unknown}; change it with --preset or in the web app)"
 echo "  Test call:   Agents > Mortgage lead qualifier > Test call (allow the microphone)"
 echo "  Check:       python3 infra/scripts/e2e_test_call.py --runs 2 --api http://api:8080 --signalling ws://localhost:8000"
 echo "  Update:      git pull is part of this script: bash infra/deploy/oci/deploy.sh"
