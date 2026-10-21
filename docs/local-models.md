@@ -691,7 +691,7 @@ server logs a warning if you add a voice that is not cleared for commercial use.
 | `POCKET_TTS_API_KEY` | unset | If set, clients must send `Authorization: Bearer <key>` |
 | `POCKET_TTS_WARMUP` | `1` | Synthesises one short phrase at startup, so the first call is not slow |
 | `POCKET_TTS_THREADS` | `1` in compose (`LOCAL_TTS_THREADS`); unset = the library's own choice, also 1 | CPU threads for synthesis; the audio decoder runs on one more thread. Alone, 2 threads reach first audio a little sooner (about 150 vs 180 ms), but while the language model runs they made the voice slower than real time: 26 stutters in 10 replies, against none with 1 |
-| `HF_TOKEN` | compose passes `POCKET_TTS_HF_TOKEN` from `.env`; empty | Hugging Face token of an account that accepted the gated weights' terms: turns on [voice cloning](#voice-cloning). Never logged |
+| `HF_TOKEN` | compose passes `POCKET_TTS_HF_TOKEN` from `.env`; empty | Hugging Face token of an account that accepted the gated weights' terms: turns on [voice cloning](#voice-cloning). Takes precedence over a token saved from the web app, which then cannot change it or turn cloning off. Never logged |
 | `POCKET_TTS_VOICE_DIR` | `/home/app/.cache/voices` (in the weights volume) | Where cloned voices are kept: `<id>.safetensors` (the computed voice) and `<id>.json` (name, date, sample length, consent statement) |
 | `POCKET_TTS_MAX_CUSTOM_VOICES` | `50` | Most cloned voices kept on the server (each 6 to 19 MB on disk) |
 | `POCKET_TTS_CUSTOM_VOICE_CACHE` | `4` | Cloned voices held in memory, least recently used dropped first (the newest are loaded at startup) |
@@ -729,29 +729,57 @@ clone their voice"; ATLAS refuses the request without it and writes the attestat
 audit log (`ai.voice_cloned`: who, when, voice id and name, the attestation; never the
 audio). Only owners and admins can clone or delete voices.
 
-**Turn it on (one time).**
+**Turn it on (no restart).**
 
 1. Sign in at Hugging Face and accept the terms of
    [kyutai/pocket-tts](https://huggingface.co/kyutai/pocket-tts).
 2. Create a **read** token for that account at
-   [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
-3. Put it in `.env` as `POCKET_TTS_HF_TOKEN=hf_…`, or let the demo setup do it:
-   `.\make.ps1 demo -HfToken hf_…` or `bash infra/scripts/setup_local_demo.sh --hf-token hf_…`
-   (better: set `ATLAS_DEMO_HF_TOKEN` first, so the token stays out of shell history). The
-   scripts never print it. Compose passes it to `local-tts` as `HF_TOKEN`.
-4. Restart the server: `docker compose --profile local-ai up -d local-tts`. It downloads
-   the cloning weights once (about 0.2 GB, into the `local_tts_models` volume) and logs
-   `Voice cloning enabled`; `GET http://127.0.0.1:8002/v1/voices` then answers 200.
-5. When the API runs on the host (as in the demo), it reaches the server through
-   `ATLAS_LOCAL_TTS_URL=http://127.0.0.1:8002/v1` (in `.env.example`; the setup scripts add
-   it to an existing `.env`). The connection's own base URL, `http://local-tts:8000/v1`,
-   only resolves inside Docker. If the server sets `POCKET_TTS_API_KEY`, set the same value
-   as `ATLAS_LOCAL_TTS_API_KEY`.
+   [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) (a fine-grained
+   token needs read access to public gated repositories).
+3. In the web app, an organization owner turns voice cloning on and pastes the token. The
+   server checks it with Hugging Face before keeping anything: a token Hugging Face does not
+   accept, or one whose account has not accepted the terms, is refused with the reason.
+4. The server then downloads the cloning weights once (about 0.2 GB, into the
+   `local_tts_models` volume), switches to them and logs `Voice cloning enabled`. Built-in
+   voices keep speaking meanwhile. The server's state goes from `enabling` to `on` (or
+   `failed`, with the reason), and `GET http://127.0.0.1:8002/v1/voices` then answers 200.
+
+**Where the token is kept.** Only on the voice server: in its model volume, as the Hugging
+Face token file `/home/app/.cache/huggingface/token` (mode 0600, readable by the server's
+user only), where the Hugging Face library reads it again at every start. The server never
+logs it or sends it back; its state only says whether a token was saved or comes from the
+environment.
+
+**Turn it off.** Turning voice cloning off in the web app deletes the saved token. The
+server's `/v1/voices` endpoints answer 501 again at once and cloned voices are no longer
+spoken. The downloaded weights and the cloned voices stay in the volume, so turning it on
+again (with a token) is quick and the voices come back.
+
+**Or set the token in the environment** (a server you run yourself): put it in `.env` as
+`POCKET_TTS_HF_TOKEN=hf_…`, or let the demo setup do it: `.\make.ps1 demo -HfToken hf_…` or
+`bash infra/scripts/setup_local_demo.sh --hf-token hf_…` (better: set `ATLAS_DEMO_HF_TOKEN`
+first, so the token stays out of shell history). The scripts never print it. Compose passes
+it to `local-tts` as `HF_TOKEN`; restart the server:
+`docker compose --profile local-ai up -d local-tts`. A token in the environment takes
+precedence over a saved one, and the web app can then neither change it nor turn cloning
+off: remove it from `.env` and restart instead.
+
+When the API runs on the host (as in the demo), it reaches the server through
+`ATLAS_LOCAL_TTS_URL=http://127.0.0.1:8002/v1` (in `.env.example`; the setup scripts add it
+to an existing `.env`). The connection's own base URL, `http://local-tts:8000/v1`, only
+resolves inside Docker. If the server sets `POCKET_TTS_API_KEY`, set the same value as
+`ATLAS_LOCAL_TTS_API_KEY`.
 
 Without a token, or when the token's account has not accepted the terms (the download is
 refused and the library falls back to the open weights), the server's `/v1/voices`
 endpoints answer **501** with these steps, and ATLAS shows them instead of the form.
 Built-in voices keep working either way.
+
+The server loads the cloning weights into the model it is already using, not into a
+second model: two models side by side peaked at 1.43 GiB on their own (measured with the
+open weights), and with the rest of the server that is more than the container's 1.5 GiB
+limit. Switching in place peaked at 1.1 GiB in a test run. Synthesis waits only for the
+copy, not the download, and the reply openers are synthesised again afterwards.
 
 **Limits.** One speaker, 5 to 30 seconds after decoding, at most 10 MB. The web app
 accepts WAV, MP3 and M4A files or records in the browser (a timer stops it at 30 s), and
@@ -788,13 +816,28 @@ stay on disk but the server refuses to speak them until cloning is on again.
 `POST /api/v1/ai/connections/{id}/voices` (multipart `name`, `audio`,
 `consent_attestation=true`) and `DELETE /api/v1/ai/connections/{id}/voices/{voice_id}`
 (owners and admins). The server itself exposes `GET`/`POST /v1/voices` and
-`DELETE /v1/voices/{id}`. Its tests (with a fake model) run inside the image:
+`DELETE /v1/voices/{id}`, and the switch:
+
+- `GET /v1/cloning`: `state` (`off`, `enabling`, `on` or `failed`), a `message` saying why
+  and what to do (null when on), `terms_url`, and `token_source` (`environment`, `saved` or
+  null; never the token).
+- `PUT /v1/cloning` with `{"hf_token": "hf_…"}`: **202** and `enabling` once the token is
+  checked and saved; **422** not a token, **401** Hugging Face did not accept it, **403**
+  its account has not accepted the terms, **502** Hugging Face unreachable, **409** while
+  cloning is being turned on or when the environment sets the token.
+- `DELETE /v1/cloning`: **204**; **409** when the environment sets the token.
+
+They need `POCKET_TTS_API_KEY` when it is set, like the others. The server's tests (with a
+fake model, and fakes for Hugging Face) run inside the image:
 
 ```bash
 docker compose --profile local-ai run --rm --no-deps \
   -v "$PWD/infra/docker/pocket-tts:/srv/tests:ro" --entrypoint python \
   local-tts -m unittest discover -s /srv/tests -t /srv/tests
 ```
+
+`BoundedEncoderTest` loads the real model (about 1 GB of memory) and runs only with
+`-e POCKET_TTS_MODEL_TESTS=1` added to `run`.
 
 ## Every speed setting, explained
 
