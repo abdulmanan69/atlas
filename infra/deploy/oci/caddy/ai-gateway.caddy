@@ -1,0 +1,107 @@
+# AI gateway (ADR 0007): one HTTPS entry point in front of the model servers, so ATLAS
+# installations on other hosts can use them. Layouts: docs/deployment-layouts.md.
+#
+#   /llm/v1/*                     language model, OpenAI-compatible API only (no /api/*)
+#   /whisper/v1/*                 Whisper speech-to-text (and the Kokoro voice)
+#   /tts/v1/*                     Pocket TTS, its voices and voice cloning
+#   /live-stt/<secret>/v1/listen  live speech-to-text, Deepgram protocol (WebSocket)
+#   /health                       which services answer, their versions and models
+#
+# Every path except live speech-to-text needs "Authorization: Bearer <ATLAS_AI_TOKEN>"
+# (or ATLAS_AI_TOKEN_NEXT, a second token accepted while the first is replaced; it equals
+# the first when not set). Live speech-to-text carries ATLAS_AI_LIVE_STT_SECRET in the path
+# instead, because the voice service sends its Deepgram key in that header. The header is
+# removed before a request goes on, so the model servers never see the token or the key.
+# The values come from .env through docker-compose.ai-gateway.yml, which refuses to start
+# without them. No access log: the live speech-to-text path carries a secret.
+
+(ai_error) {
+	header Content-Type "application/json"
+	respond `{"error":"{args[0]}"}` {args[1]}
+}
+
+(ai_proxy) {
+	# Pass language model tokens and speech audio on as they are written, and keep a live
+	# speech-to-text WebSocket open across a configuration reload for as long as a call
+	# may last (20 minutes). No other timeout: replies and calls may take long.
+	flush_interval -1
+	stream_close_delay 20m
+	header_up -Authorization
+	transport http {
+		dial_timeout 5s
+	}
+}
+
+{$ATLAS_AI_HOST} {
+	import security_headers
+	header {
+		Cache-Control "no-store"
+		defer
+	}
+	# Voice samples for cloning are at most 10 MB.
+	request_body {
+		max_size 12MB
+	}
+
+	# `route` keeps this order. Plain `handle` blocks are sorted by path, which would put
+	# the model paths before the token check.
+	route {
+		handle_path /live-stt/{$ATLAS_AI_LIVE_STT_SECRET}/* {
+			# The server answers /v1/listen only; the prefix with the secret is stripped.
+			handle /v1/listen {
+				reverse_proxy local-stt:8000 {
+					import ai_proxy
+				}
+			}
+			handle {
+				import ai_error not_found 404
+			}
+		}
+
+		# Either token (the values of one header matcher are alternatives).
+		@unauthorized not {
+			header Authorization "Bearer {$ATLAS_AI_TOKEN}"
+			header Authorization "Bearer {$ATLAS_AI_TOKEN_NEXT}"
+		}
+		handle @unauthorized {
+			header WWW-Authenticate "Bearer"
+			import ai_error unauthorized 401
+		}
+
+		handle /health {
+			reverse_proxy ai-health:8080 {
+				import ai_proxy
+			}
+		}
+
+		handle /llm/v1/* {
+			uri strip_prefix /llm
+			reverse_proxy local-llm:11434 {
+				import ai_proxy
+			}
+		}
+
+		handle /whisper/v1/* {
+			uri strip_prefix /whisper
+			reverse_proxy local-speech:8000 {
+				import ai_proxy
+			}
+		}
+
+		handle /tts/v1/* {
+			uri strip_prefix /tts
+			reverse_proxy local-tts:8000 {
+				import ai_proxy
+			}
+		}
+
+		handle {
+			import ai_error not_found 404
+		}
+	}
+
+	# A model server that is down or not started: 502 with a JSON body, like the others.
+	handle_errors {
+		import ai_error {err.status_text} {err.status_code}
+	}
+}

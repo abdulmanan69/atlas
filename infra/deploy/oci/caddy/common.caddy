@@ -1,0 +1,18 @@
+# Settings shared by both entry files: Caddyfile (role "all") and models.Caddyfile (role
+# "models"). Imported first, so the block below is the global options block.
+{
+	# HTTP/1.1 and HTTP/2: the firewall opens TCP 443 only, not UDP (HTTP/3).
+	servers {
+		protocols h1 h2
+	}
+}
+
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=63072000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+		-Via
+	}
+}

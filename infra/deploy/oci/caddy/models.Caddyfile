@@ -1,0 +1,9 @@
+# Models host (deploy.sh --role models): only the AI gateway, in front of the model
+# servers on this host. The web app, the API and the voice service run elsewhere.
+#
+#   {$ATLAS_AI_HOST}  the AI gateway (ai-gateway.caddy)
+#
+# The name and the secrets come from .env through docker-compose.models.yml and
+# docker-compose.ai-gateway.yml.
+import common.caddy
+import ai-gateway.caddy

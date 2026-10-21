@@ -16,6 +16,11 @@ volume, region us-ashburn-1.
 needed, and Caddy gets Let's Encrypt certificates for them automatically. With your own
 domain, point two A records at the server and pass `--web-host` / `--voice-host`.
 
+The same script also sets up a server with **only the AI models** behind an HTTPS gateway
+(`--role models`), for an ATLAS on another server, and can add that gateway to this
+all-in-one server (`--ai-host`) so other ATLAS installations use its models. When to use
+which, step by step: [docs/deployment-layouts.md](../../../docs/deployment-layouts.md).
+
 ## What is public, what is not
 
 * Published on the host: only Caddy (TCP 80, 443) and coturn (3478 TCP/UDP on the private
@@ -29,8 +34,14 @@ domain, point two A records at the server and pass `--web-host` / `--voice-host`
 * coturn uses time-limited credentials (`use-auth-secret`, the secret shared with the voice
   service as `TURN_SECRET`), relays UDP only, and refuses private, loopback, link-local
   (cloud metadata) and reserved peers except the voice service's own container address.
+* With `--ai-host`, Caddy also serves the AI gateway on that hostname: the model servers'
+  OpenAI-compatible APIs, live speech-to-text and a health check, each behind a token or a
+  secret path ([docs/deployment-layouts.md](../../../docs/deployment-layouts.md)). Without
+  it, no model server is reachable from outside.
 * `.env` (mode 600) holds every secret, generated on the server from `/dev/urandom` on the
-  first run. Nothing secret is in the repository or printed, except the demo password once.
+  first run. Nothing secret is in the repository or printed, except the demo password and
+  the AI gateway's token and live speech-to-text address, once, on the run that generates
+  them.
 * ATLAS runs with `ATLAS_ENVIRONMENT=production`: secure cookies, HSTS, https-only URLs for
   tenant webhooks/actions/models, no API docs, no public sign-up, real phone calls off.
 
@@ -45,6 +56,9 @@ domain, point two A records at the server and pass `--web-host` / `--voice-host`
      --add-port=3478/tcp --add-port=3478/udp --add-port=49152-49252/udp
    sudo firewall-cmd --reload
    ```
+
+   `deploy.sh` checks `firewalld` on every run and opens what is missing, when `sudo` needs
+   no password. A models-only server (`--role models`) needs TCP 80 and 443 only.
 
 2. **Disk**: about 30 GB for images, models and data. Grow the boot volume in the console
    (Boot volume, Edit, size), then on the server `sudo /usr/libexec/oci-growfs -y` and check
@@ -83,6 +97,8 @@ speech-to-text chosen in the web app, and the last lines say which one is in use
 
 | Option | Meaning |
 |---|---|
+| `--role all\|models` | `all` (default): everything on this server; `models`: only the AI models behind the AI gateway ([docs/deployment-layouts.md](../../../docs/deployment-layouts.md)). Saved in `.env`; a server keeps its role |
+| `--ai-host NAME` | hostname of the AI gateway (models role default: `ai.<ip-with-dashes>.sslip.io`; all-in-one: off unless given). `http://<private IP>` on a private network |
 | `--public-ip IP` | the server's public IPv4 (saved in `.env`) |
 | `--web-host`, `--voice-host` | your own hostnames instead of sslip.io |
 | `--preset pocket\|streaming` | apply this speed preset to the demo organization now (default: only on the first setup) |

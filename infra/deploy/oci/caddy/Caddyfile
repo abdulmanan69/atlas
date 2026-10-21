@@ -1,26 +1,13 @@
-# ATLAS edge: HTTPS with automatic Let's Encrypt certificates for both hostnames.
+# ATLAS edge: HTTPS with automatic Let's Encrypt certificates for every hostname.
 #
 #   {$ATLAS_WEB_HOST}    the web app (static build) and the ATLAS API under /api
 #   {$ATLAS_VOICE_HOST}  only the voice service's call signalling WebSocket
+#   {$ATLAS_AI_HOST}     optional: the AI gateway for other ATLAS installations
+#                        (ai-gateway.caddy, imported at the end)
 #
-# Both names come from .env through docker-compose.prod.yml. No access log: signalling
-# URLs carry one-time session tokens.
-{
-	# HTTP/1.1 and HTTP/2: the firewall opens TCP 443 only, not UDP (HTTP/3).
-	servers {
-		protocols h1 h2
-	}
-}
-
-(security_headers) {
-	header {
-		Strict-Transport-Security "max-age=63072000"
-		X-Content-Type-Options "nosniff"
-		Referrer-Policy "strict-origin-when-cross-origin"
-		-Server
-		-Via
-	}
-}
+# The names come from .env through docker-compose.prod.yml. No access log: signalling
+# URLs carry one-time session tokens. A models-only host uses models.Caddyfile instead.
+import common.caddy
 
 (proxy_options) {
 	# Stream server-sent events (typed test chat, live transcript) as they are written, and
@@ -79,3 +66,8 @@
 		respond 404
 	}
 }
+
+# The AI gateway on its own hostname, when deploy.sh runs with --ai-host:
+# docker-compose.ai-gateway.yml sets ATLAS_AI_GATEWAY_SITE=ai-gateway.caddy. Without it the
+# import is an empty file and nothing above changes.
+import {$ATLAS_AI_GATEWAY_SITE:ai-gateway-off.caddy}

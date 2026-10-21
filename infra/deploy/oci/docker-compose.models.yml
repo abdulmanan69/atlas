@@ -1,0 +1,58 @@
+# ATLAS models host (deploy.sh --role models; ADR 0007, docs/deployment-layouts.md): only
+# the self-hosted models behind the AI gateway. The web app, the ATLAS API, the voice
+# service and their databases run on another host and reach the models through the
+# gateway. Extends the main docker-compose.yml; deploy.sh writes into .env:
+#
+#   COMPOSE_FILE=docker-compose.yml:infra/deploy/oci/docker-compose.models.yml:infra/deploy/oci/docker-compose.ai-gateway.yml
+#   COMPOSE_PROFILES=local-ai
+#
+# Reachable from the internet: only Caddy (TCP 80/443), and on it only the AI gateway.
+# The model servers publish no port; they are reachable only on the Docker network.
+
+name: atlas
+
+services:
+  # The main file starts PostgreSQL and Redis in every profile; they belong to ATLAS, not
+  # to the models. The "app" profile is never enabled on a models host, so they stay off.
+  postgres:
+    profiles: ["app"]
+    ports: !reset []
+
+  redis:
+    profiles: ["app"]
+    ports: !reset []
+
+  local-llm:
+    ports: !reset []
+
+  local-speech:
+    ports: !reset []
+
+  local-tts:
+    ports: !reset []
+
+  local-stt:
+    ports: !reset []
+
+  caddy:
+    image: caddy:2.11.6-alpine
+    # The gateway only (models.Caddyfile); deploy.sh reloads the same file.
+    command: ["caddy", "run", "--config", "/etc/caddy/models.Caddyfile", "--adapter", "caddyfile"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # The folder, not the file: `git pull` replaces the file, and a file mount would keep
+      # showing the old one. deploy.sh reloads the configuration on every run.
+      - ./infra/deploy/oci/caddy:/etc/caddy:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

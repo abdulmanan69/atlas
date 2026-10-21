@@ -1,0 +1,40 @@
+# AI gateway (ADR 0007, docs/deployment-layouts.md): Caddy also serves ATLAS_AI_HOST, one
+# HTTPS entry point to this server's model servers for ATLAS installations on other hosts.
+# deploy.sh adds this file to COMPOSE_FILE after the role's own file:
+#
+#   role all, with --ai-host:  docker-compose.yml:.../docker-compose.prod.yml:<this file>
+#   role models:               docker-compose.yml:.../docker-compose.models.yml:<this file>
+#
+# The paths, the token check and the limits are in caddy/ai-gateway.caddy. Nothing here
+# publishes a port: the gateway shares Caddy's 80 and 443.
+
+name: atlas
+
+services:
+  caddy:
+    environment:
+      ATLAS_AI_HOST: ${ATLAS_AI_HOST:?set ATLAS_AI_HOST in .env}
+      # Required and non-empty: an empty value would make the token check accept
+      # "Bearer " and the live speech-to-text path guessable.
+      ATLAS_AI_TOKEN: ${ATLAS_AI_TOKEN:?set ATLAS_AI_TOKEN in .env}
+      # Optional second token, accepted too while ATLAS_AI_TOKEN is replaced
+      # (docs/deployment-layouts.md, "Rotate the token"); the first one when not set.
+      ATLAS_AI_TOKEN_NEXT: ${ATLAS_AI_TOKEN_NEXT:-${ATLAS_AI_TOKEN:?set ATLAS_AI_TOKEN in .env}}
+      ATLAS_AI_LIVE_STT_SECRET: ${ATLAS_AI_LIVE_STT_SECRET:?set ATLAS_AI_LIVE_STT_SECRET in .env}
+      # Read by the import at the end of caddy/Caddyfile (models.Caddyfile imports the
+      # gateway in any case).
+      ATLAS_AI_GATEWAY_SITE: ai-gateway.caddy
+
+  # Answers the gateway's /health: asks each model server on the Docker network what it
+  # offers. Built from infra/docker/ai-gateway (Python standard library only).
+  ai-health:
+    build:
+      context: infra/docker/ai-gateway
+    image: atlas/ai-health:1
+    environment:
+      LOG_LEVEL: INFO
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+    restart: unless-stopped

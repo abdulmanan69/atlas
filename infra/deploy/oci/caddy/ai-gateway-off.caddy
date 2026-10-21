@@ -1,0 +1,2 @@
+# Imported by Caddyfile when this server has no AI gateway (ATLAS_AI_GATEWAY_SITE unset):
+# deliberately empty. docker-compose.ai-gateway.yml points the import at ai-gateway.caddy.
