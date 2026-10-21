@@ -96,8 +96,11 @@ def create_app() -> FastAPI:
     app.add_middleware(
         BodySizeLimitMiddleware,
         max_bytes=settings.max_request_bytes,
-        # Agent sound files: up to 10 MB plus the multipart envelope.
-        path_limits=((re.compile(r"/api/v1/agents/[^/]+/audio"), 11 * 1024 * 1024),),
+        # Agent sound files and voice samples: up to 10 MB plus the multipart envelope.
+        path_limits=(
+            (re.compile(r"/api/v1/agents/[^/]+/audio"), 11 * 1024 * 1024),
+            (re.compile(r"/api/v1/ai/connections/[^/]+/voices"), 11 * 1024 * 1024),
+        ),
     )
     app.add_middleware(RequestContextMiddleware, hsts=settings.is_production)
     app.include_router(api_router)

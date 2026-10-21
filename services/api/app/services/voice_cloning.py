@@ -1,14 +1,20 @@
 """Pocket TTS voice cloning: list, clone and delete voices on a tenant's Pocket TTS server.
 
 A cloned voice is computed by the Pocket TTS server (infra/docker/pocket-tts) from a short
-WAV sample of a speaker who gave permission. ATLAS:
+sample of a speaker who gave permission. ATLAS:
 
 - requires an explicit consent attestation and records it in the audit log (who, when,
   which voice, the attestation; never the audio);
-- checks size and type before anything is forwarded; the sample is not stored here;
+- checks size, format and length before anything is forwarded (WAV, MP3, M4A, OGG, WebM
+  and FLAC are decoded to WAV by voice_samples.py); the sample is not stored here;
 - records which organization owns each voice (`custom_voices`), because the server keeps
   every cloned voice in one shared store. Voice ids carry a random 64-bit suffix, and an
   organization only ever sees, selects or deletes its own.
+
+Organization owners turn voice cloning on (with a Hugging Face token of an account that
+accepted the gated weights' terms) or off. The setting belongs to the server, so it applies
+to every organization using it. The token is passed straight through to the server: it is
+never stored, logged, audited or returned here, and is scrubbed from the server's replies.
 
 ATLAS reaches the server at ATLAS_LOCAL_TTS_URL when set (an operator setting, so it may be
 private), otherwise at the connection's base URL under the outbound destination policy.
@@ -21,7 +27,7 @@ import re
 import unicodedata
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx
 from fastapi import UploadFile
@@ -35,15 +41,25 @@ from app.core.exceptions import (
     ConflictError,
     IntegrationUnavailableError,
     NotFoundError,
+    PermissionDeniedError,
     RateLimitedError,
     ValidationFailedError,
 )
 from app.core.net_policy import validate_destination_url
+from app.core.permissions import Permission, has_permission
+from app.core.redis import enforce_rate_limit
 from app.models.voice import Agent, AgentStatus, AgentVersion
 from app.models.voice_cloning import CustomVoice
 from app.schemas.voice import ConnectionOut
-from app.schemas.voice_cloning import CONSENT_ATTESTATION, PocketVoice, PocketVoiceList
-from app.services import ai_settings, audit
+from app.schemas.voice_cloning import (
+    CONSENT_ATTESTATION,
+    CloningState,
+    PocketVoice,
+    PocketVoiceList,
+    VoiceCloningEnable,
+    VoiceCloningStatus,
+)
+from app.services import ai_settings, audit, voice_samples
 
 log = logging.getLogger(__name__)
 
@@ -52,8 +68,12 @@ log = logging.getLogger(__name__)
 POCKET_HINTS = ("local-tts", "pocket")
 SETUP_URL = "https://huggingface.co/kyutai/pocket-tts"
 VOICE_ID = re.compile(r"^custom-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{16}$")
+# Anything in a server reply that looks like a Hugging Face token.
+HF_TOKEN = re.compile(r"hf_[A-Za-z0-9_-]{16,}")
+TERMS_URL = re.compile(r"https://huggingface\.co/[A-Za-z0-9_.\-/]{1,150}")
 MAX_NAME_CHARS = 60
 MAX_LISTED = 500
+CLONING_CHANGES_PER_MINUTE = 5
 NOT_POCKET = (
     "Voice cloning works with Pocket TTS connections: a self-hosted voice connection whose "
     "name or address contains 'pocket' or 'local-tts'."
@@ -62,9 +82,20 @@ OLD_SERVER = (
     "This Pocket TTS server has no voice cloning: rebuild it with the current image "
     "(docker compose --profile local-ai build local-tts, then restart local-tts)."
 )
+UPDATE_SERVER = (
+    "This Pocket TTS server is too old to turn voice cloning on or off from ATLAS: update it "
+    "(docker compose --profile local-ai build local-tts, then restart local-tts)."
+)
 CONSENT_REQUIRED = (
     "Confirm that you have the speaker's permission to clone their voice (consent_attestation)."
 )
+TERMS_REQUIRED = (
+    "Confirm that the token's Hugging Face account accepted the terms of kyutai/pocket-tts "
+    "(terms_accepted)."
+)
+BAD_CREDENTIAL = "The voice server did not accept this token: paste a Hugging Face read token."
+# The server's answer when ATLAS_LOCAL_TTS_API_KEY does not match (not a token problem).
+SERVER_KEY_REJECTED = "Invalid API key"
 
 
 class VoiceCloningUnavailableError(AppError):
@@ -158,19 +189,32 @@ async def _send(
         ) from None
 
 
-def _detail(response: httpx.Response) -> str:
+def _scrub(text: str, secret: str | None = None) -> str:
+    if secret:
+        text = text.replace(secret, "[REDACTED]")
+    return HF_TOKEN.sub("[REDACTED]", text)
+
+
+def _plain_detail(response: httpx.Response, secret: str | None = None) -> str | None:
     try:
         detail = response.json().get("detail")
     except (ValueError, AttributeError):
         detail = None
     if isinstance(detail, str) and detail.strip():
-        return detail.strip()[:500]
-    return f"The Pocket TTS server answered HTTP {response.status_code}."
+        return _scrub(detail.strip(), secret)[:500]
+    return None
 
 
-def _raise_for(response: httpx.Response) -> None:
+def _detail(response: httpx.Response, secret: str | None = None) -> str:
+    return (
+        _plain_detail(response, secret)
+        or f"The Pocket TTS server answered HTTP {response.status_code}."
+    )
+
+
+def _raise_for(response: httpx.Response, secret: str | None = None) -> NoReturn:
     status = response.status_code
-    detail = _detail(response)
+    detail = _detail(response, secret)
     if status == 501:
         raise VoiceCloningUnavailableError(detail, details={"setup_url": SETUP_URL})
     if status == 401:
@@ -210,19 +254,24 @@ def clean_name(raw: str) -> str:
 
 
 async def read_sample(file: UploadFile) -> bytes:
-    """Read at most the limit (+1 byte to detect overflow); WAV only, checked by content."""
+    """Read at most the limit (+1 byte to detect overflow)."""
     limit = get_settings().voice_clone_max_upload_bytes
     data = await file.read(limit + 1)
     if len(data) > limit:
         raise SampleTooLargeError(f"Voice samples must be {limit // (1024 * 1024)} MB or smaller.")
     if not data:
         raise ValidationFailedError("The voice sample is empty.", details={"field": "audio"})
-    if len(data) < 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
-        raise UnsupportedSampleError(
-            "Upload the sample as a WAV file. The ATLAS web app converts MP3, M4A and browser "
-            "recordings to WAV before uploading."
-        )
     return data
+
+
+async def prepare_sample(data: bytes) -> voice_samples.Sample:
+    """Any accepted audio format, as mono 16-bit 24 kHz WAV of 5 to 30 seconds."""
+    try:
+        return await voice_samples.normalize(data)
+    except voice_samples.SampleError as exc:
+        if exc.status == 415:
+            raise UnsupportedSampleError(exc.message) from None
+        raise ValidationFailedError(exc.message, details={"field": "audio"}) from None
 
 
 # ---------------------------------------------------------------- reads
@@ -261,13 +310,17 @@ async def list_voices(db: AsyncSession, ctx: TenantContext, connection_id: str) 
     response = await _send("GET", base, "/voices")
     if response.status_code in (404, 501):
         # Cloning is off (or an older server): built-in voices still come from the speech API.
-        message = OLD_SERVER if response.status_code == 404 else _detail(response)
+        if response.status_code == 404:
+            state, message = "unsupported", OLD_SERVER
+        else:
+            state, message = await _state_while_off(base, _detail(response))
         builtins = await _send("GET", base, "/audio/voices")
         if not builtins.is_success:
             _raise_for(builtins)
         return PocketVoiceList(
             voices=[v for raw in _data(builtins) if (v := _builtin(raw))],
             cloning_available=False,
+            cloning_state=state,
             setup_message=message,
             setup_url=SETUP_URL,
         )
@@ -282,7 +335,29 @@ async def list_voices(db: AsyncSession, ctx: TenantContext, connection_id: str) 
                 voices.append(_cloned(row, _sample_seconds(raw)))
         elif voice := _builtin(raw):
             voices.append(voice)
-    return PocketVoiceList(voices=voices, cloning_available=True)
+    return PocketVoiceList(voices=voices, cloning_available=True, cloning_state="on")
+
+
+async def _state_while_off(base: str, message: str) -> tuple[CloningState, str]:
+    """Whether a server without working voice cloning is turning it on, or why it failed.
+
+    Best effort: the voice list must not fail because of it.
+    """
+    try:
+        response = await _send("GET", base, "/cloning")
+    except AppError:
+        return "off", message
+    if response.status_code == 404:
+        return "unsupported", message  # cloning can only be set up on the server itself
+    if response.status_code != 200:
+        return "off", message
+    try:
+        status = _status(response, can_manage=False)
+    except AppError:
+        return "off", message
+    # "on" here means it came on between the two requests: the next list shows it.
+    state: CloningState = "enabling" if status.state == "on" else status.state
+    return state, status.message or message
 
 
 def _data(response: httpx.Response) -> list[dict[str, Any]]:
@@ -321,6 +396,7 @@ async def create_voice(
     clean = clean_name(name)
     conn = await _pocket_connection(db, ctx, connection_id)
     data = await read_sample(audio)
+    sample = await prepare_sample(data)
     base = await _base_url(conn)
     now = datetime.now(UTC)
     # Kept by the server with the voice, so the store itself shows the attestation's source.
@@ -334,7 +410,7 @@ async def create_voice(
         "/voices",
         read_seconds=get_settings().local_tts_timeout_seconds,
         data={"name": clean, "consent": "true", "consent_statement": statement},
-        files={"audio": ("sample.wav", data, "audio/wav")},
+        files={"audio": ("sample.wav", sample.wav, "audio/wav")},
     )
     if response.status_code == 404:
         raise VoiceCloningUnavailableError(OLD_SERVER, details={"setup_url": SETUP_URL})
@@ -378,6 +454,7 @@ async def create_voice(
             "consent_confirmed": True,
             "sample_seconds": seconds,
             "sample_bytes": len(data),
+            "sample_format": sample.source_format,
         },
         ip=ctx.meta.ip,
         user_agent=ctx.meta.user_agent,
@@ -456,6 +533,144 @@ async def delete_voice(
         resource_type="custom_voice",
         resource_id=voice_id,
         changes={"voice_id": voice_id, "name": row.name, "connection_id": connection_id},
+        ip=ctx.meta.ip,
+        user_agent=ctx.meta.user_agent,
+    )
+
+
+# ---------------------------------------------------------------- turning cloning on and off
+
+
+def _status(
+    response: httpx.Response, *, can_manage: bool, secret: str | None = None
+) -> VoiceCloningStatus:
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict) or body.get("state") not in ("off", "enabling", "on", "failed"):
+        raise IntegrationUnavailableError(
+            "The Pocket TTS server returned an unexpected voice cloning status."
+        )
+    message, terms, source = body.get("message"), body.get("terms_url"), body.get("token_source")
+    text = _scrub(message.strip(), secret)[:500] if isinstance(message, str) else ""
+    return VoiceCloningStatus(
+        state=body["state"],
+        message=text or None,
+        # Shown as a link, so only ever a Hugging Face page.
+        terms_url=terms if isinstance(terms, str) and TERMS_URL.fullmatch(terms) else SETUP_URL,
+        token_source=source if source in ("environment", "saved") else None,
+        can_manage=can_manage,
+    )
+
+
+OPERATOR_MANAGED = (
+    "Voice cloning on this platform is turned on or off by its operator. Ask them to set it up "
+    "on the voice server."
+)
+
+
+def _can_manage(ctx: TenantContext) -> bool:
+    return get_settings().voice_cloning_switch == "owners" and has_permission(
+        ctx.role, Permission.ORG_MANAGE
+    )
+
+
+def _require_switch() -> None:
+    if get_settings().voice_cloning_switch != "owners":
+        raise PermissionDeniedError(OPERATOR_MANAGED)
+
+
+async def cloning_status(
+    db: AsyncSession, ctx: TenantContext, connection_id: str
+) -> VoiceCloningStatus:
+    conn = await _pocket_connection(db, ctx, connection_id)
+    base = await _base_url(conn)
+    response = await _send("GET", base, "/cloning")
+    if response.status_code == 404:
+        return VoiceCloningStatus(
+            state="unsupported",
+            message=UPDATE_SERVER,
+            terms_url=SETUP_URL,
+            can_manage=_can_manage(ctx),
+        )
+    if response.status_code != 200:
+        _raise_for(response)
+    return _status(response, can_manage=_can_manage(ctx))
+
+
+def _raise_cloning(response: httpx.Response, *, token: str | None = None) -> NoReturn:
+    status = response.status_code
+    if status == 404:
+        raise VoiceCloningUnavailableError(UPDATE_SERVER, details={"setup_url": SETUP_URL})
+    if token is not None:
+        detail = _detail(response, token)
+        if status == 422:
+            # Plain messages only: a structured validation error could quote the token back.
+            message = _plain_detail(response, token) or BAD_CREDENTIAL
+            raise ValidationFailedError(message, details={"field": "hf_token"})
+        # 401: Hugging Face rejected the token (unless the server refused ATLAS's own API key);
+        # 403: the token's account has not accepted the terms of the gated weights.
+        if status == 403 or (status == 401 and detail != SERVER_KEY_REJECTED):
+            raise ValidationFailedError(
+                detail, details={"field": "hf_token", "terms_url": SETUP_URL}
+            )
+    _raise_for(response, token)
+
+
+async def enable_cloning(
+    db: AsyncSession, ctx: TenantContext, connection_id: str, data: VoiceCloningEnable
+) -> VoiceCloningStatus:
+    if data.terms_accepted is not True:
+        raise ValidationFailedError(
+            TERMS_REQUIRED, details={"field": "terms_accepted", "terms_url": SETUP_URL}
+        )
+    _require_switch()
+    await enforce_rate_limit(f"voice-cloning:{ctx.org_id}", CLONING_CHANGES_PER_MINUTE)
+    conn = await _pocket_connection(db, ctx, connection_id)
+    base = await _base_url(conn)
+    token = data.hf_token.get_secret_value()
+    # The server checks the token with Hugging Face before answering.
+    response = await _send("PUT", base, "/cloning", read_seconds=30.0, json={"hf_token": token})
+    if response.status_code not in (200, 202):
+        _raise_cloning(response, token=token)
+    try:
+        status = _status(response, can_manage=_can_manage(ctx), secret=token)
+    except IntegrationUnavailableError:
+        # Accepted, with a body this version does not understand: it is being turned on.
+        status = VoiceCloningStatus(
+            state="enabling", terms_url=SETUP_URL, can_manage=_can_manage(ctx)
+        )
+    await audit.record(
+        db,
+        action="voice_cloning.enable_requested",
+        organization_id=ctx.org_id,
+        actor_user_id=ctx.user_id,
+        resource_type="ai_connection",
+        resource_id=connection_id,
+        changes={"connection_id": connection_id, "terms_accepted": True, "state": status.state},
+        ip=ctx.meta.ip,
+        user_agent=ctx.meta.user_agent,
+    )
+    return status
+
+
+async def disable_cloning(db: AsyncSession, ctx: TenantContext, connection_id: str) -> None:
+    _require_switch()
+    await enforce_rate_limit(f"voice-cloning:{ctx.org_id}", CLONING_CHANGES_PER_MINUTE)
+    conn = await _pocket_connection(db, ctx, connection_id)
+    base = await _base_url(conn)
+    response = await _send("DELETE", base, "/cloning")
+    if response.status_code not in (200, 204):
+        _raise_cloning(response)
+    await audit.record(
+        db,
+        action="voice_cloning.disabled",
+        organization_id=ctx.org_id,
+        actor_user_id=ctx.user_id,
+        resource_type="ai_connection",
+        resource_id=connection_id,
+        changes={"connection_id": connection_id},
         ip=ctx.meta.ip,
         user_agent=ctx.meta.user_agent,
     )

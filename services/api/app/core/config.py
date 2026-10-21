@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -137,6 +137,11 @@ class Settings(BaseSettings):
     # Computing a voice takes a few seconds on CPU, longer while calls are speaking.
     local_tts_timeout_seconds: float = 120.0
     voice_clone_max_upload_bytes: int = 10 * 1024 * 1024
+    # Voice cloning is a setting of the Pocket TTS server, shared by every organization whose
+    # connections use it. "owners": an organization owner may turn it on or off from the web
+    # app (self-hosted, one company). "operator": only whoever runs the server can (its
+    # POCKET_TTS_HF_TOKEN); owners see the state but cannot change it (shared hosting).
+    voice_cloning_switch: Literal["owners", "operator"] = "owners"
 
     @field_validator("cors_origins", mode="before")
     @classmethod

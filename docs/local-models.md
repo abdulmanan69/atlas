@@ -755,6 +755,12 @@ server's `/v1/voices` endpoints answer 501 again at once and cloned voices are n
 spoken. The downloaded weights and the cloned voices stay in the volume, so turning it on
 again (with a token) is quick and the voices come back.
 
+**Who may switch it.** Voice cloning is a setting of the voice server, so it applies to every
+organization whose connections use that server. By default (`ATLAS_VOICE_CLONING_SWITCH=owners`)
+an organization owner may turn it on or off; every change is in the audit log. On shared
+hosting set `ATLAS_VOICE_CLONING_SWITCH=operator`: owners then see the state but only the
+operator can change it, with the environment token below.
+
 **Or set the token in the environment** (a server you run yourself): put it in `.env` as
 `POCKET_TTS_HF_TOKEN=hf_…`, or let the demo setup do it: `.\make.ps1 demo -HfToken hf_…` or
 `bash infra/scripts/setup_local_demo.sh --hf-token hf_…` (better: set `ATLAS_DEMO_HF_TOKEN`
@@ -782,8 +788,11 @@ limit. Switching in place peaked at 1.1 GiB in a test run. Synthesis waits only 
 copy, not the download, and the reply openers are synthesised again afterwards.
 
 **Limits.** One speaker, 5 to 30 seconds after decoding, at most 10 MB. The web app
-accepts WAV, MP3 and M4A files or records in the browser (a timer stops it at 30 s), and
-converts the sample to a 24 kHz mono WAV before uploading. The server reads WAV only
+accepts WAV, MP3 and M4A files or records in the browser (a timer stops it at 30 s). The
+ATLAS API (`POST /api/v1/ai/connections/{id}/voices`, also with an API key) accepts WAV,
+MP3, M4A (AAC), OGG (Opus or Vorbis), WebM (Opus) and FLAC: it decodes the sample in a
+separate, time-limited process, mixes it down to mono 24 kHz 16-bit WAV and checks the
+length before anything reaches the voice server. The server itself reads WAV only
 (16/24/32-bit PCM or float, common sample rates) on purpose: it has no MP3 or AAC decoder.
 A quiet room and 10 to 20 seconds of natural speech work best. One voice is computed at a
 time (a second request gets 429), and the server keeps at most

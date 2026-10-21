@@ -614,6 +614,34 @@ export interface paths {
         patch: operations["update_connection_api_v1_ai_connections__connection_id__patch"];
         trace?: never;
     };
+    "/api/v1/ai/connections/{connection_id}/voice-cloning": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether voice cloning is on for a Pocket TTS connection's server
+         * @description `state` is `off`, `enabling`, `on`, `failed` or `unsupported` (a server too old to be managed from here). Poll this while `state` is `enabling`. `can_manage` is true for organization owners, who may turn voice cloning on or off. Voice cloning is a setting of the Pocket TTS server, so it applies to every organization whose connections use that server.
+         */
+        get: operations["get_voice_cloning_api_v1_ai_connections__connection_id__voice_cloning_get"];
+        /**
+         * Turn voice cloning on with a Hugging Face token (organization owners)
+         * @description Gives the Pocket TTS server a Hugging Face read token of an account that accepted the terms of kyutai/pocket-tts (`terms_url`), which forbid cloning anyone's voice without their consent. The server checks the token, then downloads the voice-cloning weights in the background: the answer is `state: enabling`; poll `GET .../voice-cloning` until it is `on` or `failed`. The token is passed to the server only; this platform never stores, logs or returns it. Limited to 5 changes a minute per organization. Voice cloning is a setting of the Pocket TTS server, so it applies to every organization whose connections use that server.
+         */
+        put: operations["enable_voice_cloning_api_v1_ai_connections__connection_id__voice_cloning_put"];
+        post?: never;
+        /**
+         * Turn voice cloning off (organization owners)
+         * @description The server forgets the token it was given and stops cloning new voices; voices already cloned are kept. Refused (409) when the server's token is set where the server runs (`token_source: environment`). Limited to 5 changes a minute per organization. Voice cloning is a setting of the Pocket TTS server, so it applies to every organization whose connections use that server.
+         */
+        delete: operations["disable_voice_cloning_api_v1_ai_connections__connection_id__voice_cloning_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/ai/connections/{connection_id}/voices": {
         parameters: {
             query?: never;
@@ -623,13 +651,13 @@ export interface paths {
         };
         /**
          * Pocket TTS voices of a connection, with this organization's cloned voices
-         * @description Built-in voices, and the voices this organization cloned on the connection's server. `cloning_available` is false (with the setup steps) when the server has no voice-cloning weights.
+         * @description Built-in voices, and the voices this organization cloned on the connection's server. `cloning_available` is false (with the setup steps) when the server has no voice-cloning weights; `cloning_state` says whether it is off, being turned on, or failed to turn on.
          */
         get: operations["list_pocket_voices_api_v1_ai_connections__connection_id__voices_get"];
         put?: never;
         /**
          * Clone a voice from a short sample of a speaker who gave permission
-         * @description Multipart upload: `name`, `audio` (WAV, 5 to 30 seconds after decoding, at most 10 MB) and `consent_attestation=true`. Only clone the voice of a speaker who gave permission. Do not use a cloned voice to deceive anyone, for fraudulent calls, or to present generated speech as the real person. The sample is forwarded to the Pocket TTS server, which keeps only the computed voice; it is not stored by this platform. The consent attestation is recorded in the audit log.
+         * @description Multipart upload: `name`, `audio` and `consent_attestation=true`. The sample may be WAV, MP3, M4A (AAC), OGG (Opus or Vorbis), WebM (Opus) or FLAC, at most 10 MB, and must be 5 to 30 seconds long; it is converted to mono 24 kHz WAV before it is sent to the server. Use a clear recording of one person speaking. Only clone the voice of a speaker who gave permission. Do not use a cloned voice to deceive anyone, for fraudulent calls, or to present generated speech as the real person. The sample is forwarded to the Pocket TTS server, which keeps only the computed voice; it is not stored by this platform. The consent attestation is recorded in the audit log.
          */
         post: operations["clone_voice_api_v1_ai_connections__connection_id__voices_post"];
         delete?: never;
@@ -2762,7 +2790,7 @@ export interface components {
             /**
              * Audio
              * Format: binary
-             * @description WAV sample, 5 to 30 seconds, at most 10 MB
+             * @description WAV, MP3, M4A, OGG, WebM or FLAC; 5 to 30 seconds, at most 10 MB
              */
             audio: string;
             /**
@@ -5096,6 +5124,12 @@ export interface components {
              */
             cloning_available: boolean;
             /**
+             * Cloning State
+             * @description `off`: the server has no Hugging Face token, so voices cannot be cloned. `enabling`: the server is downloading and loading the voice-cloning weights. `on`: voices can be cloned. `failed`: the last attempt to turn it on failed; `message` says why. `unsupported`: the server is too old to turn voice cloning on or off from here; update it.
+             * @enum {string}
+             */
+            cloning_state: "off" | "enabling" | "on" | "failed" | "unsupported";
+            /**
              * Setup Message
              * @description What the server needs for voice cloning, when unavailable
              */
@@ -5792,6 +5826,50 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** VoiceCloningEnable */
+        VoiceCloningEnable: {
+            /**
+             * Hf Token
+             * Format: password
+             * @description A Hugging Face read token (it starts with hf_) of an account that accepted the terms of kyutai/pocket-tts. It is sent to the voice server, which keeps it to download the weights; this platform never stores, logs or returns it.
+             */
+            hf_token: string;
+            /**
+             * Terms Accepted
+             * @description Must be true: confirms that the token's Hugging Face account accepted the terms of kyutai/pocket-tts, which forbid cloning anyone's voice without their consent.
+             * @default false
+             */
+            terms_accepted?: boolean;
+        };
+        /** VoiceCloningStatus */
+        VoiceCloningStatus: {
+            /**
+             * Can Manage
+             * @description True when you may turn voice cloning on or off (organization owners)
+             */
+            can_manage: boolean;
+            /**
+             * Message
+             * @description What is happening or what went wrong, from the voice server
+             */
+            message?: string | null;
+            /**
+             * State
+             * @description `off`: the server has no Hugging Face token, so voices cannot be cloned. `enabling`: the server is downloading and loading the voice-cloning weights. `on`: voices can be cloned. `failed`: the last attempt to turn it on failed; `message` says why. `unsupported`: the server is too old to turn voice cloning on or off from here; update it.
+             * @enum {string}
+             */
+            state: "off" | "enabling" | "on" | "failed" | "unsupported";
+            /**
+             * Terms Url
+             * @description Where a Hugging Face account accepts the terms of the voice-cloning weights
+             */
+            terms_url: string;
+            /**
+             * Token Source
+             * @description Where the server's Hugging Face token comes from: `environment` (set by whoever runs the server; it cannot be turned off here), `saved` (given through this API) or null (no token).
+             */
+            token_source?: ("environment" | "saved") | null;
         };
         /** VoiceOption */
         VoiceOption: {
@@ -8877,6 +8955,263 @@ export interface operations {
             };
         };
     };
+    get_voice_cloning_api_v1_ai_connections__connection_id__voice_cloning_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceCloningStatus"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Pocket TTS server unreachable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    enable_voice_cloning_api_v1_ai_connections__connection_id__voice_cloning_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VoiceCloningEnable"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceCloningStatus"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Voice cloning is already being turned on, or the server's token is set where the server runs */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Terms not confirmed, or Hugging Face refused the token (for example, its account has not accepted the terms: `details.terms_url` links to them) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many changes; try again in a minute */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The Pocket TTS server is too old to turn voice cloning on or off; update it */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Pocket TTS server or Hugging Face unreachable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    disable_voice_cloning_api_v1_ai_connections__connection_id__voice_cloning_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The token is set where the server runs */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many changes; try again in a minute */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The Pocket TTS server is too old to turn voice cloning on or off; update it */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Pocket TTS server unreachable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_pocket_voices_api_v1_ai_connections__connection_id__voices_get: {
         parameters: {
             query?: never;
@@ -8995,7 +9330,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Sample is not a WAV file */
+            /** @description Sample is not in a supported audio format, or could not be read */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -9004,7 +9339,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation failed */
+            /** @description Validation failed, for example a sample shorter than 5 or longer than 30 seconds */
             422: {
                 headers: {
                     [name: string]: unknown;
