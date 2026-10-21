@@ -1,11 +1,11 @@
 /**
  * "Clone a voice" for Pocket TTS connections: name, a 5-30 s sample (upload or record),
- * and the speaker's permission. When the server has no voice-cloning weights, the dialog
- * shows the exact setup steps instead of the form.
+ * and the speaker's permission. When voice cloning is not on for the server yet, the dialog
+ * first shows the step that turns it on (owners), then the form.
  */
 import { useMutation } from "@tanstack/react-query";
 import { CloudUpload, FileAudio, Loader2, Pause, Play, ShieldCheck, X } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef, useState, type DragEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,8 @@ import { Field, FormError } from "@/components/ui/form";
 import { Checkbox, Input, Skeleton } from "@/components/ui/primitives";
 import { Segmented } from "@/components/ui/segmented";
 import { useInvalidate } from "@/features/queries";
-import { CLONING_TERMS_URL, CONSENT_ATTESTATION, cloneVoice, cloningUnavailable, type PocketVoice } from "@/features/voice/voice-cloning";
+import { CONSENT_ATTESTATION, cloneVoice, cloningUnavailable, type PocketVoice } from "@/features/voice/voice-cloning";
+import { VoiceCloningSetup } from "@/features/voice/voice-cloning-setup";
 import {
   formatSeconds,
   MAX_NAME_CHARS,
@@ -37,18 +38,17 @@ export function CloneVoiceDialog({
   onOpenChange,
   connectionId,
   available,
-  setupMessage,
   onCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   connectionId: string;
-  /** False when the server answered that cloning is not set up. */
+  /** False when voice cloning is not on for the server. */
   available: boolean;
-  setupMessage?: string | null;
   onCreated?: (voice: PocketVoice) => void;
 }) {
   const invalidate = useInvalidate();
+  const [mode, setMode] = useState<"setup" | "form">(available ? "form" : "setup");
   const [name, setName] = useState("");
   const [source, setSource] = useState<Source>("upload");
   const [sample, setSample] = useState<VoiceSample | null>(null);
@@ -65,10 +65,19 @@ export function CloneVoiceDialog({
       onCreated?.(voice);
       onOpenChange(false);
     },
+    onError: (e) => {
+      // Turned off on the server meanwhile: back to the step that turns it on.
+      if (cloningUnavailable(e)) setMode("setup");
+    },
   });
 
-  const unavailable = !available || cloningUnavailable(create.error);
-  const message = cloningUnavailable(create.error) ? errorMessage(create.error) : setupMessage;
+  const unavailable = mode === "setup";
+  const resetCreate = create.reset;
+  const ready = useCallback(() => {
+    setMode("form");
+    resetCreate();
+    void invalidate("ai", "pocket-voices", connectionId);
+  }, [resetCreate, invalidate, connectionId]);
   const errors: CloneErrors = submitted ? validateClone({ name, consent, sample }) : {};
   const sampleProblem = sampleError ?? errors.sample;
 
@@ -109,8 +118,8 @@ export function CloneVoiceDialog({
       open={open}
       onOpenChange={onOpenChange}
       width="max-w-xl"
-      title={unavailable ? "Set up voice cloning" : "Clone a voice"}
-      description={unavailable ? "This Pocket TTS server can't clone voices yet. Built-in voices keep working." : "Create a voice for your agents from a short recording of a real person who agreed to it."}
+      title={unavailable ? "Turn on voice cloning" : "Clone a voice"}
+      description={unavailable ? "Voice cloning isn't on for this voice server yet. Built-in voices keep working." : "Create a voice for your agents from a short recording of a real person who agreed to it."}
       footer={
         unavailable ? (
           <Button onClick={() => onOpenChange(false)}>Close</Button>
@@ -127,7 +136,7 @@ export function CloneVoiceDialog({
       }
     >
       {unavailable ? (
-        <CloningSetup message={message} />
+        <VoiceCloningSetup connectionId={connectionId} onReady={ready} />
       ) : (
         <div className="flex flex-col gap-4">
           {create.error ? <FormError message={errorMessage(create.error)} /> : null}
@@ -176,7 +185,7 @@ export function CloneVoiceDialog({
                 {sampleProblem}
               </p>
             ) : (
-              <p className="text-[12px] text-muted">5 to 30 seconds of one person speaking clearly, without music or other voices. WAV, MP3 or M4A, up to 10 MB.</p>
+              <p className="text-[12px] text-muted">5 to 30 seconds of one person speaking clearly, without music or other voices. WAV, MP3, M4A, OGG, WebM or FLAC, up to 10 MB.</p>
             )}
           </div>
 
@@ -243,7 +252,7 @@ function UploadArea({ onFile, disabled }: { onFile: (file: File | null) => void;
       >
         <CloudUpload className="size-5 text-muted" aria-hidden />
         <span className="text-[13px] text-ink-2">Drop a file here or click to choose</span>
-        <span className="text-[12px] text-muted">WAV, MP3 or M4A · 5 to 30 seconds · up to 10 MB</span>
+        <span className="text-[12px] text-muted">WAV, MP3, M4A, OGG, WebM or FLAC · 5 to 30 seconds · up to 10 MB</span>
       </div>
       <input
         ref={input}
@@ -304,42 +313,6 @@ function SamplePreview({ sample, onRemove }: { sample: VoiceSample; onRemove: ()
       <Button type="button" size="icon-sm" variant="ghost" aria-label="Remove the sample" onClick={onRemove}>
         <X />
       </Button>
-    </div>
-  );
-}
-
-/** Exact steps to turn on cloning on the Pocket TTS server (shown for HTTP 501). */
-export function CloningSetup({ message }: { message?: string | null }) {
-  return (
-    <div className="flex flex-col gap-3 text-[13px]">
-      <div role="status" className="rounded-md border border-warn/30 bg-warn-soft px-3 py-2 text-warn">
-        {message || "Voice cloning needs the gated weights: accept the terms and set HF_TOKEN."}
-      </div>
-      <ol className="list-decimal space-y-2 pl-5 text-ink-2">
-        <li>
-          Sign in at Hugging Face and accept the terms of{" "}
-          <a href={CLONING_TERMS_URL} target="_blank" rel="noreferrer" className="font-medium text-accent hover:underline">
-            kyutai/pocket-tts
-          </a>
-          . The voice-cloning weights are gated; their terms forbid cloning anyone without consent.
-        </li>
-        <li>
-          Create a <strong>read</strong> access token for that account at{" "}
-          <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer" className="font-medium text-accent hover:underline">
-            huggingface.co/settings/tokens
-          </a>
-          .
-        </li>
-        <li>
-          Add it to the <code className="font-mono text-[12px]">.env</code> file next to <code className="font-mono text-[12px]">docker-compose.yml</code>:{" "}
-          <code className="rounded bg-surface-2 px-1 font-mono text-[12px]">POCKET_TTS_HF_TOKEN=hf_…</code>. The demo setup does this for you with{" "}
-          <code className="font-mono text-[12px]">-HfToken</code> (Windows) or <code className="font-mono text-[12px]">--hf-token</code> (Linux, macOS).
-        </li>
-        <li>
-          Restart the voice server: <code className="rounded bg-surface-2 px-1 font-mono text-[12px]">docker compose --profile local-ai up -d local-tts</code>. It downloads the
-          cloning weights once (about 0.2 GB), then this dialog shows the form.
-        </li>
-      </ol>
     </div>
   );
 }

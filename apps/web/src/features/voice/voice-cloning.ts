@@ -56,3 +56,33 @@ export function deleteVoice(connectionId: string, voiceId: string): Promise<unkn
 export function cloningUnavailable(err: unknown): boolean {
   return err instanceof ApiError && err.status === 501;
 }
+
+export type VoiceCloningStatus = Schemas["VoiceCloningStatus"];
+
+export const cloningStatusKey = (o: string | null, connectionId: string) => ["org", o, "ai", "voice-cloning", connectionId] as const;
+
+/** Whether voice cloning is on for the connection's server; polls while it is being turned on. */
+export function useCloningStatus(connectionId: string) {
+  const o = useOrgId();
+  return useQuery({
+    queryKey: cloningStatusKey(o, connectionId),
+    queryFn: () => unwrap(api.GET("/api/v1/ai/connections/{connection_id}/voice-cloning", { params: { path: { connection_id: connectionId } } })),
+    enabled: !!o && !!connectionId,
+    retry: false,
+    refetchInterval: (q) => (q.state.data?.state === "enabling" ? 2000 : false),
+  });
+}
+
+/** Owners only. The token goes to the voice server; ATLAS never stores it. */
+export function enableCloning(connectionId: string, hfToken: string): Promise<VoiceCloningStatus> {
+  return unwrap(
+    api.PUT("/api/v1/ai/connections/{connection_id}/voice-cloning", {
+      params: { path: { connection_id: connectionId } },
+      body: { hf_token: hfToken.trim(), terms_accepted: true },
+    }),
+  );
+}
+
+export function disableCloning(connectionId: string): Promise<unknown> {
+  return unwrap(api.DELETE("/api/v1/ai/connections/{connection_id}/voice-cloning", { params: { path: { connection_id: connectionId } } }));
+}

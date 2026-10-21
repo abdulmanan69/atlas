@@ -1,7 +1,7 @@
 /**
  * Voice setting for Pocket TTS connections: built-in voices plus this organization's cloned
- * voices (badged "Cloned"), "Clone a voice" for owners and admins, and delete with
- * confirmation.
+ * voices (badged "Cloned"), "Clone a voice" for owners and admins, delete with
+ * confirmation, and whether voice cloning is on (owners can turn it off).
  */
 import { useMutation } from "@tanstack/react-query";
 import { Mic, Trash2 } from "lucide-react";
@@ -14,7 +14,7 @@ import { ConfirmDialog } from "@/components/ui/dialog";
 import { Badge, Input, Label } from "@/components/ui/primitives";
 import { useInvalidate } from "@/features/queries";
 import { CloneVoiceDialog } from "@/features/voice/clone-voice-dialog";
-import { deleteVoice, usePocketVoices, type PocketVoice } from "@/features/voice/voice-cloning";
+import { deleteVoice, disableCloning, usePocketVoices, type PocketVoice } from "@/features/voice/voice-cloning";
 import { errorMessage } from "@/lib/api";
 import { useHasRole } from "@/lib/session";
 
@@ -36,9 +36,23 @@ export function PocketVoicePicker({
   const id = useId();
   const voices = usePocketVoices(connectionId);
   const canManage = useHasRole("admin") && !disabled;
+  const isOwner = useHasRole("owner") && !disabled;
   const invalidate = useInvalidate();
   const [cloning, setCloning] = useState(false);
   const [removing, setRemoving] = useState<PocketVoice | null>(null);
+  const [turningOff, setTurningOff] = useState(false);
+
+  const turnOff = useMutation({
+    mutationFn: () => disableCloning(connectionId),
+    onSuccess: () => {
+      toast.success("Voice cloning is off. Cloned voices stay on the server and come back when it is turned on again.");
+      setTurningOff(false);
+      void invalidate("ai", "pocket-voices", connectionId);
+      void invalidate("ai", "voice-cloning", connectionId);
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const cloningState = voices.data?.cloning_state ?? (voices.data?.cloning_available ? "on" : "off");
 
   const remove = useMutation({
     mutationFn: (v: PocketVoice) => deleteVoice(connectionId, v.id),
@@ -123,7 +137,22 @@ export function PocketVoicePicker({
           ) : (
             "Built-in voices are cleared for commercial use. Cloned voices need the speaker's permission."
           )}
-          {voices.data && !voices.data.cloning_available && canManage ? <span>· Voice cloning isn't set up on this server.</span> : null}
+          {voices.data && canManage ? (
+            cloningState === "on" ? (
+              <span className="flex items-center gap-1">
+                · Voice cloning is on
+                {isOwner ? (
+                  <Button type="button" size="sm" variant="link" className="h-auto px-0 text-[11.5px]" onClick={() => setTurningOff(true)}>
+                    Turn off
+                  </Button>
+                ) : null}
+              </span>
+            ) : cloningState === "enabling" ? (
+              <span>· Voice cloning is being turned on…</span>
+            ) : (
+              <span>· Voice cloning is off for this server. Clone a voice to turn it on.</span>
+            )
+          ) : null}
         </p>
       )}
       {cloning && voices.data ? (
@@ -132,10 +161,18 @@ export function PocketVoicePicker({
           onOpenChange={(o) => !o && setCloning(false)}
           connectionId={connectionId}
           available={voices.data.cloning_available}
-          setupMessage={voices.data.setup_message}
           onCreated={(v) => onChange(v.id)}
         />
       ) : null}
+      <ConfirmDialog
+        open={turningOff}
+        onOpenChange={(o) => !o && setTurningOff(false)}
+        title="Turn voice cloning off?"
+        description="The voice server forgets its Hugging Face token. Agents using cloned voices can no longer speak with them until it is turned on again; the voices themselves are kept. This applies to every organization using this voice server."
+        confirmLabel="Turn off"
+        loading={turnOff.isPending}
+        onConfirm={() => turnOff.mutate()}
+      />
       <ConfirmDialog
         open={removing !== null}
         onOpenChange={(o) => !o && setRemoving(null)}

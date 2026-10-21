@@ -46,6 +46,33 @@ afterEach(() => {
 
 const sample = (seconds: number): VoiceSample => ({ wav: new Blob(["x"]), seconds, source: "upload", label: "a.wav" });
 
+const TERMS = "https://huggingface.co/kyutai/pocket-tts";
+const status = (state: string, extra: Record<string, unknown> = {}) => ({ state, message: null, terms_url: TERMS, token_source: null, can_manage: true, ...extra });
+
+/** Answers by method and path; records every request. */
+function route(handlers: Record<string, (req: Request) => Response | Promise<Response>>) {
+  const calls: Request[] = [];
+  const fetchMock = vi.fn(async (req: Request) => {
+    calls.push(req);
+    const key = `${req.method} ${new URL(req.url).pathname}`;
+    const handler = handlers[key];
+    if (!handler) throw new Error(`unexpected request ${key}`);
+    return handler(req);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return calls;
+}
+
+function signInAs(role: "owner" | "admin") {
+  session.getState().signIn({
+    access_token: "t",
+    token_type: "bearer",
+    expires_in: 900,
+    user: { id: "u1", email: "a@example.com", full_name: "Ada", created_at: "2026-01-01T00:00:00Z" },
+    memberships: [{ id: "m1", role, status: "active", organization: { id: "org-1", name: "Org", slug: "org", timezone: "UTC", default_country: "GB", created_at: "2026-01-01T00:00:00Z" } }],
+  } as never);
+}
+
 describe("clone form validation", () => {
   it("requires a name, a 5-30 s sample and the speaker's permission", () => {
     expect(validateClone({ name: " ", consent: false, sample: null })).toEqual({
@@ -59,9 +86,10 @@ describe("clone form validation", () => {
     expect(validateClone({ name: "Sam", consent: true, sample: sample(6) })).toEqual({});
   });
 
-  it("accepts WAV, MP3 and M4A files up to 10 MB", () => {
+  it("accepts WAV, MP3, M4A, OGG, WebM and FLAC files up to 10 MB", () => {
     expect(validateSampleFile(new File(["x"], "sam.wav"))).toBeNull();
     expect(validateSampleFile(new File(["x"], "sam.MP3"))).toBeNull();
+    for (const name of ["sam.ogg", "sam.webm", "sam.flac"]) expect(validateSampleFile(new File(["x"], name))).toBeNull();
     expect(validateSampleFile(new File(["x"], "memo", { type: "audio/mp4" }))).toBeNull();
     expect(validateSampleFile(new File(["x"], "setup.exe"))).toMatch(/isn't a supported type/);
     expect(validateSampleFile(new File([], "empty.wav"))).toMatch(/is empty/);
@@ -137,44 +165,123 @@ describe("CloneVoiceDialog", () => {
     append.mockRestore();
   });
 
-  it("switches to the setup steps when the server answers 501", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => json(501, { error: { code: "voice_cloning_unavailable", message: SETUP, details: { setup_url: "https://huggingface.co/kyutai/pocket-tts" } } })));
+  it("goes back to turning voice cloning on when the server answers 501", async () => {
+    route({
+      "POST /api/v1/ai/connections/c1/voices": () => json(501, { error: { code: "voice_cloning_unavailable", message: SETUP, details: { setup_url: TERMS } } }),
+      "GET /api/v1/ai/connections/c1/voice-cloning": () => json(200, status("off")),
+    });
     renderWithProviders(<CloneVoiceDialog open onOpenChange={() => undefined} connectionId="c1" available />);
     await userEvent.type(screen.getByPlaceholderText("Voice name"), "Sam");
     await userEvent.upload(screen.getByTestId("voice-sample-input"), new File(["wav"], "sam.wav", { type: "audio/wav" }));
     await screen.findByText("sam.wav");
     await userEvent.click(screen.getByRole("checkbox", { name: "I have the speaker's permission to clone their voice." }));
     await userEvent.click(screen.getByRole("button", { name: "Clone voice" }));
-    expect(await screen.findByText("Set up voice cloning")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent(SETUP);
-    expect(screen.getByText(/POCKET_TTS_HF_TOKEN=hf_/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "kyutai/pocket-tts" })).toHaveAttribute("href", "https://huggingface.co/kyutai/pocket-tts");
+    expect(await screen.findByRole("heading", { name: "Turn on voice cloning" })).toBeInTheDocument();
+    expect(await screen.findByLabelText(/Hugging Face access token/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /kyutai\/pocket-tts/ })).toHaveAttribute("href", TERMS);
+  });
+});
+
+describe("Turning voice cloning on", () => {
+  afterEach(() => signInAs("admin"));
+
+  it("lets an owner turn it on with a token, then shows the clone form", async () => {
+    signInAs("owner");
+    let state = "off";
+    const calls = route({
+      "GET /api/v1/ai/connections/c1/voice-cloning": () => json(200, status(state, { token_source: state === "off" ? null : "saved" })),
+      "PUT /api/v1/ai/connections/c1/voice-cloning": () => {
+        state = "enabling";
+        return json(202, status("enabling", { token_source: "saved" }));
+      },
+      "GET /api/v1/ai/connections/c1/voices": () => json(200, { voices: [], cloning_available: state === "on", cloning_state: state }),
+    });
+    renderWithProviders(<CloneVoiceDialog open onOpenChange={() => undefined} connectionId="c1" available={false} />);
+    const token = await screen.findByLabelText(/Hugging Face access token/);
+
+    // Nothing is sent until the token looks right and the terms are confirmed.
+    await userEvent.type(token, "not a token");
+    await userEvent.click(screen.getByRole("button", { name: /Turn on voice cloning/ }));
+    expect(screen.getByText("A Hugging Face token starts with hf_ and has no spaces.")).toBeInTheDocument();
+    expect(screen.getByText("Confirm that the token's account accepted the terms.")).toBeInTheDocument();
+    expect(calls.filter((r) => r.method === "PUT")).toHaveLength(0);
+
+    await userEvent.clear(token);
+    await userEvent.type(token, "hf_TestOnlyNotARealToken0123456789ab");
+    await userEvent.click(screen.getByRole("checkbox", { name: /accepted the terms of kyutai\/pocket-tts/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Turn on voice cloning/ }));
+    expect(await screen.findByText("Turning voice cloning on…")).toBeInTheDocument();
+    const put = calls.find((r) => r.method === "PUT")!;
+    expect(await put.clone().json()).toEqual({ hf_token: "hf_TestOnlyNotARealToken0123456789ab", terms_accepted: true });
+
+    state = "on"; // the server finished downloading the weights
+    expect(await screen.findByRole("button", { name: "Clone voice" }, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Clone a voice" })).toBeInTheDocument();
+  });
+
+  it("shows why the voice server refused the token", async () => {
+    signInAs("owner");
+    route({
+      "GET /api/v1/ai/connections/c1/voice-cloning": () => json(200, status("off")),
+      "PUT /api/v1/ai/connections/c1/voice-cloning": () =>
+        json(422, { error: { code: "validation_failed", message: "Hugging Face says this token's account has not accepted the terms.", details: { field: "hf_token", terms_url: TERMS } } }),
+    });
+    renderWithProviders(<CloneVoiceDialog open onOpenChange={() => undefined} connectionId="c1" available={false} />);
+    await userEvent.type(await screen.findByLabelText(/Hugging Face access token/), "hf_TestOnlyNotARealToken0123456789ab");
+    await userEvent.click(screen.getByRole("checkbox", { name: /accepted the terms of kyutai\/pocket-tts/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Turn on voice cloning/ }));
+    expect(await screen.findByText("Hugging Face says this token's account has not accepted the terms.")).toBeInTheDocument();
+    expect(screen.getByLabelText(/Hugging Face access token/)).toHaveValue("hf_TestOnlyNotARealToken0123456789ab");
+  });
+
+  it("tells everyone else who can turn it on, and shows a failed attempt", async () => {
+    route({ "GET /api/v1/ai/connections/c1/voice-cloning": () => json(200, status("failed", { can_manage: false, message: "The voice-cloning model could not be downloaded." })) });
+    renderWithProviders(<CloneVoiceDialog open onOpenChange={() => undefined} connectionId="c1" available={false} />);
+    expect(await screen.findByText("The voice-cloning model could not be downloaded.")).toBeInTheDocument();
+    expect(screen.getByText(/turned on by an organization owner/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Hugging Face access token/)).not.toBeInTheDocument();
   });
 });
 
 describe("PocketVoicePicker", () => {
-  it("lists cloned voices with a badge and explains setup when cloning is off", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
+  afterEach(() => signInAs("admin"));
+
+  it("lists cloned voices with a badge and leads to turning voice cloning on", async () => {
+    route({
+      "GET /api/v1/ai/connections/c1/voices": () =>
         json(200, {
           voices: [
             { id: "alba", name: "alba", cloned: false, license: "CC-BY-4.0", default: true },
             { id: "custom-sam-0123456789abcdef", name: "Sam", cloned: true, sample_seconds: 6 },
           ],
           cloning_available: false,
+          cloning_state: "off",
           setup_message: SETUP,
-          setup_url: "https://huggingface.co/kyutai/pocket-tts",
+          setup_url: TERMS,
         }),
-      ),
-    );
+      "GET /api/v1/ai/connections/c1/voice-cloning": () => json(200, status("off", { can_manage: false })),
+    });
     renderWithProviders(<PocketVoicePicker label="voice" value="custom-sam-0123456789abcdef" onChange={() => undefined} connectionId="c1" />);
     expect(await screen.findByText("Selected: Sam")).toBeInTheDocument();
     expect(screen.getByText("Cloned")).toBeInTheDocument();
-    expect(screen.getByText(/Voice cloning isn't set up on this server/)).toBeInTheDocument();
+    expect(screen.getByText(/Voice cloning is off for this server/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Clone a voice/ }));
-    expect(await screen.findByText("Set up voice cloning")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent(SETUP);
+    expect(await screen.findByRole("heading", { name: "Turn on voice cloning" })).toBeInTheDocument();
+    expect(await screen.findByText(/turned on by an organization owner/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Clone voice" })).not.toBeInTheDocument();
+  });
+
+  it("lets an owner turn voice cloning off after confirming", async () => {
+    signInAs("owner");
+    const calls = route({
+      "GET /api/v1/ai/connections/c1/voices": () => json(200, { voices: [{ id: "alba", name: "alba", cloned: false, default: true }], cloning_available: true, cloning_state: "on" }),
+      "DELETE /api/v1/ai/connections/c1/voice-cloning": () => new Response(null, { status: 204 }),
+    });
+    renderWithProviders(<PocketVoicePicker label="voice" value="alba" onChange={() => undefined} connectionId="c1" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Turn off" }));
+    expect(screen.getByText("Turn voice cloning off?")).toBeInTheDocument();
+    expect(calls.filter((r) => r.method === "DELETE")).toHaveLength(0);
+    await userEvent.click(screen.getAllByRole("button", { name: "Turn off" }).at(-1)!);
+    await waitFor(() => expect(calls.filter((r) => r.method === "DELETE")).toHaveLength(1));
   });
 });

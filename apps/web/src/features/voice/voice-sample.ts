@@ -1,6 +1,6 @@
 /**
  * Voice samples for Pocket TTS voice cloning: client-side checks, and conversion of any
- * sample (WAV, MP3, M4A or a browser recording) to a small 24 kHz mono 16-bit WAV, the only
+ * sample (WAV, MP3, M4A, OGG, WebM, FLAC or a browser recording) to a small 24 kHz mono 16-bit WAV, the only
  * format the Pocket TTS server reads. The server re-checks everything.
  */
 
@@ -14,6 +14,9 @@ export const SAMPLE_TYPES: { ext: string; mime: string[] }[] = [
   { ext: ".wav", mime: ["audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave"] },
   { ext: ".mp3", mime: ["audio/mpeg", "audio/mp3"] },
   { ext: ".m4a", mime: ["audio/mp4", "audio/x-m4a", "audio/m4a", "audio/aac"] },
+  { ext: ".ogg", mime: ["audio/ogg", "audio/opus", "audio/vorbis"] },
+  { ext: ".webm", mime: ["audio/webm"] },
+  { ext: ".flac", mime: ["audio/flac", "audio/x-flac"] },
 ];
 export const SAMPLE_ACCEPT = SAMPLE_TYPES.flatMap((t) => [t.ext, ...t.mime]).join(",");
 
@@ -42,7 +45,7 @@ export function formatSeconds(s: number): string {
 export function validateSampleFile(file: File): string | null {
   const lower = file.name.toLowerCase();
   const known = SAMPLE_TYPES.some((t) => lower.endsWith(t.ext) || t.mime.includes(file.type));
-  if (!known) return `“${file.name}” isn't a supported type. Use WAV, MP3 or M4A.`;
+  if (!known) return `“${file.name}” isn't a supported type. Use WAV, MP3, M4A, OGG, WebM or FLAC.`;
   if (file.size === 0) return `“${file.name}” is empty.`;
   if (file.size > MAX_SAMPLE_BYTES) return `“${file.name}” is larger than 10 MB.`;
   return null;
@@ -113,7 +116,7 @@ export async function toVoiceSample(blob: Blob, source: VoiceSample["source"], l
   try {
     decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
   } catch {
-    throw new Error("This file couldn't be read as audio. Use a WAV, MP3 or M4A file.");
+    throw new Error("This file couldn't be read as audio by this browser. Use a WAV, MP3 or M4A file.");
   } finally {
     void ctx.close();
   }
