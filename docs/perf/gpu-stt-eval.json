@@ -1,0 +1,137 @@
+{
+ "measured": "2026-10-22T01:41:01+00:00",
+ "gpu": [
+  "Tesla T4, 15360 MiB, 580.178.04",
+  "Tesla T4, 15360 MiB, 580.178.04"
+ ],
+ "wer_normalisation": "lower case; <tags> and IGNORE_TIME_SEGMENT removed; $N -> N dollars, % -> percent, digits/ordinals -> words (num2words, years 1100-2099 as years); hyphens -> spaces; punctuation and apostrophes removed; fillers (um uh uhm umm hmm hm mm mmm mhm er erm ah) removed; ok -> okay, alright -> all right, mr -> mister, mrs -> missus",
+ "sets": {
+  "librispeech_test_clean": {
+   "source": "openslr/librispeech_asr (Hugging Face), clean/test",
+   "licence": "CC BY 4.0",
+   "n": 40
+  },
+  "edacc_south_asian": {
+   "source": "edinburghcstr/edacc (Hugging Face), test split",
+   "licence": "CC BY-SA 4.0 (EdAcc, University of Edinburgh)",
+   "n": 40
+  },
+  "edacc_south_asian:urdu": {
+   "source": "edinburghcstr/edacc (Hugging Face), test split",
+   "licence": "CC BY-SA 4.0 (EdAcc, University of Edinburgh)",
+   "n": 40
+  },
+  "edacc_south_asian:indian": {
+   "source": "edinburghcstr/edacc (Hugging Face), test split",
+   "licence": "CC BY-SA 4.0 (EdAcc, University of Edinburgh)",
+   "n": 40
+  },
+  "edacc_south_asian_phone8k": {
+   "source": "same utterances as edacc_south_asian",
+   "licence": "CC BY-SA 4.0",
+   "n": 40
+  },
+  "edacc_south_asian_phone8k:urdu": {
+   "source": "same utterances as edacc_south_asian",
+   "licence": "CC BY-SA 4.0",
+   "n": 40
+  },
+  "caller_lines_tts": {
+   "source": "the 4 automated-caller lines (docs/perf/llm-turns-demo.json), synthesised in this notebook with Kyutai Pocket TTS 3.3.0, voice 'alba' (as infra/scripts/e2e_test_call.py does)",
+   "licence": "Pocket TTS weights CC BY 4.0 (kyutai/pocket-tts-without-voice-cloning, ungated)",
+   "n": 4
+  }
+ },
+ "models": {
+  "nvidia/parakeet-tdt_ctc-110m [transcribe_fp32]": {
+   "wer_pct": {
+    "librispeech_test_clean": 2.54,
+    "edacc_south_asian": 17.85,
+    "edacc_south_asian:urdu": 22.26,
+    "edacc_south_asian:indian": 13.49,
+    "edacc_south_asian_phone8k": 19.47,
+    "edacc_south_asian_phone8k:urdu": 23.74,
+    "caller_lines_tts": 10.26
+   },
+   "decode_5s_ms": {
+    "p50_ms": 67.2,
+    "p90_ms": 71.3
+   }
+  },
+  "nvidia/parakeet-tdt-0.6b-v2 [transcribe_fp32]": {
+   "wer_pct": {
+    "librispeech_test_clean": 1.45,
+    "edacc_south_asian": 12.39,
+    "edacc_south_asian:urdu": 16.02,
+    "edacc_south_asian:indian": 8.8,
+    "edacc_south_asian_phone8k": 14.9,
+    "edacc_south_asian_phone8k:urdu": 18.4,
+    "caller_lines_tts": 0.0
+   },
+   "decode_5s_ms": {
+    "p50_ms": 87.0,
+    "p90_ms": 89.6
+   }
+  },
+  "nvidia/parakeet-tdt-0.6b-v3 [transcribe_fp32]": {
+   "wer_pct": {
+    "librispeech_test_clean": 2.42,
+    "edacc_south_asian": 11.8,
+    "edacc_south_asian:urdu": 14.54,
+    "edacc_south_asian:indian": 9.09,
+    "edacc_south_asian_phone8k": 12.09,
+    "edacc_south_asian_phone8k:urdu": 14.54,
+    "caller_lines_tts": 0.0
+   },
+   "decode_5s_ms": {
+    "p50_ms": 87.9,
+    "p90_ms": 94.3
+   }
+  },
+  "parakeet-tdt_ctc-110m int8 (sherpa-onnx, production build) [cpu_2_threads]": {
+   "wer_pct": {
+    "librispeech_test_clean": 2.3,
+    "edacc_south_asian": 18.73,
+    "edacc_south_asian:urdu": 23.44,
+    "edacc_south_asian:indian": 14.08,
+    "edacc_south_asian_phone8k": 25.52,
+    "edacc_south_asian_phone8k:urdu": 29.38,
+    "caller_lines_tts": 0.0
+   },
+   "decode_5s_ms": {
+    "p50_ms": 226.5,
+    "p90_ms": 228.5
+   }
+  },
+  "large-v3-turbo [beam5]": {
+   "wer_pct": {
+    "librispeech_test_clean": 2.3,
+    "edacc_south_asian": 17.85,
+    "edacc_south_asian:urdu": 24.04,
+    "edacc_south_asian:indian": 11.73,
+    "edacc_south_asian_phone8k": 18.14,
+    "edacc_south_asian_phone8k:urdu": 22.85,
+    "caller_lines_tts": 0.0
+   },
+   "decode_5s_ms": {
+    "p50_ms": 312.6,
+    "p90_ms": 314.6
+   }
+  },
+  "large-v3 [beam5]": {
+   "wer_pct": {
+    "librispeech_test_clean": 1.93,
+    "edacc_south_asian": 17.26,
+    "edacc_south_asian:urdu": 23.44,
+    "edacc_south_asian:indian": 11.14,
+    "edacc_south_asian_phone8k": 17.99,
+    "edacc_south_asian_phone8k:urdu": 21.96,
+    "caller_lines_tts": 0.0
+   },
+   "decode_5s_ms": {
+    "p50_ms": 629.5,
+    "p90_ms": 633.4
+   }
+  }
+ }
+}

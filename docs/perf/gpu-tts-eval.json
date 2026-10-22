@@ -1,0 +1,484 @@
+{
+ "pocket-tts (CPU)": {
+  "model": "pocket-tts 3.3.0 (current ATLAS voice, CPU on the dev PC)",
+  "license": "CC-BY-4.0 (weights without voice cloning) / voice alba CC-BY-4.0",
+  "lines": [
+   {
+    "id": null,
+    "line": 1,
+    "text": "Hi there! This is Sarah from Demo Realty. Sorry, I'm in a great mood today. Is now a good time for two quick questions?",
+    "gen_s": 16.36,
+    "audio_s": 7.2,
+    "rtf": 2.27,
+    "ttfa_s": null
+   },
+   {
+    "id": null,
+    "line": 2,
+    "text": "Hmm, let me think about that for a second... okay, yes, three months works perfectly.",
+    "gen_s": 8.16,
+    "audio_s": 5.12,
+    "rtf": 1.59,
+    "ttfa_s": null
+   },
+   {
+    "id": null,
+    "line": 3,
+    "text": "Oh no, I'm really sorry to hear that. That sounds really stressful.",
+    "gen_s": 3.99,
+    "audio_s": 4.08,
+    "rtf": 0.98,
+    "ttfa_s": null
+   },
+   {
+    "id": null,
+    "line": 4,
+    "text": "Wow! Four hundred thousand? That opens up some lovely options.",
+    "gen_s": 5.62,
+    "audio_s": 4.64,
+    "rtf": 1.21,
+    "ttfa_s": null
+   },
+   {
+    "id": null,
+    "line": 5,
+    "text": "Got it. Mm-hmm. And who else is involved in the decision?",
+    "gen_s": 3.35,
+    "audio_s": 3.81,
+    "rtf": 0.88,
+    "ttfa_s": null
+   },
+   {
+    "id": null,
+    "line": 6,
+    "text": "Fair enough, I'd want to think it over too.",
+    "gen_s": 4.68,
+    "audio_s": 2.8,
+    "rtf": 1.67,
+    "ttfa_s": null
+   },
+   {
+    "id": null,
+    "line": 7,
+    "text": "Uh, sorry, could you say that again? The line cut out for a second.",
+    "gen_s": 10.47,
+    "audio_s": 5.52,
+    "rtf": 1.9,
+    "ttfa_s": null
+   },
+   {
+    "id": null,
+    "line": 8,
+    "text": "Perfect! Thank you so much, I really appreciate your time. Have a wonderful day!",
+    "gen_s": 3.92,
+    "audio_s": 5.07,
+    "rtf": 0.77,
+    "ttfa_s": null
+   }
+  ]
+ },
+ "kokoro-82m": {
+  "model": "Kokoro-82M",
+  "notes": [
+   "no paralinguistic tags: tags removed, words kept",
+   "main WAV = whole line (library default split on newlines); TTFA = sentence-split streaming (first chunk)"
+  ],
+  "lines": [
+   {
+    "id": 1,
+    "line": null,
+    "text": "Hi there! This is Sarah from Demo Realty. Sorry, I'm in a great mood today. Is now a good time for two quick questions?",
+    "gen_s": 0.2,
+    "audio_s": 7.775,
+    "rtf": 0.026,
+    "ttfa_s": 0.071
+   },
+   {
+    "id": 2,
+    "line": null,
+    "text": "Hmm, let me think about that for a second... okay, yes, three months works perfectly.",
+    "gen_s": 0.142,
+    "audio_s": 5.3,
+    "rtf": 0.027,
+    "ttfa_s": 0.09
+   },
+   {
+    "id": 3,
+    "line": null,
+    "text": "Oh no, I'm really sorry to hear that. That sounds really stressful.",
+    "gen_s": 0.141,
+    "audio_s": 4.375,
+    "rtf": 0.032,
+    "ttfa_s": 0.086
+   },
+   {
+    "id": 4,
+    "line": null,
+    "text": "Wow! Four hundred thousand? That opens up some lovely options.",
+    "gen_s": 0.124,
+    "audio_s": 4.325,
+    "rtf": 0.029,
+    "ttfa_s": 0.067
+   },
+   {
+    "id": 5,
+    "line": null,
+    "text": "Got it. Mm-hmm. And who else is involved in the decision?",
+    "gen_s": 0.109,
+    "audio_s": 3.825,
+    "rtf": 0.028,
+    "ttfa_s": 0.063
+   },
+   {
+    "id": 6,
+    "line": null,
+    "text": "Fair enough, I'd want to think it over too.",
+    "gen_s": 0.094,
+    "audio_s": 2.7,
+    "rtf": 0.035,
+    "ttfa_s": 0.088
+   },
+   {
+    "id": 7,
+    "line": null,
+    "text": "Uh, sorry, could you say that again? The line cut out for a second.",
+    "gen_s": 0.123,
+    "audio_s": 4.225,
+    "rtf": 0.029,
+    "ttfa_s": 0.084
+   },
+   {
+    "id": 8,
+    "line": null,
+    "text": "Perfect! Thank you so much, I really appreciate your time. Have a wonderful day!",
+    "gen_s": 0.145,
+    "audio_s": 5.175,
+    "rtf": 0.028,
+    "ttfa_s": 0.068
+   }
+  ]
+ },
+ "chatterbox (500M)": {
+  "model": "Chatterbox (500M English)",
+  "notes": [],
+  "lines": [
+   {
+    "id": 1,
+    "line": null,
+    "text": "Hi there! This is Sarah from Demo Realty. Sorry, I'm in a great mood today. Is now a good time for two quick questions?",
+    "gen_s": 6.089,
+    "audio_s": 7.12,
+    "rtf": 0.855,
+    "ttfa_s": 6.089
+   },
+   {
+    "id": 2,
+    "line": null,
+    "text": "Hmm, let me think about that for a second... okay, yes, three months works perfectly.",
+    "gen_s": 4.772,
+    "audio_s": 5.68,
+    "rtf": 0.84,
+    "ttfa_s": 4.772
+   },
+   {
+    "id": 3,
+    "line": null,
+    "text": "Oh no, I'm really sorry to hear that. That sounds really stressful.",
+    "gen_s": 2.953,
+    "audio_s": 3.08,
+    "rtf": 0.959,
+    "ttfa_s": 2.953
+   },
+   {
+    "id": 4,
+    "line": null,
+    "text": "Wow! Four hundred thousand? That opens up some lovely options.",
+    "gen_s": 3.41,
+    "audio_s": 3.76,
+    "rtf": 0.907,
+    "ttfa_s": 3.41
+   },
+   {
+    "id": 5,
+    "line": null,
+    "text": "Got it. Mm-hmm. And who else is involved in the decision?",
+    "gen_s": 3.448,
+    "audio_s": 3.8,
+    "rtf": 0.907,
+    "ttfa_s": 3.448
+   },
+   {
+    "id": 6,
+    "line": null,
+    "text": "Fair enough, I'd want to think it over too.",
+    "gen_s": 2.331,
+    "audio_s": 2.28,
+    "rtf": 1.022,
+    "ttfa_s": 2.331
+   },
+   {
+    "id": 7,
+    "line": null,
+    "text": "Uh, sorry, could you say that again? The line cut out for a second.",
+    "gen_s": 3.146,
+    "audio_s": 3.36,
+    "rtf": 0.936,
+    "ttfa_s": 3.146
+   },
+   {
+    "id": 8,
+    "line": null,
+    "text": "Perfect! Thank you so much, I really appreciate your time. Have a wonderful day!",
+    "gen_s": 3.733,
+    "audio_s": 4.08,
+    "rtf": 0.915,
+    "ttfa_s": 3.733
+   }
+  ]
+ },
+ "chatterbox-turbo (350M)": {
+  "model": "Chatterbox-Turbo (350M)",
+  "notes": [],
+  "lines": [
+   {
+    "id": 1,
+    "line": null,
+    "text": "Hi there! This is Sarah from Demo Realty. [laugh] Sorry, I'm in a great mood today. Is now a good time for two quick questions?",
+    "gen_s": 3.448,
+    "audio_s": 8.28,
+    "rtf": 0.416,
+    "ttfa_s": 3.448
+   },
+   {
+    "id": 2,
+    "line": null,
+    "text": "Hmm, let me think about that for a second... okay, yes, three months works perfectly.",
+    "gen_s": 2.291,
+    "audio_s": 5.44,
+    "rtf": 0.421,
+    "ttfa_s": 2.291
+   },
+   {
+    "id": 3,
+    "line": null,
+    "text": "Oh no, I'm really sorry to hear that. [sigh] That sounds really stressful.",
+    "gen_s": 1.922,
+    "audio_s": 4.52,
+    "rtf": 0.425,
+    "ttfa_s": 1.922
+   },
+   {
+    "id": 4,
+    "line": null,
+    "text": "Wow! [gasp] Four hundred thousand? That opens up some lovely options.",
+    "gen_s": 2.148,
+    "audio_s": 5.12,
+    "rtf": 0.419,
+    "ttfa_s": 2.148
+   },
+   {
+    "id": 5,
+    "line": null,
+    "text": "Got it. Mm-hmm. And who else is involved in the decision?",
+    "gen_s": 1.79,
+    "audio_s": 4.12,
+    "rtf": 0.434,
+    "ttfa_s": 1.79
+   },
+   {
+    "id": 6,
+    "line": null,
+    "text": "[chuckle] Fair enough, I'd want to think it over too.",
+    "gen_s": 1.384,
+    "audio_s": 3.0,
+    "rtf": 0.461,
+    "ttfa_s": 1.384
+   },
+   {
+    "id": 7,
+    "line": null,
+    "text": "Uh, sorry, could you say that again? The line cut out for a second.",
+    "gen_s": 1.623,
+    "audio_s": 3.72,
+    "rtf": 0.436,
+    "ttfa_s": 1.623
+   },
+   {
+    "id": 8,
+    "line": null,
+    "text": "Perfect! Thank you so much, I really appreciate your time. Have a wonderful day!",
+    "gen_s": 2.116,
+    "audio_s": 5.0,
+    "rtf": 0.423,
+    "ttfa_s": 2.116
+   }
+  ]
+ },
+ "orpheus-3b": {
+  "model": "Orpheus TTS 3B 0.1 fine-tuned (Canopy Labs), Unsloth ungated mirror",
+  "license": {
+   "summary": "Model card metadata: Apache-2.0 (both the Unsloth mirror and the official Canopy repo). The model is a fine-tune of meta-llama/Llama-3.2-3B-Instruct, so the Llama 3.2 Community License also applies (Built with Llama attribution, Meta acceptable-use policy, 700M MAU clause). Canopy model card also forbids impersonation without consent, deception and fraudulent calls. SNAC codec: MIT. Orpheus-TTS code: Apache-2.0.",
+   "hf_token_used": false
+  },
+  "supported_tags": [
+   "<laugh>",
+   "<chuckle>",
+   "<sigh>",
+   "<cough>",
+   "<sniffle>",
+   "<groan>",
+   "<yawn>",
+   "<gasp>"
+  ],
+  "vram": {
+   "llamacpp_q8_0": "about 4.1 GB GPU total from llama.cpp buffer logs (weights 1530+1815 MiB, KV 224 MiB, compute 545 MiB, split over 2 GPUs) + CUDA context + SNAC; token embeddings 489 MiB stay in CPU RAM. nvidia-smi poll saw 1965 MiB on GPU 0 only.",
+   "llamacpp_q4_k_m": "about 2.7 GB GPU total from buffer logs (weights 859+1128 MiB, KV 224 MiB, compute 545 MiB) + context; nvidia-smi GPU 0: 1295 MiB.",
+   "transformers_fp16": "7087 MiB nvidia-smi peak (torch max allocated 6664 MB).",
+   "vllm_fp16": "12695 MiB nvidia-smi peak, but vLLM preallocates gpu_memory_utilization=0.80; real need is about 7 GB weights + KV."
+  },
+  "problems": [
+   "No path reaches real time on a T4. Best: llama.cpp Q4_K_M 63 audio tok/s (RTF 1.32), Q8_0 50 tok/s (RTF 1.64); transformers fp16 and vLLM fp16 about 23-24 tok/s (RTF 3.4-3.6). Real time needs about 82 tok/s, so streamed playback would underrun after the first chunk on a T4; a faster GPU (L4/A10/A100 class) or batching-friendly server is needed for live calls.",
+   "Kaggle's NvidiaTeslaT4 accelerator gave 2x T4. llama.cpp (default layer split) spread the model over both GPUs; for one stream the layers still run one after another, so speed should be close to a single T4, but this was not re-measured with CUDA_VISIBLE_DEVICES=0 (GPU budget).",
+   "llama-cpp-python 0.3.4 CUDA wheels exist only up to cp312; Kaggle runs Python 3.13, so run 1 skipped llama.cpp. Run 2 used the upstream v0.3.36-cu124 py3-none wheel (1.78 GB, 127 s to install).",
+   "vLLM 0.11.0 crashed with transformers 5.x (TokenizersBackend has no attribute all_special_tokens_extended); fixed in run 2 by pinning transformers==4.56.2. On Turing vLLM uses FlexAttention, piecewise CUDA graphs only and PyTorch top-p/top-k sampling (no FlashInfer), so it was no faster than plain transformers on the T4. Engine start 82 s (torch.compile 28 s).",
+   "Timings are sequential: the in-loop streaming SNAC decode (every 7 codes) blocks llama.cpp/transformers token generation; a production server would overlap it. Full-decode cost is small (0.03-0.07 s per clip).",
+   "Sampling (temperature 0.6, top_p 0.95, top_k 50, repetition_penalty 1.1) makes length and delivery vary between paths for the same line (e.g. line 1 tara: 9.3 s Q8, 12.4 s Q4, 9.6 s transformers, 10.0 s vLLM).",
+   "We cannot listen. Canopy documents the 8 tags as emotive cues the fine-tuned voices perform; a CPU-only check (Whisper base.en transcript + AudioSet AST event classifier) is in events (see events_check)."
+  ],
+  "primary_inference": "llama.cpp via llama-cpp-python 0.3.36 (CUDA, all layers on GPU), GGUF orpheus-3b-0.1-ft-Q8_0.gguf",
+  "lines": [
+   {
+    "id": null,
+    "line": 1,
+    "text": "Hi there! This is Sarah from Demo Realty. <laugh> Sorry, I'm in a great mood today. Is now a good time for two quick questions?",
+    "gen_s": 15.246,
+    "audio_s": 9.301,
+    "rtf": 1.639,
+    "ttfa_s": 0.547
+   },
+   {
+    "id": null,
+    "line": 2,
+    "text": "Hmm, let me think about that for a second... okay, yes, three months works perfectly.",
+    "gen_s": 13.625,
+    "audio_s": 8.363,
+    "rtf": 1.629,
+    "ttfa_s": 0.54
+   },
+   {
+    "id": null,
+    "line": 3,
+    "text": "Oh no, I'm really sorry to hear that. <sigh> That sounds really stressful.",
+    "gen_s": 9.606,
+    "audio_s": 5.888,
+    "rtf": 1.631,
+    "ttfa_s": 0.544
+   },
+   {
+    "id": null,
+    "line": 4,
+    "text": "Wow! <gasp> Four hundred thousand? That opens up some lovely options.",
+    "gen_s": 15.582,
+    "audio_s": 9.472,
+    "rtf": 1.645,
+    "ttfa_s": 0.543
+   },
+   {
+    "id": null,
+    "line": 5,
+    "text": "Got it. Mm-hmm. And who else is involved in the decision?",
+    "gen_s": 9.102,
+    "audio_s": 5.547,
+    "rtf": 1.641,
+    "ttfa_s": 0.544
+   },
+   {
+    "id": null,
+    "line": 6,
+    "text": "<chuckle> Fair enough, I'd want to think it over too.",
+    "gen_s": 5.277,
+    "audio_s": 3.243,
+    "rtf": 1.627,
+    "ttfa_s": 0.544
+   },
+   {
+    "id": null,
+    "line": 7,
+    "text": "Uh, sorry, could you say that again? The line cut out for a second.",
+    "gen_s": 10.516,
+    "audio_s": 6.4,
+    "rtf": 1.643,
+    "ttfa_s": 0.549
+   },
+   {
+    "id": null,
+    "line": 8,
+    "text": "Perfect! Thank you so much, I really appreciate your time. Have a wonderful day!",
+    "gen_s": 10.508,
+    "audio_s": 6.4,
+    "rtf": 1.642,
+    "ttfa_s": 0.547
+   },
+   {
+    "id": null,
+    "line": 1,
+    "text": "Hi there! This is Sarah from Demo Realty. <laugh> Sorry, I'm in a great mood today. Is now a good time for two quick questions?",
+    "gen_s": 14.057,
+    "audio_s": 8.533,
+    "rtf": 1.647,
+    "ttfa_s": 0.549
+   },
+   {
+    "id": null,
+    "line": 3,
+    "text": "Oh no, I'm really sorry to hear that. <sigh> That sounds really stressful.",
+    "gen_s": 8.427,
+    "audio_s": 5.12,
+    "rtf": 1.646,
+    "ttfa_s": 0.548
+   },
+   {
+    "id": null,
+    "line": 4,
+    "text": "Wow! <gasp> Four hundred thousand? That opens up some lovely options.",
+    "gen_s": 9.425,
+    "audio_s": 5.717,
+    "rtf": 1.648,
+    "ttfa_s": 0.546
+   }
+  ]
+ },
+ "dia-1.6b": {
+  "model": {
+   "id": "nari-labs/Dia-1.6B-0626",
+   "package": "nari-tts (github nari-labs/dia @ 876125e461)",
+   "implementation": "native nari-labs/dia package (dia.model.Dia), not transformers",
+   "dtype": "float16",
+   "load_s_incl_download": 67.7,
+   "torch_compile": false,
+   "vram_after_load_gb": 3.53
+  },
+  "licences": {
+   "dia_code": "Apache-2.0 (github.com/nari-labs/dia LICENSE)",
+   "dia_weights": "Apache-2.0 (HF card nari-labs/Dia-1.6B-0626, license: apache-2.0)",
+   "dia_readme_disclaimer": "README forbids identity misuse (audio resembling real people without permission), deceptive content, illegal use; says 'intended for research and educational use' but the licence itself is Apache-2.0",
+   "dac_codec": "descript-audio-codec, MIT",
+   "eval_models": {
+    "openai/whisper-large-v3-turbo": "MIT",
+    "MIT/ast-finetuned-audioset-10-10-0.4593": "BSD-3-Clause",
+    "microsoft/wavlm-base-plus-sv": "Microsoft UniLM WavLM (MIT repo; HF card has no licence field)"
+   }
+  },
+  "vram_peak_dia_gb": 5.49,
+  "problems": [
+   "dia_anchor_prompt condition skipped to stay inside the GPU budget"
+  ],
+  "notes": [
+   "README: tags 'will be recognized, but might result in unexpected output'; use them sparingly; unlisted tags may cause artifacts.",
+   "README: input under ~5 s of audio sounds unnatural, over ~20 s gets unnaturally fast; always start with [S1] and alternate speakers.",
+   "README: the model is not fine-tuned on a voice, so each run picks a new voice unless an audio prompt is given or the seed is fixed.",
+   "README: audio prompt should be 5-10 s, with its transcript placed before the text to generate; output contains only the new text.",
+   "Timings: gen_s is wall time of Dia.generate() (text encoder + prompt prefill + decode loop + DAC decode), CUDA-synchronised; RTF = gen_s / audio_s (below 1 = faster than real time). Non-streaming API: the caller waits gen_s before any audio."
+  ]
+ }
+}
