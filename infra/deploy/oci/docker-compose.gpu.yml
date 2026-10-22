@@ -21,9 +21,12 @@ x-gpu: &gpu
 services:
   local-llm:
     environment:
-      # Two replies are written at once (two calls speaking at the same moment), each with
-      # its own 4k context: about 0.6 GB more GPU memory than one. The CPU setting is 1.
-      OLLAMA_NUM_PARALLEL: "${LOCAL_LLM_GPU_PARALLEL:-2}"
+      # Three slots, each with its own 4k context (about 0.3 GB of GPU memory each): two
+      # replies can be written at once, and a call's two end-of-call requests (outcome,
+      # variables) take the two least recently used slots, so the agents' prompt stays cached
+      # in the third and the next call's first reply does not read it again (3-6 s on a T4
+      # with two slots, measured 2026-10-23). The CPU setting is 1.
+      OLLAMA_NUM_PARALLEL: "${LOCAL_LLM_GPU_PARALLEL:-3}"
       # qwen3:8b-nothink (the voice agents' model) and qwen2.5:1.5b (the CPU default, kept for
       # connections made before the GPU) both fit, so a request for one never unloads the other.
       OLLAMA_MAX_LOADED_MODELS: "2"

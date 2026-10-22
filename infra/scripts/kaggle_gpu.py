@@ -348,10 +348,11 @@ for t in installs:
     t.start()  # meanwhile Ollama installs and downloads its models
 sh("command -v zstd >/dev/null || (apt-get update -qq && apt-get install -y -qq zstd >/dev/null)")
 sh(f"curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION={OLLAMA_VERSION} sh >/dev/null")
-# Two slots, like the GPU models host: the agent's prompt stays cached in one while the call's
-# end-of-call requests (outcome, variables) use the other.
+# Three slots, like the GPU models host: a call's two end-of-call requests (outcome,
+# variables) take the two least recently used slots, so the agent's prompt stays cached in
+# the third and the next call's first reply does not read it again (3-6 s on a T4).
 env = dict(os.environ, OLLAMA_HOST="127.0.0.1:11434", OLLAMA_KEEP_ALIVE="-1", OLLAMA_FLASH_ATTENTION="1",
-           OLLAMA_CONTEXT_LENGTH="4096", OLLAMA_NUM_PARALLEL="2", OLLAMA_MAX_LOADED_MODELS=str(len(MODELS)),
+           OLLAMA_CONTEXT_LENGTH="4096", OLLAMA_NUM_PARALLEL="3", OLLAMA_MAX_LOADED_MODELS=str(len(MODELS)),
            CUDA_VISIBLE_DEVICES="0")
 ollama = subprocess.Popen(["ollama", "serve"], env=env, stdout=open("/tmp/ollama.log", "w"), stderr=subprocess.STDOUT)
 if not wait_http("http://127.0.0.1:11434/api/version", 120):

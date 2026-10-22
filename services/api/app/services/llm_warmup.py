@@ -66,7 +66,10 @@ SELF_HOSTED_DEFAULT_BASE_URL = "http://localhost:11434/v1"
 # Stands in for the caller's first words, which are not known yet. Everything before
 # them is what the voice service will send.
 WARMUP_USER_TEXT = "Hello?"
-DEDUPE_SECONDS = 120.0
+# A burst of identical warm-ups (a publish, then its test call) sends one. Kept short: a
+# call's end-of-call requests push the prompt out of a small cache, so the next call,
+# a minute later, must be warmed again.
+DEDUPE_SECONDS = 10.0
 
 # ------------------------------------------------------------------ template rendering
 # Same syntax and results as the voice service's api/utils/template_renderer.py:

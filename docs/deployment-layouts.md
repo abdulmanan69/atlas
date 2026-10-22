@@ -353,9 +353,10 @@ start of each server downloads its model (about 11 GB in all). On a server with 
 gateway, the gateway also serves `/voice/v1/*` and `/health` reports the voice.
 
 `docker-compose.gpu.yml` gives each of the three servers the GPU
-(`deploy.resources.reservations.devices`, driver `nvidia`), sets Ollama to write two
-replies at once (`OLLAMA_NUM_PARALLEL=2`) and to keep two models in memory, and runs live
-speech-to-text with `STT_PROVIDER=cuda`. No port is published.
+(`deploy.resources.reservations.devices`, driver `nvidia`), gives Ollama three slots
+(`OLLAMA_NUM_PARALLEL=3`: two replies at once, and the agents' prompt stays cached in the
+third while a call's two end-of-call requests use the others) and two models in memory, and
+runs live speech-to-text with `STT_PROVIDER=cuda`. No port is published.
 
 ### Use them in ATLAS
 
@@ -447,7 +448,7 @@ In `.env`, then run `deploy.sh`:
 |---|---|---|
 | `ATLAS_GPU` | `true` with `--gpu` | delete the line to run the models on the CPU again |
 | `ATLAS_GPU_DEVICE` | `0` | which GPU, on a server with several |
-| `LOCAL_LLM_GPU_PARALLEL` | `2` | replies the language model writes at once (each one 0.6 GB of GPU memory for its context) |
+| `LOCAL_LLM_GPU_PARALLEL` | `3` | the language model's slots: replies written at once, plus one that keeps the agents' prompt cached across a call's end-of-call requests (each slot about 0.3 GB of GPU memory) |
 | `LOCAL_STT_GPU_SESSIONS` | `8` | live speech-to-text connections at once (calls); more are refused with HTTP 503. 8 is what a 16 GB GPU holds next to the other two models ([measured](#measured-on-one-t4)) |
 | `LOCAL_STT_GPU_MODEL` | `parakeet-0.6b-v3` | the live speech-to-text model on the GPU |
 
