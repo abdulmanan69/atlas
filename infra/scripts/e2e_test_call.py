@@ -448,6 +448,10 @@ class AgentListener:
         self.segments: list[dict] = []
         self.cur: dict | None = None
         self._cand: list[float] | None = None  # [start, voiced ms, span ms]
+        # expect_from(t): the first voiced frame at or after t, for a reply that runs on
+        # from speech that began before t (the ambience, the tail of a sound cue).
+        self._mark: float | None = None
+        self._mark_hit: float | None = None
         self._run_start = 0.0
         self._reset_run()
         self.done = asyncio.Event()
@@ -515,6 +519,8 @@ class AgentListener:
         if interval_ms >= self.gap_ms:
             seg["stalls"].append({"at": now - interval_ms / 1000, "ms": round(interval_ms)})
         if voiced:
+            if self._mark is not None and self._mark_hit is None and now >= self._mark:
+                self._mark_hit = now
             if self._run_ms >= self.gap_ms:
                 seg["gaps"].append({
                     "at": self._run_start,
@@ -540,10 +546,18 @@ class AgentListener:
                 self.cur = None
                 self._reset_run()
 
+    def expect_from(self, t: float) -> None:
+        """A reply is awaited from t on (the caller's last speech frame)."""
+        self._mark, self._mark_hit = t, None
+
     def since(self, t: float) -> list[dict]:
         segs = [s for s in self.segments if s["start"] >= t]
         if self.cur is not None and self.cur["start"] >= t:
             segs.append(self.cur)
+        elif not segs and self.cur is not None and self._mark == t and self._mark_hit is not None:
+            # Faint sound before t ran straight into the reply: the reply starts where the
+            # first voiced frame after t was heard.
+            segs.append({**self.cur, "start": self._mark_hit})
         return segs
 
     def overlapping(self, t0: float, t1: float) -> bool:
@@ -956,6 +970,7 @@ class Call:
         has lasted 3 s longer than that, in case the event never comes).
         """
         start_deadline, end_deadline = after + first_timeout_s, after + total_timeout_s
+        self.agent.expect_from(after)
         while True:
             now = time.monotonic()
             segs = self.agent.since(after)

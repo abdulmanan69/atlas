@@ -515,6 +515,8 @@ def http(method: str, url: str, body: Any = None, headers: dict[str, str] | None
             return e.code, json.loads(raw)
         except ValueError:
             return e.code, raw.decode(errors="replace")[:300]
+    except OSError as e:  # unreachable, or a session whose address no longer resolves
+        return 0, str(getattr(e, "reason", e))[:300]
 
 
 def sha256(value: str) -> str:
