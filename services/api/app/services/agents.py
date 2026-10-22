@@ -46,7 +46,7 @@ from app.schemas.voice import (
     TestSession,
 )
 from app.services import actions as action_service
-from app.services import agent_settings, audit, llm_warmup, voice_cloning
+from app.services import agent_settings, audit, llm_warmup, natural_sounds, voice_cloning
 from app.services import calls as call_service
 from app.services import knowledge as knowledge_service
 from app.services import leads as lead_service
@@ -568,7 +568,10 @@ async def compiled_prompt(
     db: AsyncSession, ctx: TenantContext, agent_id: uuid.UUID, node_id: str | None
 ) -> CompiledPrompt:
     agent = await get_agent(db, ctx, agent_id)
-    preview = compose_prompt(await config_of(db, agent), node_id)
+    config = await config_of(db, agent)
+    preview = compose_prompt(
+        config, node_id, sound_rule=await natural_sounds.agent_sound_rule(db, ctx.org_id, config)
+    )
     if preview is None:
         raise NotFoundError("Node not found")
     return preview
@@ -640,6 +643,8 @@ async def publish(
     # Action and document ids are the voice service's own uuids (see those services).
     tool_uuids = {a: a for a in action_names}
     document_uuids = {d: d for d in documents}
+    # Whether the voice can laugh or sigh decides what the agent is told about sound cues.
+    sound_rule = await natural_sounds.agent_sound_rule(db, ctx.org_id, config)
     account = await ensure_account(db, ctx.org_id)
 
     async with runtime_client(db, ctx.org_id) as client:
@@ -670,7 +675,11 @@ async def publish(
             else None
         )
         compiled = compile_workflow(
-            config, webhook=webhook, tool_uuids=tool_uuids, document_uuids=document_uuids
+            config,
+            webhook=webhook,
+            tool_uuids=tool_uuids,
+            document_uuids=document_uuids,
+            sound_rule=sound_rule,
         )
         runtime_name = f"{agent.name[:80]} · {agent.id.hex[:8]}"
         try:

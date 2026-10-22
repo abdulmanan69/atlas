@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { Tooltip } from "@/components/ui/primitives";
 import { formatMs, type SummaryTone } from "@/features/calls/latency-model";
+import { SpeechText } from "@/features/calls/speech-text";
 import {
   delayBadge,
   timingBreakdown,
@@ -85,7 +86,7 @@ function Item({ item, channel }: { item: TranscriptItem; channel: TestChannel })
         <div className="flex flex-col items-start gap-0.5">
           <Delay timing={item.timing} channel={channel} />
           <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-bl-md border border-line bg-surface-2 px-3 py-2 text-[13px] leading-relaxed text-ink">
-            {item.text || (item.speaking ? <Typing /> : null)}
+            {item.text ? <SpeechText parts={item.parts} /> : item.speaking ? <Typing /> : null}
             {item.text && item.speaking ? <span className="ml-1.5 text-[10.5px] italic text-muted">speaking…</span> : null}
           </div>
         </div>

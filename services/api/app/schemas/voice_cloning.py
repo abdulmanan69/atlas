@@ -1,4 +1,5 @@
-"""Pocket TTS voices: built-in voices and voices cloned from a consenting speaker."""
+"""Pocket TTS and expressive voices: built-in voices, voices cloned from a consenting speaker,
+and the sounds an expressive voice makes."""
 
 from __future__ import annotations
 
@@ -46,6 +47,29 @@ class PocketVoiceList(BaseModel):
     )
     setup_url: str | None = Field(
         default=None, description="Where the gated voice-cloning weights' terms are accepted"
+    )
+    sound_tags: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Sounds the server's voices make when a reply contains them in square brackets, "
+            "for example laugh for [laugh]. Empty for voices that cannot"
+        ),
+    )
+
+
+class SoundTags(BaseModel):
+    expressive: bool = Field(
+        description=(
+            "True when the connection's voice makes sounds written in square brackets, such "
+            "as [laugh], instead of reading them"
+        )
+    )
+    tags: list[str] = Field(description="Every sound the voice server lists, in its order")
+    prompt_tags: list[str] = Field(
+        description=(
+            "The sounds agents with Natural sounds on are told they may use (at most four), "
+            "most useful first"
+        )
     )
 
 

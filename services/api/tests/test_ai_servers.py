@@ -682,7 +682,12 @@ async def test_voice_cloning_reaches_the_servers_pocket_tts(
     r = await client.get(f"/api/v1/ai/connections/{tts}/voice-cloning", headers=owner.headers)
     assert r.status_code == 200 and r.json()["state"] == "on"
     pocket = [r for r in gateway.requests if r.url.path.startswith("/tts/")]
-    assert [r.url.path for r in pocket] == ["/tts/v1/voices", "/tts/v1/cloning"]
+    # The voice list also asks which sounds the voices make (none, for Pocket TTS).
+    assert [r.url.path for r in pocket] == [
+        "/tts/v1/audio/sound-tags",
+        "/tts/v1/voices",
+        "/tts/v1/cloning",
+    ]
     assert {r.headers["authorization"] for r in pocket} == {f"Bearer {TOKEN}"}
     assert not local.called
 

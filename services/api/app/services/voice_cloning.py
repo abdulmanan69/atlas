@@ -19,18 +19,27 @@ never stored, logged, audited or returned here, and is scrubbed from the server'
 ATLAS reaches the server at ATLAS_LOCAL_TTS_URL when set (an operator setting, so it may be
 private), otherwise at the connection's base URL under the outbound destination policy. The
 Pocket TTS connection of a registered AI server (ADR 0007) is always reached at that server's
-own address, {url}/tts/v1, with its token: the local setting is for another server.
+own address, {url}/tts/v1, with its token: the local setting is for another server. So is
+any voice connection whose base URL is on a registered AI server's address (for example the
+expressive voice at {url}/voice/v1).
+
+The expressive voice server (Chatterbox-Turbo, infra/docker/expressive-tts) has the same
+voice and cloning API, so everything here works for it too: its connections are named by
+"expressive" or "chatterbox" (or answer GET {base}/audio/sound-tags, see `sound_tags`), and
+ATLAS reaches it at ATLAS_EXPRESSIVE_TTS_URL when set.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import time
 import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, NoReturn
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from fastapi import UploadFile
@@ -51,6 +60,8 @@ from app.core.exceptions import (
 from app.core.net_policy import validate_destination_url
 from app.core.permissions import Permission, has_permission
 from app.core.redis import enforce_rate_limit
+from app.core.security import get_secret_box
+from app.models.ai_servers import AiServer
 from app.models.voice import Agent, AgentStatus, AgentVersion
 from app.models.voice_cloning import CustomVoice
 from app.schemas.voice import ConnectionOut
@@ -67,8 +78,10 @@ from app.services import ai_servers, ai_settings, audit, voice_samples
 log = logging.getLogger(__name__)
 
 # A Pocket TTS connection is a self-hosted voice connection whose name or address names the
-# server (same hints as the speed presets in ai_speed.py).
-POCKET_HINTS = ("local-tts", "pocket")
+# server (same hints as the speed presets in ai_speed.py; /tts/v1 is its path behind an AI
+# gateway). The expressive voice server has the same voice API (/voice/v1 behind a gateway).
+POCKET_HINTS = ("local-tts", "pocket", "/tts/v1")
+EXPRESSIVE_HINTS = ("expressive", "chatterbox", "/voice/v1")
 SETUP_URL = "https://huggingface.co/kyutai/pocket-tts"
 VOICE_ID = re.compile(r"^custom-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{16}$")
 # Anything in a server reply that looks like a Hugging Face token.
@@ -78,8 +91,9 @@ MAX_NAME_CHARS = 60
 MAX_LISTED = 500
 CLONING_CHANGES_PER_MINUTE = 5
 NOT_POCKET = (
-    "Voice cloning works with Pocket TTS connections: a self-hosted voice connection whose "
-    "name or address contains 'pocket' or 'local-tts'."
+    "Voice cloning works with Pocket TTS and expressive voice connections: a self-hosted "
+    "voice connection whose name or address contains 'pocket', 'local-tts', 'expressive' or "
+    "'chatterbox'."
 )
 OLD_SERVER = (
     "This Pocket TTS server has no voice cloning: rebuild it with the current image "
@@ -119,11 +133,25 @@ class UnsupportedSampleError(AppError):
 # ---------------------------------------------------------------- connection and target
 
 
+def _haystack(conn: ConnectionOut) -> str:
+    return " ".join([conn.name, *map(str, conn.connection_settings.values())]).lower()
+
+
+def _self_hosted_voice(conn: ConnectionOut) -> bool:
+    return conn.provider == "speaches" and not conn.hosted_trial
+
+
+def is_expressive_connection(conn: ConnectionOut) -> bool:
+    """Named as the expressive voice server (by name or address; `sound_tags` asks it)."""
+    return _self_hosted_voice(conn) and any(h in _haystack(conn) for h in EXPRESSIVE_HINTS)
+
+
 def is_pocket_connection(conn: ConnectionOut) -> bool:
-    if conn.provider != "speaches" or conn.hosted_trial:
+    """A voice server with the Pocket TTS voice API: Pocket TTS or the expressive server."""
+    if not _self_hosted_voice(conn):
         return False
-    haystack = " ".join([conn.name, *map(str, conn.connection_settings.values())]).lower()
-    return any(h in haystack for h in POCKET_HINTS)
+    haystack = _haystack(conn)
+    return any(h in haystack for h in (*POCKET_HINTS, *EXPRESSIVE_HINTS))
 
 
 async def _pocket_connection(
@@ -131,9 +159,10 @@ async def _pocket_connection(
 ) -> ConnectionOut:
     for conn in await ai_settings.list_connections(db, ctx):
         if conn.id == connection_id:
-            if not is_pocket_connection(conn):
-                raise ValidationFailedError(NOT_POCKET)
-            return conn
+            # Not named as either server: an expressive server is still known by its answer.
+            if is_pocket_connection(conn) or await sound_tags(db, ctx.org_id, conn):
+                return conn
+            raise ValidationFailedError(NOT_POCKET)
     raise NotFoundError("Connection not found")
 
 
@@ -146,9 +175,38 @@ class PocketServer:
     ai_server: str | None = None  # a registered AI server's name: its gateway checks the key
 
 
+def _normalised(url: str) -> str:
+    """Scheme and host in lower case, without a trailing slash (as AI servers are stored)."""
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return ""
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), "", ""))
+
+
+async def _registered_server(
+    db: AsyncSession, org_id: uuid.UUID, conn: ConnectionOut
+) -> ai_servers.Gateway | None:
+    """The AI server behind a connection: one ATLAS created, or one at its address."""
+    gateway = await ai_servers.gateway_for(db, org_id, conn.id, "tts")
+    if gateway is not None:
+        return gateway
+    url = _normalised(str(conn.connection_settings.get("base_url") or ""))
+    if not url:
+        return None
+    for server in await db.scalars(select(AiServer).where(AiServer.organization_id == org_id)):
+        if url.startswith(server.base_url + "/"):
+            return ai_servers.Gateway(
+                server_name=server.name,
+                base_url=url,
+                token=get_secret_box().decrypt(server.token_encrypted),
+            )
+    return None
+
+
 async def _server(db: AsyncSession, org_id: uuid.UUID, conn: ConnectionOut) -> PocketServer:
     """The server's OpenAI-style base URL and key, after the destination policy."""
-    gateway = await ai_servers.gateway_for(db, org_id, conn.id, "tts")
+    gateway = await _registered_server(db, org_id, conn)
     if gateway is not None:
         try:
             url = await ai_servers.check_address(gateway.base_url)
@@ -157,36 +215,72 @@ async def _server(db: AsyncSession, org_id: uuid.UUID, conn: ConnectionOut) -> P
                 f"ATLAS cannot use the AI server {gateway.server_name}: {exc.message}."
             ) from None
         return PocketServer(url.rstrip("/"), gateway.token, gateway.server_name)
-    return PocketServer(
-        await _base_url(conn), get_settings().local_tts_api_key.get_secret_value() or None
-    )
+    url, key = await _base_url(conn)
+    return PocketServer(url, key)
 
 
-async def _base_url(conn: ConnectionOut) -> str:
-    """The server's OpenAI-style base URL (".../v1"), after the destination policy."""
+@dataclass(frozen=True, slots=True)
+class _Local:
+    """The operator's setting for where ATLAS reaches one kind of voice server."""
+
+    url_setting: str
+    url: str
+    key: str | None = field(repr=False)
+    server: str
+    example: str
+
+
+def _local(conn: ConnectionOut) -> _Local | None:
     settings = get_settings()
-    override = (settings.local_tts_url or "").strip()
+    if is_expressive_connection(conn):
+        return _Local(
+            "ATLAS_EXPRESSIVE_TTS_URL",
+            (settings.expressive_tts_url or "").strip(),
+            settings.expressive_tts_api_key.get_secret_value() or None,
+            "expressive voice server",
+            "http://expressive-tts:8000/v1 for an API container",
+        )
+    if is_pocket_connection(conn):
+        return _Local(
+            "ATLAS_LOCAL_TTS_URL",
+            (settings.local_tts_url or "").strip(),
+            settings.local_tts_api_key.get_secret_value() or None,
+            "Pocket TTS server",
+            "http://127.0.0.1:8002/v1 when the API runs outside Docker",
+        )
+    return None  # another self-hosted voice: only its own address
+
+
+async def _base_url(conn: ConnectionOut) -> tuple[str, str | None]:
+    """The server's OpenAI-style base URL (".../v1") after the destination policy, and key."""
+    settings = get_settings()
+    local = _local(conn)
+    override = local.url if local else ""
     url = override or str(conn.connection_settings.get("base_url") or "").strip()
     if not url:
-        raise IntegrationUnavailableError(
-            "This connection has no base URL. Set ATLAS_LOCAL_TTS_URL to where ATLAS reaches "
-            "the Pocket TTS server."
+        where = (
+            f" Set {local.url_setting} to where ATLAS reaches the {local.server}." if local else ""
         )
+        raise IntegrationUnavailableError(f"This connection has no base URL.{where}")
     try:
         url = await validate_destination_url(
             url,
-            label="Pocket TTS server",
+            label=local.server[0].upper() + local.server[1:] if local else "Voice server",
             allow_private=bool(override) or settings.allow_private_model_urls,
             # The operator's own URL may be plain http to a server on the same Docker network.
             allow_internal_http=bool(override),
         )
     except ValidationFailedError as exc:
+        where = (
+            f" Set {local.url_setting} to where ATLAS reaches the {local.server} (for example "
+            f"{local.example})."
+            if local
+            else ""
+        )
         raise IntegrationUnavailableError(
-            f"ATLAS cannot use {url} to manage voices: {exc.message}. Set ATLAS_LOCAL_TTS_URL "
-            "to where ATLAS reaches the Pocket TTS server (for example "
-            "http://127.0.0.1:8002/v1 when the API runs outside Docker)."
+            f"ATLAS cannot use {url} to manage voices: {exc.message}.{where}"
         ) from None
-    return url.rstrip("/")
+    return url.rstrip("/"), local.key if local else None
 
 
 # ---------------------------------------------------------------- talking to the server
@@ -281,6 +375,101 @@ def _raise_for(response: httpx.Response, secret: str | None = None) -> NoReturn:
     raise IntegrationUnavailableError(detail)
 
 
+# ---------------------------------------------------------------- sounds an expressive voice makes
+
+# An expressive voice server lists the sound cues it performs at GET {base}/audio/sound-tags
+# as {"tags": ["[laugh]", "[clear throat]", ...]} (written with or without the brackets). The
+# answer is kept briefly, per connection and address, so publishing, previews and pickers
+# do not ask for every request.
+SOUND_TAGS_PATH = "/audio/sound-tags"
+SOUND_TAGS_TTL_SECONDS = 60.0
+SOUND_TAGS_TIMEOUT = httpx.Timeout(4.0, connect=3.0)
+MAX_SOUND_TAGS = 20
+_MAX_CACHED = 512
+# The tags reach agents' prompts: plain lower-case words only, never the server's free text.
+_SOUND_TAG = re.compile(r"[a-z]+(?: [a-z]+){0,2}")
+_sound_tags_cache: dict[tuple[str, str, str], tuple[float, tuple[str, ...]]] = {}
+
+
+def reset_sound_tags_cache() -> None:
+    """Forget every server's answer (tests)."""
+    _sound_tags_cache.clear()
+
+
+def clean_sound_tags(raw: Any) -> tuple[str, ...]:
+    """The server's tags that are plain words ("[laugh]" -> "laugh"), in its order, once."""
+    if not isinstance(raw, list):
+        return ()
+    tags: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        bare = item.strip()
+        if bare.startswith("[") and bare.endswith("]"):
+            bare = bare[1:-1]
+        tag = " ".join(bare.split()).lower()
+        if len(tag) <= 24 and _SOUND_TAG.fullmatch(tag) and tag not in tags:
+            tags.append(tag)
+    return tuple(tags[:MAX_SOUND_TAGS])
+
+
+async def _fetch_sound_tags(server: PocketServer) -> tuple[str, ...]:
+    headers = {"Authorization": f"Bearer {server.api_key}"} if server.api_key else {}
+    async with httpx.AsyncClient(
+        timeout=SOUND_TAGS_TIMEOUT, follow_redirects=False, headers=headers
+    ) as client:
+        response = await client.get(f"{server.base}{SOUND_TAGS_PATH}")
+    if response.status_code != 200:
+        return ()
+    try:
+        body = response.json()
+    except ValueError:
+        return ()
+    return clean_sound_tags(body.get("tags")) if isinstance(body, dict) else ()
+
+
+async def sound_tags(db: AsyncSession, org_id: uuid.UUID, conn: ConnectionOut) -> tuple[str, ...]:
+    """The sound cues the connection's voice server performs; empty when it performs none.
+
+    A voice connection is expressive when its server answers GET {base}/audio/sound-tags
+    with at least one tag. Reached like the voice and cloning API (registered AI server,
+    operator setting, or the connection's own address under the destination policy).
+    Never raises: a server that cannot be asked counts as not expressive.
+    """
+    if not _self_hosted_voice(conn):
+        return ()
+    key = (str(org_id), conn.id, repr(sorted(conn.connection_settings.items())))
+    now = time.monotonic()
+    cached = _sound_tags_cache.get(key)
+    if cached is not None and cached[0] > now:
+        return cached[1]
+    try:
+        tags = await _fetch_sound_tags(await _server(db, org_id, conn))
+    except Exception as exc:  # unreachable, refused by the policy, or a bad answer
+        log.info("sound_tags_unavailable", extra={"error_type": type(exc).__name__})
+        tags = ()
+    if len(_sound_tags_cache) >= _MAX_CACHED:
+        for stale in [k for k, (until, _) in _sound_tags_cache.items() if until <= now] or [
+            next(iter(_sound_tags_cache))
+        ]:
+            _sound_tags_cache.pop(stale, None)
+    _sound_tags_cache[key] = (now + SOUND_TAGS_TTL_SECONDS, tags)
+    return tags
+
+
+async def default_voice(db: AsyncSession, org_id: uuid.UUID, conn: ConnectionOut) -> str | None:
+    """The built-in voice the server marks as its default (else its first); None if unknown."""
+    try:
+        response = await _send("GET", await _server(db, org_id, conn), "/audio/voices")
+    except AppError:
+        return None
+    if not response.is_success:
+        return None
+    voices = [v for raw in _data(response) if (v := _builtin(raw))]
+    chosen = next((v for v in voices if v.default), voices[0] if voices else None)
+    return chosen.id if chosen else None
+
+
 # ---------------------------------------------------------------- validation
 
 
@@ -353,6 +542,7 @@ def _sample_seconds(raw: dict[str, Any]) -> float | None:
 async def list_voices(db: AsyncSession, ctx: TenantContext, connection_id: str) -> PocketVoiceList:
     conn = await _pocket_connection(db, ctx, connection_id)
     server = await _server(db, ctx.org_id, conn)
+    tags = list(await sound_tags(db, ctx.org_id, conn))
     response = await _send("GET", server, "/voices")
     if response.status_code in (404, 501):
         # Cloning is off (or an older server): built-in voices still come from the speech API.
@@ -369,6 +559,7 @@ async def list_voices(db: AsyncSession, ctx: TenantContext, connection_id: str) 
             cloning_state=state,
             setup_message=message,
             setup_url=SETUP_URL,
+            sound_tags=tags,
         )
     if not response.is_success:
         _raise_for(response)
@@ -381,7 +572,9 @@ async def list_voices(db: AsyncSession, ctx: TenantContext, connection_id: str) 
                 voices.append(_cloned(row, _sample_seconds(raw)))
         elif voice := _builtin(raw):
             voices.append(voice)
-    return PocketVoiceList(voices=voices, cloning_available=True, cloning_state="on")
+    return PocketVoiceList(
+        voices=voices, cloning_available=True, cloning_state="on", sound_tags=tags
+    )
 
 
 async def _state_while_off(server: PocketServer, message: str) -> tuple[CloningState, str]:

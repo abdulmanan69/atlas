@@ -1,12 +1,13 @@
 /**
  * Call settings: how quickly the agent replies, how long a call may run, words speech
- * recognition should know, background noise, voicemail and screening, agent variables, the
- * website widget and the agent's ID. Agent-level, for guided and flow agents alike.
+ * recognition should know, background noise, natural sounds (laughs and sighs with an
+ * expressive voice), voicemail and screening, agent variables, the website widget and the
+ * agent's ID. Agent-level, for guided and flow agents alike.
  *
  * Grouped into sections with a small navigation list (a row of chips on narrow screens),
  * so nothing is buried at the bottom of a long page.
  */
-import { AudioLines, BookA, Fingerprint, Gauge, Globe, PhoneOff, Plus, Timer, Variable, X, type LucideIcon } from "lucide-react";
+import { AudioLines, BookA, Fingerprint, Gauge, Globe, Laugh, PhoneOff, Plus, Timer, Variable, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
@@ -18,6 +19,8 @@ import { Segmented } from "@/components/ui/segmented";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import type { ResponseSpeed } from "@/features/calls/latency-types";
+import { cueLabel } from "@/features/calls/sound-cues";
+import { SoundCue } from "@/features/calls/speech-text";
 import { CopyField } from "@/features/developer/copy-button";
 import { RESPONSE_SPEEDS, speedFields, type AgentForm } from "@/features/voice/agent-form";
 import { useConnections, useLatencyGuide, useModelSelection } from "@/features/voice/queries";
@@ -26,14 +29,16 @@ import { NOISE_LEVELS } from "@/features/voice/settings/settings-model";
 import { VariablesSection } from "@/features/voice/settings/variables-section";
 import { VoicemailSection } from "@/features/voice/settings/voicemail-section";
 import { WebsiteSection } from "@/features/voice/settings/website-section";
+import { isSelfHostedVoice, useSoundTags } from "@/features/voice/voice-cloning";
 import { cn } from "@/lib/utils";
 
-type SectionId = "speed" | "limits" | "recognition" | "noise" | "voicemail" | "variables" | "website" | "identity";
+type SectionId = "speed" | "limits" | "recognition" | "noise" | "sounds" | "voicemail" | "variables" | "website" | "identity";
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: "speed", label: "Response speed", icon: Gauge },
   { id: "limits", label: "Length & turn-taking", icon: Timer },
   { id: "recognition", label: "Words to recognise", icon: BookA },
   { id: "noise", label: "Background noise", icon: AudioLines },
+  { id: "sounds", label: "Natural sounds", icon: Laugh },
   { id: "voicemail", label: "Voicemail & screening", icon: PhoneOff },
   { id: "variables", label: "Variables", icon: Variable },
   { id: "website", label: "Add to website", icon: Globe },
@@ -52,6 +57,53 @@ function useTtsCacheSupported(form: UseFormReturn<AgentForm>): boolean | null {
   if (!connectionId || !connections.data || !guide.data) return null;
   const provider = connections.data.find((c) => c.id === connectionId)?.provider;
   return provider ? guide.data.tts_cache_providers.includes(provider) : null;
+}
+
+type VoiceSounds = { state: "loading" } | { state: "no_voice" } | { state: "plain" } | { state: "expressive"; tags: string[]; promptTags: string[] };
+
+/** Whether the agent's voice (its own, else the organization's) can make sounds such as [laugh]. */
+function useVoiceSounds(form: UseFormReturn<AgentForm>): VoiceSounds {
+  const override = form.watch("override_tts");
+  const selection = useModelSelection();
+  const connections = useConnections();
+  const connectionId = override?.connection_id ?? selection.data?.tts?.connection_id ?? null;
+  const connection = connections.data?.find((c) => c.id === connectionId);
+  const sounds = useSoundTags(isSelfHostedVoice(connection) ? connection.id : null);
+  if (!override && selection.isLoading) return { state: "loading" };
+  if (!connectionId) return { state: "no_voice" };
+  if (!connections.data) return { state: connections.isError ? "plain" : "loading" };
+  if (!isSelfHostedVoice(connection)) return { state: "plain" };
+  if (!sounds.data) return { state: sounds.isError ? "plain" : "loading" };
+  return sounds.data.expressive && sounds.data.prompt_tags.length
+    ? { state: "expressive", tags: sounds.data.tags, promptTags: sounds.data.prompt_tags }
+    : { state: "plain" };
+}
+
+function NaturalSounds({ sounds, on }: { sounds: VoiceSounds; on: boolean }) {
+  if (sounds.state === "loading") return <p className="text-[12.5px] text-muted">Checking the agent's voice…</p>;
+  if (sounds.state === "no_voice") return <p className="text-[12.5px] text-muted">Choose a voice under AI providers first.</p>;
+  if (sounds.state === "plain") {
+    return (
+      <p className="text-[12.5px] text-muted">
+        Not available: the agent's voice can't make these sounds and would read them out, so the agent is told never to write them. Choose an expressive voice (Chatterbox-Turbo) under AI providers or as this agent's own voice to turn this on.
+      </p>
+    );
+  }
+  const others = sounds.tags.filter((t) => !sounds.promptTags.includes(t));
+  return (
+    <div className="flex flex-col gap-2 text-[12.5px]">
+      <p className="flex flex-wrap items-center gap-1 text-ink-2" aria-label={`The agent may use: ${sounds.promptTags.map(cueLabel).join(", ")}`}>
+        {on ? "The agent may use:" : "Off: the agent is told not to make sounds. With it on, it may use:"}
+        {sounds.promptTags.map((t) => (
+          <SoundCue key={t} label={cueLabel(t)} />
+        ))}
+      </p>
+      <p className="text-muted">
+        At most one per reply, only where it fits, never at the start of a reply.
+        {others.length ? ` The voice can also make: ${others.map(cueLabel).join(", ")}.` : ""} Applies when you publish the agent.
+      </p>
+    </div>
+  );
 }
 
 /** Highlights the section in view; clicking scrolls to it. */
@@ -263,6 +315,9 @@ export function CallSettingsTab({ form, agentId, canEdit }: { form: UseFormRetur
   const turnStop = form.watch("call_settings.turn_stop");
   const voicemailOn = form.watch("call_settings.voicemail.enabled");
   const ambientOn = form.watch("call_settings.ambient.enabled");
+  const naturalSounds = form.watch("call_settings.natural_sounds");
+  const sounds = useVoiceSounds(form);
+  const expressive = sounds.state === "expressive";
   const [active, go] = useActiveSection();
 
   const chooseSpeed = (next: ResponseSpeed) => {
@@ -387,6 +442,22 @@ export function CallSettingsTab({ form, agentId, canEdit }: { form: UseFormRetur
           control={<Switch aria-label="Background noise" checked={ambientOn} onCheckedChange={(v) => form.setValue("call_settings.ambient.enabled", v, { shouldDirty: true })} />}
         >
           <BackgroundNoise form={form} agentId={agentId} />
+        </Row>
+
+        <Row
+          id="sounds"
+          title="Natural sounds"
+          description="The agent laughs, sighs or gasps where a person naturally would. Needs an expressive voice."
+          control={
+            <Switch
+              aria-label="Natural sounds"
+              checked={expressive && naturalSounds}
+              disabled={!expressive}
+              onCheckedChange={(v) => form.setValue("call_settings.natural_sounds", v, { shouldDirty: true })}
+            />
+          }
+        >
+          <NaturalSounds sounds={sounds} on={naturalSounds} />
         </Row>
 
         <Row

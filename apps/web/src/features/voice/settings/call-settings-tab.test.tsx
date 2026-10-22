@@ -78,15 +78,72 @@ afterEach(() => {
   formRef = null;
 });
 
+/** The organization's voice is this connection; returns the sound-tags paths asked for. */
+function withVoice(conn: { id: string; name: string; provider: string; base_url?: string }, tags: unknown): () => string[] {
+  const asked: string[] = [];
+  const fallback = fetchMock.getMockImplementation()!;
+  const connection = {
+    id: conn.id,
+    name: conn.name,
+    provider: conn.provider,
+    provider_title: conn.provider,
+    connection_settings: conn.base_url ? { base_url: conn.base_url } : {},
+    configured_credentials: [],
+    hosted_trial: false,
+  };
+  fetchMock.mockImplementation(async (req: Request) => {
+    const path = new URL(req.url).pathname;
+    if (path === "/api/v1/ai/models") return json(200, { llm: null, stt: null, tts: { connection_id: conn.id, settings: {} }, embeddings: null, llm_fallback: null });
+    if (path === "/api/v1/ai/connections") return json(200, [connection]);
+    if (path.endsWith("/sound-tags")) {
+      asked.push(path);
+      return json(200, tags);
+    }
+    return fallback(req);
+  });
+  return () => asked;
+}
+
 describe("CallSettingsTab", () => {
   it("groups every setting into sections with a navigation list", async () => {
     renderTab();
     const nav = screen.getByRole("navigation", { name: "Call settings sections" });
     const items = within(nav).getAllByRole("button").map((b) => b.textContent);
-    expect(items).toEqual(["Response speed", "Length & turn-taking", "Words to recognise", "Background noise", "Voicemail & screening", "Variables", "Add to website", "Agent ID"]);
+    expect(items).toEqual(["Response speed", "Length & turn-taking", "Words to recognise", "Background noise", "Natural sounds", "Voicemail & screening", "Variables", "Add to website", "Agent ID"]);
     await userEvent.click(within(nav).getByRole("button", { name: "Voicemail & screening" }));
     expect(within(nav).getByRole("button", { name: "Voicemail & screening" })).toHaveAttribute("aria-current", "true");
     expect(screen.getByRole("region", { name: "Agent ID" })).toHaveTextContent(AGENT);
+  });
+
+  it("turns natural sounds on or off when the agent's voice is expressive, and lists its sounds", async () => {
+    const tagged = withVoice({ id: "v1", name: "Expressive voice", provider: "speaches", base_url: "http://expressive-tts:8000/v1" }, {
+      expressive: true,
+      tags: ["laugh", "chuckle", "sigh", "gasp", "cough"],
+      prompt_tags: ["laugh", "chuckle", "sigh", "gasp"],
+    });
+    renderTab();
+    const region = screen.getByRole("region", { name: "Natural sounds" });
+    const toggle = within(region).getByRole("switch", { name: "Natural sounds" });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    expect(toggle).toBeChecked();
+    expect(within(region).getByLabelText("The agent may use: laughs, chuckles, sighs, gasps")).toBeInTheDocument();
+    expect(within(region).getByText(/The voice can also make: coughs\./)).toBeInTheDocument();
+    expect(tagged()).toEqual(["/api/v1/ai/connections/v1/sound-tags"]);
+    await userEvent.click(toggle);
+    expect(formRef?.getValues("call_settings.natural_sounds")).toBe(false);
+    expect(within(region).getByText(/Off: the agent is told not to make sounds/)).toBeInTheDocument();
+  });
+
+  it("keeps natural sounds off, with the reason, when the voice reads everything aloud", async () => {
+    const tagged = withVoice({ id: "e1", name: "ElevenLabs", provider: "elevenlabs" }, null);
+    renderTab();
+    const region = screen.getByRole("region", { name: "Natural sounds" });
+    expect(await within(region).findByText(/the agent's voice can't make these sounds/)).toBeInTheDocument();
+    const toggle = within(region).getByRole("switch", { name: "Natural sounds" });
+    expect(toggle).toBeDisabled();
+    expect(toggle).not.toBeChecked();
+    expect(formRef?.getValues("call_settings.natural_sounds")).toBe(true);
+    expect(tagged(), "a cloud voice is never asked").toEqual([]);
   });
 
   it("sets background noise with the switch, quick picks and the default sound", async () => {

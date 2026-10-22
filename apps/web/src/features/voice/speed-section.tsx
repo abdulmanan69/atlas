@@ -155,7 +155,7 @@ function LatencyGuideTable({ guide, catalog }: { guide: LatencyGuide; catalog: C
               </Td>
               <Td className={cn("whitespace-nowrap text-right font-mono", p.typical_ms === null && "text-faint")}>
                 {p.typical_ms === null ? "—" : `≈ ${formatMs(p.typical_ms)}`}
-                {p.measured ? <span className="block font-sans text-[11px] text-faint">measured by ATLAS</span> : null}
+                {p.measured ? <span className="block font-sans text-[11px] text-faint">{p.measured_on ? `measured by ATLAS (${p.measured_on})` : "measured by ATLAS"}</span> : null}
               </Td>
               <Td>{p.streaming ? <Badge tone="success">Yes</Badge> : <Badge>No</Badge>}</Td>
               <Td>{p.kind === "stt" ? p.turn_aware ? <Badge tone="success">Yes</Badge> : <Badge>No</Badge> : <span className="text-faint">—</span>}</Td>

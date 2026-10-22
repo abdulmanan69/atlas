@@ -119,6 +119,11 @@ describe("clone form validation", () => {
     expect(isPocketConnection({ ...base, name: "Voice", connection_settings: { base_url: "http://local-tts:8000/v1" } })).toBe(true);
     expect(isPocketConnection({ ...base, name: "Local speech", connection_settings: { base_url: "http://local-speech:8000/v1" } })).toBe(false);
     expect(isPocketConnection({ ...base, provider: "openai", name: "pocket", connection_settings: {} })).toBe(false);
+    // The expressive voice server has the same voice API, by name or address, or behind an AI server.
+    expect(isPocketConnection({ ...base, name: "Expressive voice", connection_settings: {} })).toBe(true);
+    expect(isPocketConnection({ ...base, name: "GPU", connection_settings: { base_url: "http://chatterbox:8000/v1" } })).toBe(true);
+    expect(isPocketConnection({ ...base, name: "Remote", connection_settings: { base_url: "https://ai.example.com/voice/v1" } })).toBe(true);
+    expect(isPocketConnection({ ...base, name: "Remote", connection_settings: { base_url: "https://ai.example.com/tts/v1" } })).toBe(true);
   });
 });
 
@@ -269,6 +274,37 @@ describe("PocketVoicePicker", () => {
     expect(await screen.findByRole("heading", { name: "Turn on voice cloning" })).toBeInTheDocument();
     expect(await screen.findByText(/turned on by an organization owner/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Clone voice" })).not.toBeInTheDocument();
+  });
+
+  it("marks the voices of an expressive server with the sounds they make", async () => {
+    route({
+      "GET /api/v1/ai/connections/c1/voices": () =>
+        json(200, {
+          voices: [
+            { id: "emily", name: "Emily", cloned: false, default: true },
+            { id: "custom-sam-0123456789abcdef", name: "Sam", cloned: true, sample_seconds: 6 },
+          ],
+          cloning_available: true,
+          cloning_state: "on",
+          sound_tags: ["laugh", "chuckle", "sigh", "gasp", "cough"],
+        }),
+    });
+    renderWithProviders(<PocketVoicePicker label="voice" value="emily" onChange={() => undefined} connectionId="c1" />);
+    expect(await screen.findByText("Selected: Emily")).toBeInTheDocument();
+    const badge = screen.getByText("Laughs, sighs");
+    expect(badge).toHaveAttribute("title", "Can make these sounds: laugh, chuckle, sigh, gasp, cough");
+    await userEvent.click(screen.getByRole("combobox"));
+    // Every voice of the server can: built-in and cloned alike.
+    expect(await screen.findAllByText("Laughs, sighs")).toHaveLength(3);
+  });
+
+  it("marks no voice of a server without sounds", async () => {
+    route({
+      "GET /api/v1/ai/connections/c1/voices": () => json(200, { voices: [{ id: "alba", name: "alba", cloned: false, default: true }], cloning_available: true, cloning_state: "on", sound_tags: [] }),
+    });
+    renderWithProviders(<PocketVoicePicker label="voice" value="alba" onChange={() => undefined} connectionId="c1" />);
+    expect(await screen.findByText("Selected: alba")).toBeInTheDocument();
+    expect(screen.queryByText("Laughs, sighs")).not.toBeInTheDocument();
   });
 
   it("lets an owner turn voice cloning off after confirming", async () => {

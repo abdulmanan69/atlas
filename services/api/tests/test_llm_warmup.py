@@ -33,6 +33,7 @@ from app.services.llm_warmup import (
     target_for,
     warm_agent_prompt,
 )
+from app.services.natural_sounds import NO_CUES_RULE
 from tests.calls_support import CallsRuntime, create_lead, published_agent, start_call
 from tests.conftest import Account
 from tests.fake_runtime import VALID_KEY
@@ -368,6 +369,12 @@ async def test_live_call_and_test_call_warm_a_self_hosted_model(
     body = warmup.requests[0]["body"]
     assert body["model"] == "qwen2.5:1.5b" and body["max_tokens"] == 1
     assert body["messages"][0]["role"] == "system" and "Hina" in body["messages"][1]["content"]
+    # It starts with the global rules the agent was published with, so the prompt cache
+    # matches: here only the rule about sound cues (the voice is not expressive).
+    published = runtime.last("PUT", r"^/workflow/\d+$")["workflow_definition"]["nodes"]
+    rules = next(n["data"]["prompt"] for n in published if n["type"] == "globalNode")
+    assert rules == NO_CUES_RULE
+    assert body["messages"][0]["content"].startswith(rules + "\n\n")
 
     # Browser test call from the agent editor.
     r = await client.post(

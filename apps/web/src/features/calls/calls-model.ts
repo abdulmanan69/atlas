@@ -5,6 +5,7 @@
  */
 import type { IDatasource, IGetRowsParams } from "ag-grid-community";
 
+import { splitSoundCues, type SpeechPart } from "@/features/calls/sound-cues";
 import type { Call, CallQuery } from "@/features/queries";
 
 export const BLOCK_SIZE = 50;
@@ -221,14 +222,19 @@ export type TranscriptTurn = {
   role: "agent" | "person" | "note";
   speaker: string | null;
   text: string;
+  /** The text with sound cues such as "[laugh]" picked out, for display. */
+  parts: SpeechPart[];
   /** Seconds from the start of the conversation, when the transcript carries times. */
   offset?: number | null;
 };
 export type ParsedTranscript = { kind: "turns"; turns: TranscriptTurn[] } | { kind: "plain"; text: string };
 
 const SPEAKER_LINE = /^\s*([A-Za-z][\w .'-]{0,39}):\s?(.*)$/;
-/** `[2026-10-19T16:50:50.565+00:00 → 2026-10-19T16:50:52.894+00:00] user: Yes.` (end optional). */
-const TIMED_LINE = /^\s*\[([^\]\s→]+)(?:\s*(?:→|->)\s*([^\]\s]+))?\]\s*([A-Za-z][\w .'-]{0,39}):\s?(.*)$/;
+/**
+ * `[2026-10-19T16:50:50.565+00:00 → 2026-10-19T16:50:52.894+00:00] user: Yes.` (end optional).
+ * A time starts with a digit, so a line that opens with a sound cue ("[laugh] Well: sure") is not one.
+ */
+const TIMED_LINE = /^\s*\[(\d[^\]\s→]*)(?:\s*(?:→|->)\s*([^\]\s]+))?\]\s*([A-Za-z][\w .'-]{0,39}):\s?(.*)$/;
 const AGENT_ROLES = /^(agent|assistant|bot)$/i;
 
 /** One utterance, with each repeated line kept once (the voice service can log a phrase twice). */
@@ -248,13 +254,14 @@ function dedupeLines(text: string): string {
  *   answered) and each turn carries its offset from the first line.
  * - Simulated transcripts: `Agent:` for the agent, any other `Name:` for the person;
  *   unprefixed lines continue the previous turn or stand alone as notes.
- * Anything else is shown as plain text.
+ * Anything else is shown as plain text. Each turn's `parts` picks out the sound cues an
+ * expressive voice made ("[laugh]"), shown as chips rather than brackets.
  */
 export function parseTranscript(text: string): ParsedTranscript {
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
   if (lines.some((l) => TIMED_LINE.test(l))) return parseTimed(lines);
   if (!lines.some((l) => /^\s*agent:/i.test(l))) return { kind: "plain", text };
-  const turns: TranscriptTurn[] = [];
+  const turns: Omit<TranscriptTurn, "parts">[] = [];
   for (const raw of lines) {
     const line = raw.trimEnd();
     if (!line.trim()) continue;
@@ -268,7 +275,7 @@ export function parseTranscript(text: string): ParsedTranscript {
     if (last && last.role !== "note") last.text = last.text ? `${last.text}\n${line.trim()}` : line.trim();
     else turns.push({ role: "note", speaker: null, text: line.trim() });
   }
-  return { kind: "turns", turns };
+  return { kind: "turns", turns: turns.map((t) => ({ ...t, parts: splitSoundCues(t.text) })) };
 }
 
 function parseTimed(lines: string[]): ParsedTranscript {
@@ -293,12 +300,16 @@ function parseTimed(lines: string[]): ParsedTranscript {
   const first = items.find((i) => Number.isFinite(i.at));
   const start = first ? first.at : null;
   const turns: TranscriptTurn[] = items
-    .map((i) => ({
-      role: i.role,
-      speaker: i.role === "agent" ? "Agent" : "Caller",
-      text: dedupeLines(i.text),
-      offset: start !== null && Number.isFinite(i.at) ? Math.max(0, (i.at - start) / 1000) : null,
-    }))
+    .map((i) => {
+      const said = dedupeLines(i.text);
+      return {
+        role: i.role,
+        speaker: i.role === "agent" ? "Agent" : "Caller",
+        text: said,
+        parts: splitSoundCues(said),
+        offset: start !== null && Number.isFinite(i.at) ? Math.max(0, (i.at - start) / 1000) : null,
+      };
+    })
     .filter((t) => t.text);
   return turns.length ? { kind: "turns", turns } : { kind: "plain", text: lines.join("\n") };
 }

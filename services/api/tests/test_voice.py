@@ -14,6 +14,7 @@ from app.integrations.voice_runtime.workflow_builder import OPT_OUT_FIELD, compi
 from app.models.audit import AuditLog
 from app.models.voice import RuntimeAccount
 from app.schemas.voice import AgentConfig
+from app.services.natural_sounds import NO_CUES_RULE
 from tests.conftest import Account, invite_and_join, signup
 from tests.fake_runtime import VALID_KEY, FakeRuntime
 
@@ -294,6 +295,9 @@ async def test_publish_compiles_and_syncs_workflow(
     assert report["payload_template"]["atlas_call_id"] == "{{initial_context.atlas_call_id}}"
     codes = [d["code"] for d in sent["workflow_configurations"]["call_dispositions"]]
     assert "qualified" in codes and "do_not_call" in codes
+    # A cloud voice cannot laugh or sigh: the agent is told to write no sound cues.
+    assert nodes["globalNode"]["data"]["prompt"] == NO_CUES_RULE
+    assert nodes["startCall"]["data"]["add_global_prompt"] is True
 
     # Editing creates unpublished changes; republishing updates the same workflow.
     cfg = dict(body["config"])
@@ -443,6 +447,19 @@ def test_prompt_compiler_includes_rules_and_questions() -> None:
     assert "on behalf of Acme" in prompt
     assert "1. What is your budget?\n2. When do you want to move?" in prompt
     assert "Speak in Urdu" in prompt and "AI assistant" in prompt
+    # Seen on test calls: re-asking what the caller already said, emoji in spoken replies,
+    # and claiming a quote was sent without a tool sending it.
+    assert (
+        "A checklist, not a script: cover these naturally, one at a time. Skip any the person "
+        "has already answered, even in passing, and never ask for something you already have."
+    ) in prompt
+    assert "- Use plain spoken words only: no emoji, symbols, markdown or lists." in prompt
+    assert (
+        "- Never say something was done, booked or sent unless a tool did it in this call."
+    ) in prompt
+    assert compile_prompt(cfg) == prompt, "the same text every time (prompt cache)"
+    no_questions = compile_prompt(cfg.model_copy(update={"qualification_questions": []}))
+    assert "checklist" not in no_questions and "plain spoken words" in no_questions
     no_disclosure = compile_prompt(cfg.model_copy(update={"ai_disclosure": False}))
     assert "AI assistant" not in no_disclosure
 
@@ -462,3 +479,13 @@ def test_config_rejects_duplicate_or_reserved_fields() -> None:
             instructions="x" * 25,
             outcomes=[{"code": "a", "description": "x"}, {"code": "a", "description": "y"}],
         )  # type: ignore[list-item]
+
+
+def test_natural_sounds_is_a_call_setting_on_by_default() -> None:
+    base = {"company_name": "A", "greeting": "Hi", "instructions": "x" * 25}
+    assert AgentConfig(**base).call_settings.natural_sounds is True  # type: ignore[arg-type]
+    # Saved before the setting existed: on, like a new agent.
+    legacy = AgentConfig(**base, call_settings={"max_call_seconds": 120})  # type: ignore[arg-type]
+    assert legacy.call_settings.natural_sounds is True
+    off = AgentConfig(**base, call_settings={"natural_sounds": False})  # type: ignore[arg-type]
+    assert off.model_dump()["call_settings"]["natural_sounds"] is False

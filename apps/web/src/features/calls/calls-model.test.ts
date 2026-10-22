@@ -199,12 +199,37 @@ describe("parseTranscript", () => {
     const parsed = parseTranscript("[SIMULATED CALL]\nAgent: Hi Hina, is now a good time?\nHina: Sure.\nIt is quiet here.\nAgent: Great.\n");
     expect(parsed.kind).toBe("turns");
     if (parsed.kind !== "turns") return;
+    const plain = (text: string) => [{ kind: "text", text }];
     expect(parsed.turns).toEqual([
-      { role: "note", speaker: null, text: "[SIMULATED CALL]" },
-      { role: "agent", speaker: "Agent", text: "Hi Hina, is now a good time?" },
-      { role: "person", speaker: "Hina", text: "Sure.\nIt is quiet here." },
-      { role: "agent", speaker: "Agent", text: "Great." },
+      { role: "note", speaker: null, text: "[SIMULATED CALL]", parts: plain("[SIMULATED CALL]") },
+      { role: "agent", speaker: "Agent", text: "Hi Hina, is now a good time?", parts: plain("Hi Hina, is now a good time?") },
+      { role: "person", speaker: "Hina", text: "Sure.\nIt is quiet here.", parts: plain("Sure.\nIt is quiet here.") },
+      { role: "agent", speaker: "Agent", text: "Great.", parts: plain("Great.") },
     ]);
+  });
+
+  it("picks out sound cues an expressive voice made, also on a line of their own", () => {
+    const text = [
+      "[2026-10-22T10:00:00.000+00:00] assistant: [laugh] That's a good one.",
+      "[2026-10-22T10:00:05.000+00:00 → 2026-10-22T10:00:06.000+00:00] user: Ha, yes.",
+      "[2026-10-22T10:00:07.000+00:00] assistant: Fair enough.",
+      "[sigh] Well: let's see.",
+    ].join("\n");
+    const parsed = parseTranscript(text);
+    expect(parsed.kind).toBe("turns");
+    if (parsed.kind !== "turns") return;
+    expect(parsed.turns.map((t) => t.text)).toEqual(["[laugh] That's a good one.", "Ha, yes.", "Fair enough.\n[sigh] Well: let's see."]);
+    expect(parsed.turns[0]!.parts).toEqual([
+      { kind: "cue", tag: "laugh", label: "laughs" },
+      { kind: "text", text: " That's a good one." },
+    ]);
+    expect(parsed.turns[2]!.parts).toEqual([
+      { kind: "text", text: "Fair enough.\n" },
+      { kind: "cue", tag: "sigh", label: "sighs" },
+      { kind: "text", text: " Well: let's see." },
+    ]);
+    const simulated = parseTranscript("Agent: Oh [chuckles] sure.\nSam: Thanks.");
+    expect(simulated.kind === "turns" && simulated.turns[0]!.parts.map((p) => p.kind)).toEqual(["text", "cue", "text"]);
   });
 
   it("leaves text without an Agent: prefix as plain", () => {

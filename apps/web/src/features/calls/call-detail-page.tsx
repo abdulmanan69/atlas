@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Badge, Card, CardHeader, Skeleton, Tooltip } from "@/components/ui/primitives";
 import { directionLabel, eventLabel, formatOffset, MODE_BADGE, outcomeLabel, outcomeTone, parseTranscript, STATE_BADGE, summarizeUsage, TERMINAL_STATES, testName } from "@/features/calls/calls-model";
 import { ResponseTimesCard } from "@/features/calls/response-times-card";
+import { SpeechText } from "@/features/calls/speech-text";
 import { qk, useAgentNames, useCall, useCallEvents, useOrgId, type CallDetail } from "@/features/queries";
 import { api, errorMessage, unwrap } from "@/lib/api";
 import { formatCost, formatDateTime, formatDuration, formatRelative } from "@/lib/format";
@@ -247,7 +248,9 @@ function Transcript({ text }: { text: string }) {
                   <span className="ml-1.5 font-mono font-normal normal-case tracking-normal text-faint">{formatOffset(t.offset)}</span>
                 ) : null}
               </p>
-              <p className="mt-0.5 whitespace-pre-wrap text-[13px] text-ink">{t.text}</p>
+              <p className="mt-0.5 whitespace-pre-wrap text-[13px] text-ink">
+                <SpeechText parts={t.parts} />
+              </p>
             </div>
           </li>
         ),

@@ -614,6 +614,26 @@ export interface paths {
         patch: operations["update_connection_api_v1_ai_connections__connection_id__patch"];
         trace?: never;
     };
+    "/api/v1/ai/connections/{connection_id}/sound-tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether a voice connection makes sounds such as [laugh], and which
+         * @description An expressive voice (for example Chatterbox-Turbo) laughs, sighs or gasps where a reply contains [laugh], [sigh] or [gasp]; other voices would read the words. `expressive` is false for every other voice, and when the voice server cannot be reached. Agents with the Natural sounds call setting use `prompt_tags`. The answer is kept for a minute.
+         */
+        get: operations["get_sound_tags_api_v1_ai_connections__connection_id__sound_tags_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/ai/connections/{connection_id}/voice-cloning": {
         parameters: {
             query?: never;
@@ -650,8 +670,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Pocket TTS voices of a connection, with this organization's cloned voices
-         * @description Built-in voices, and the voices this organization cloned on the connection's server. `cloning_available` is false (with the setup steps) when the server has no voice-cloning weights; `cloning_state` says whether it is off, being turned on, or failed to turn on.
+         * Voices of a Pocket TTS or expressive connection and this organization's cloned voices
+         * @description Built-in voices, and the voices this organization cloned on the connection's server. `sound_tags` lists the sounds the voices make, for an expressive voice. `cloning_available` is false (with the setup steps) when the server has no voice-cloning weights; `cloning_state` says whether it is off, being turned on, or failed to turn on.
          */
         get: operations["list_pocket_voices_api_v1_ai_connections__connection_id__voices_get"];
         put?: never;
@@ -3430,6 +3450,12 @@ export interface components {
              */
             max_call_seconds?: number;
             /**
+             * Natural Sounds
+             * @description Let the agent laugh, sigh or gasp where a person naturally would. Only takes effect with an expressive voice (GET /ai/connections/{id}/sound-tags); with any other voice, or when false, the agent is told not to write sounds
+             * @default true
+             */
+            natural_sounds?: boolean;
+            /**
              * Response Speed
              * @description How quickly the agent takes its turn. Presets set the turn-taking fields below; 'custom' uses them as given. Settings saved before presets existed (turn fields present, no response_speed) are read as 'custom'.
              * @default balanced
@@ -4658,10 +4684,15 @@ export interface components {
             kind: "stt" | "llm" | "tts";
             /**
              * Measured
-             * @description typical_ms was measured by ATLAS on a 6-core CPU without a GPU (self-hosted models guide), not stated by a provider
+             * @description typical_ms was measured by ATLAS, not stated by a provider: on a 6-core CPU without a GPU (self-hosted models guide), or on the GPU in `measured_on`
              * @default false
              */
             measured?: boolean;
+            /**
+             * Measured On
+             * @description The GPU a measured figure was taken on, e.g. 'NVIDIA T4 GPU'; null for the CPU machine or a provider's figure
+             */
+            measured_on?: string | null;
             /**
              * Model Hint
              * @description Model or option the figure refers to
@@ -4686,7 +4717,7 @@ export interface components {
             turn_aware: boolean;
             /**
              * Typical Ms
-             * @description Typical latency as stated by the provider (not measured by ATLAS), or as measured by ATLAS on its reference CPU machine when `measured` is true; null when no figure is stated or it depends on your hardware
+             * @description Typical latency as stated by the provider (not measured by ATLAS), or as measured by ATLAS on its reference CPU machine or a GPU when `measured` is true; null when no figure is stated or it depends on your hardware
              */
             typical_ms: number | null;
         };
@@ -5504,6 +5535,11 @@ export interface components {
              * @description Where the gated voice-cloning weights' terms are accepted
              */
             setup_url?: string | null;
+            /**
+             * Sound Tags
+             * @description Sounds the server's voices make when a reply contains them in square brackets, for example laugh for [laugh]. Empty for voices that cannot
+             */
+            sound_tags?: string[];
             /** Voices */
             voices: components["schemas"]["PocketVoice"][];
         };
@@ -5899,6 +5935,24 @@ export interface components {
             phone_number: string;
             /** Reason */
             reason: string;
+        };
+        /** SoundTags */
+        SoundTags: {
+            /**
+             * Expressive
+             * @description True when the connection's voice makes sounds written in square brackets, such as [laugh], instead of reading them
+             */
+            expressive: boolean;
+            /**
+             * Prompt Tags
+             * @description The sounds agents with Natural sounds on are told they may use (at most four), most useful first
+             */
+            prompt_tags: string[];
+            /**
+             * Tags
+             * @description Every sound the voice server lists, in its order
+             */
+            tags: string[];
         };
         /** SourceCount */
         SourceCount: {
@@ -9280,6 +9334,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConnectionOut"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_sound_tags_api_v1_ai_connections__connection_id__sound_tags_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoundTags"];
                 };
             };
             /** @description Missing or invalid credentials */

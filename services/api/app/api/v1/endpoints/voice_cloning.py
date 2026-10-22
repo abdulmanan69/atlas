@@ -1,5 +1,6 @@
-"""AI providers: Pocket TTS voices, including voices cloned from a consenting speaker, and
-turning voice cloning on or off on the connection's server."""
+"""AI providers: Pocket TTS and expressive voices, including voices cloned from a consenting
+speaker, turning voice cloning on or off on the connection's server, and the sounds an
+expressive voice makes."""
 
 from __future__ import annotations
 
@@ -13,9 +14,11 @@ from app.schemas.voice_cloning import (
     CONSENT_ATTESTATION,
     PocketVoice,
     PocketVoiceList,
+    SoundTags,
     VoiceCloningEnable,
     VoiceCloningStatus,
 )
+from app.services import natural_sounds
 from app.services import voice_cloning as service
 
 router = APIRouter(prefix="/ai", tags=["AI providers"], responses=ERROR_RESPONSES)
@@ -41,9 +44,10 @@ TOO_OLD = {
 @router.get(
     "/connections/{connection_id}/voices",
     response_model=PocketVoiceList,
-    summary="Pocket TTS voices of a connection, with this organization's cloned voices",
+    summary="Voices of a Pocket TTS or expressive connection and this organization's cloned voices",
     description=(
         "Built-in voices, and the voices this organization cloned on the connection's server. "
+        "`sound_tags` lists the sounds the voices make, for an expressive voice. "
         "`cloning_available` is false (with the setup steps) when the server has no "
         "voice-cloning weights; `cloning_state` says whether it is off, being turned on, or "
         "failed to turn on."
@@ -53,6 +57,22 @@ async def list_pocket_voices(
     connection_id: ConnectionId, ctx: AgentsManage, db: DB
 ) -> PocketVoiceList:
     return await service.list_voices(db, ctx, connection_id)
+
+
+@router.get(
+    "/connections/{connection_id}/sound-tags",
+    response_model=SoundTags,
+    summary="Whether a voice connection makes sounds such as [laugh], and which",
+    description=(
+        "An expressive voice (for example Chatterbox-Turbo) laughs, sighs or gasps where a "
+        "reply contains [laugh], [sigh] or [gasp]; other voices would read the words. "
+        "`expressive` is false for every other voice, and when the voice server cannot be "
+        "reached. Agents with the Natural sounds call setting use `prompt_tags`. The answer "
+        "is kept for a minute."
+    ),
+)
+async def get_sound_tags(connection_id: ConnectionId, ctx: AgentsManage, db: DB) -> SoundTags:
+    return await natural_sounds.connection_sound_tags(db, ctx, connection_id)
 
 
 @router.post(

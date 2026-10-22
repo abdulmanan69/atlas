@@ -11,7 +11,7 @@ import math
 from collections import defaultdict
 from collections.abc import Mapping
 
-from app.integrations.voice_runtime.workflow_builder import effective_flow
+from app.integrations.voice_runtime.workflow_builder import effective_flow, global_rules_text
 from app.schemas.voice import (
     AgentConfig,
     CompiledPrompt,
@@ -273,12 +273,15 @@ def _back_edges(
 # ------------------------------------------------------------------ prompt preview
 
 
-def compose_prompt(cfg: AgentConfig, node_id: str | None = None) -> CompiledPrompt | None:
+def compose_prompt(
+    cfg: AgentConfig, node_id: str | None = None, *, sound_rule: str = ""
+) -> CompiledPrompt | None:
     """The system prompt the model receives at a node, composed like the runtime does.
 
-    Global rules are prepended (separated by a blank line) to Start and Steps that opt
-    in; Ends never get them. Template variables stay as written: they are filled per
-    call. Returns None when the node does not exist.
+    Global rules (with `sound_rule` after them, see `global_rules_text`) are prepended
+    (separated by a blank line) to Start and Steps that opt in; Ends never get them.
+    Template variables stay as written: they are filled per call. Returns None when the
+    node does not exist.
     """
     flow = effective_flow(cfg)
     node = (
@@ -288,7 +291,7 @@ def compose_prompt(cfg: AgentConfig, node_id: str | None = None) -> CompiledProm
     )
     if node is None:
         return None
-    rules = (cfg.global_rules or "").strip()
+    rules = global_rules_text(cfg, sound_rule)
     applied = bool(rules) and node.use_global_rules and node.kind != "end"
     text = "\n\n".join(p for p in ((rules if applied else ""), node.prompt.strip()) if p)
     return CompiledPrompt(

@@ -423,6 +423,37 @@ class PhraseCacheTest(unittest.TestCase):
         self.assertEqual((stats["hits"], stats["misses"], stats["entries"]), (1, 1, 1))
         self.assertNotIn("sure", json.dumps(stats).lower())
 
+    def test_sound_cues_are_removed_not_read_out(self) -> None:
+        cases = {
+            "[laugh] That's great!": "That's great!",
+            "Oh, [Chuckles] that is funny.": "Oh, that is funny.",
+            "That's funny [laugh].": "That's funny.",
+            "Well [sigh], [gasp] okay": "Well, okay",
+            "[clears his throat] Right.": "Right.",
+            "Bless you [sniffles] [cough]!": "Bless you!",
+            "[shh] Listen.": "Listen.",
+            # Not a sound cue: kept, and nothing else changes.
+            "Press [1] for sales.  Twice": "Press [1] for sales.  Twice",
+            "No cues here.": "No cues here.",
+        }
+        for text, spoken in cases.items():
+            self.assertEqual(server.strip_sound_cues(text), spoken, text)
+        r = self.speak("[laugh] Thanks for calling.")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.model.texts[-1], "Thanks for calling.")
+        # The rest of the reply still matches a kept phrase.
+        server.prewarm_phrases(["Got it."], ["alba"])
+        calls = self.model.calls
+        r = self.speak("[chuckle] Got it.")
+        self.assertEqual((r.headers["x-phrase-cache"], self.model.calls), ("hit", calls))
+        # Only a cue: nothing is said, and nothing fails.
+        r = self.speak(" [sigh] ", fmt="wav")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(r.content), 44)
+        self.assertEqual(self.model.calls, calls)
+        self.assertEqual(self.speak("[laugh]").content, b"")
+        self.assertEqual(self.speak("   ").status_code, 400)
+
 
 # Shaped like a Hugging Face user access token; not one.
 TOKEN = "hf_TestOnlyNotARealToken0123456789ab"  # noqa: S105

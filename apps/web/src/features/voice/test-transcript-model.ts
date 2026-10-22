@@ -15,6 +15,7 @@
  * Wording never repeats the voice service's own error text or names.
  */
 import { DEFAULT_THRESHOLDS, responseTone, type SummaryTone } from "@/features/calls/latency-model";
+import { splitSoundCues, type SpeechPart } from "@/features/calls/sound-cues";
 import type { Schemas } from "@/lib/api";
 import type { FeedbackMessage } from "@/lib/webrtc";
 
@@ -32,7 +33,8 @@ export interface ReplyTiming {
 
 export type TranscriptItem =
   | { kind: "user"; id: string; text: string; interim: string }
-  | { kind: "agent"; id: string; text: string; speaking: boolean; timing: ReplyTiming }
+  /** `parts`: the text with sound cues ("[laugh]") picked out, for display. */
+  | { kind: "agent"; id: string; text: string; parts: SpeechPart[]; speaking: boolean; timing: ReplyTiming }
   | {
       kind: "tool";
       id: string;
@@ -116,11 +118,15 @@ function findAgent(state: TranscriptState, id: string | null): Extract<Transcrip
 
 function addAgent(state: TranscriptState, body: string, speaking: boolean, timing: ReplyTiming): TranscriptState {
   const [id, s] = nextId(state, "agent");
-  return { ...s, items: [...s.items, { kind: "agent", id, text: body, speaking, timing }], openAgent: id, pending: NO_TIMING };
+  return { ...s, items: [...s.items, { kind: "agent", id, text: body, parts: splitSoundCues(body), speaking, timing }], openAgent: id, pending: NO_TIMING };
 }
 
 function appendAgent(state: TranscriptState, id: string, body: string, sep: string): TranscriptState {
-  return update(state, id, (item) => (item.kind === "agent" ? { ...item, text: join(item.text, body, sep) } : item));
+  return update(state, id, (item) => {
+    if (item.kind !== "agent") return item;
+    const said = join(item.text, body, sep);
+    return { ...item, text: said, parts: splitSoundCues(said) };
+  });
 }
 
 function addStep(state: TranscriptState, name: string): TranscriptState {

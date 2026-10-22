@@ -2,8 +2,8 @@
 
 Figures in the guide are what each provider publishes, except rows flagged `measured`
 (self-hosted servers ATLAS ships, timed on its reference CPU machine, see
-docs/local-models.md); call measurements live on each call (`calls.latency`) and in
-Reports. Pipeline health
+docs/local-models.md, or on the GPU named in `measured_on`, see docs/perf/gpu-model-eval.md);
+call measurements live on each call (`calls.latency`) and in Reports. Pipeline health
 reads the voice service's Prometheus endpoint, which is process-wide across every
 tenant, so it is offered to owners and admins only and labelled as platform-wide.
 """
@@ -38,7 +38,8 @@ log = logging.getLogger(__name__)
 
 DISCLAIMER = (
     "Typical figures are published by each provider and were not measured by ATLAS, "
-    "except rows marked as measured, which ATLAS timed on a 6-core CPU without a GPU. "
+    "except rows marked as measured, which ATLAS timed itself: on a 6-core CPU without a "
+    "GPU, or on the GPU the row names. "
     "They usually exclude network time and vary with region, load, model and settings. "
     "Self-hosted speed depends on your hardware. The response times your calls actually "
     "had are shown on each call and in Reports."
@@ -60,6 +61,25 @@ TTS_CACHE_PROVIDERS: tuple[str, ...] = ()
 STREAMING_STT_MODEL = "parakeet-en-110m"
 STREAMING_STT_FIRST_WORDS_MS = 520
 STREAMING_STT_FINAL_MS = 440
+
+# One GPU (16 GB, measured on an NVIDIA Tesla T4; docs/perf/gpu-model-eval.md and its JSON
+# files): the most human calls. Together the three models need about 11 GB.
+T4 = "NVIDIA T4 GPU"
+# The same live speech server with NVIDIA Parakeet TDT 0.6B v3: 88 ms to transcribe 5 s of
+# speech (warm median); 14.5 % of words wrong on Pakistani-accented English, also on 8 kHz
+# phone audio (the 110M model on CPU: 23.4 % and 29.4 %).
+GPU_STT_MODEL = "parakeet-en-0.6b-v3"
+GPU_STT_DECODE_MS = 88
+# qwen3:8b with thinking off: first sentence of a reply after 118 ms (median of 30), 25 of
+# 30 replies kept to two sentences, no made-up numbers (qwen2.5:1.5b: 37 ms, phone numbers).
+GPU_LLM_MODEL = "qwen3:8b"
+GPU_LLM_FIRST_SENTENCE_MS = 118
+GPU_LLM_SETTINGS: dict[str, str | float] = {"model": GPU_LLM_MODEL, "temperature": 0.3}
+# Chatterbox-Turbo on the expressive voice server (infra/docker/expressive-tts): real
+# laughs, sighs and gasps where a reply says [laugh], [sigh] or [gasp]. It does not
+# stream: a reply starts once its first sentence is made (0.48-1.38 s, about 0.9 s).
+EXPRESSIVE_TTS_MODEL = "chatterbox-turbo"
+EXPRESSIVE_TTS_FIRST_AUDIO_MS = 900
 
 GUIDE: tuple[LatencyGuideProvider, ...] = (
     LatencyGuideProvider(
@@ -154,6 +174,25 @@ GUIDE: tuple[LatencyGuideProvider, ...] = (
         ),
     ),
     LatencyGuideProvider(
+        kind="stt",
+        provider="deepgram",
+        model_hint=GPU_STT_MODEL,
+        typical_ms=GPU_STT_DECODE_MS,
+        measured=True,
+        measured_on=T4,
+        streaming=True,
+        turn_aware=False,
+        note=(
+            "Self-hosted live speech-to-text on a GPU: the same Deepgram connection to the "
+            "local-stt server, with NVIDIA Parakeet TDT 0.6B v3 (CC BY 4.0). Measured on an "
+            f"NVIDIA T4: {GPU_STT_DECODE_MS} ms to transcribe 5 s of speech (warm median), "
+            "on top of the 0.2 s of silence that ends a turn. On accented English it misheard "
+            "far fewer words than the CPU model and Whisper large-v3: 14.5% of words wrong "
+            "for Pakistani speakers, also on phone audio (CPU model: 23.4% and 29.4%). "
+            "Tested on English."
+        ),
+    ),
+    LatencyGuideProvider(
         kind="llm",
         provider="groq",
         model_hint="llama-3.3-70b-versatile",
@@ -190,7 +229,28 @@ GUIDE: tuple[LatencyGuideProvider, ...] = (
         typical_ms=None,
         streaming=True,
         turn_aware=False,
-        note="Self-hosted (e.g. Ollama). Small models are needed on CPU; a GPU helps most.",
+        note=(
+            "Self-hosted (e.g. Ollama). Small models are needed on CPU; a GPU helps most. "
+            "On an NVIDIA T4 it wrote its first sentence after 37 ms (measured), but made "
+            "up phone numbers; use qwen3:8b on a GPU."
+        ),
+    ),
+    LatencyGuideProvider(
+        kind="llm",
+        provider="speaches",
+        model_hint=GPU_LLM_MODEL,
+        typical_ms=GPU_LLM_FIRST_SENTENCE_MS,
+        measured=True,
+        measured_on=T4,
+        streaming=True,
+        turn_aware=False,
+        note=(
+            "Self-hosted on a GPU (Ollama), with thinking off. Measured on an NVIDIA T4 with "
+            f"a real agent's conversation: first sentence after {GPU_LLM_FIRST_SENTENCE_MS} "
+            "ms (median of 30 replies, temperature 0.3), 25 of 30 replies kept to two "
+            "sentences, no made-up numbers, and it stopped calling when asked. Larger models "
+            "were slower and did not follow the rules better."
+        ),
     ),
     LatencyGuideProvider(
         kind="tts",
@@ -239,6 +299,24 @@ GUIDE: tuple[LatencyGuideProvider, ...] = (
         streaming=False,
         turn_aware=False,
         note="Self-hosted. Speed depends on your hardware.",
+    ),
+    LatencyGuideProvider(
+        kind="tts",
+        provider="speaches",
+        model_hint=EXPRESSIVE_TTS_MODEL,
+        typical_ms=EXPRESSIVE_TTS_FIRST_AUDIO_MS,
+        measured=True,
+        measured_on=T4,
+        streaming=False,
+        turn_aware=False,
+        note=(
+            "Self-hosted expressive voice on a GPU (Chatterbox-Turbo, MIT): it laughs, "
+            "chuckles, sighs and gasps where a reply says [laugh], [chuckle], [sigh] or "
+            "[gasp] (the agent's Natural sounds setting), and never reads them. Measured on "
+            "an NVIDIA T4: a sentence's audio starts 0.5 to 1.4 s after it is sent (about "
+            "0.9 s), 2.3 times faster than real time. Not streaming: each sentence starts "
+            "once it is made. English only."
+        ),
     ),
 )
 
@@ -337,17 +415,47 @@ PRESETS: tuple[LatencyPreset, ...] = (
         ),
         requires=["deepgram", "speaches"],
     ),
+    LatencyPreset(
+        id="private_gpu",
+        title="Private GPU (self-hosted)",
+        description=(
+            "The most human calls on one GPU with 16 GB (measured on an NVIDIA T4): live "
+            "transcription that understands accents better, a stronger language model, and "
+            "an expressive voice that can laugh and sigh. Needs a Deepgram connection to "
+            "the live speech server, a self-hosted language model connection serving "
+            "qwen3:8b with thinking off, and a self-hosted connection to the expressive "
+            "voice server (http://expressive-tts:8000/v1, or /voice/v1 on an AI server). "
+            "English only."
+        ),
+        choices=PresetChoices(
+            stt=PresetChoice(
+                provider="deepgram", settings={"model": GPU_STT_MODEL, "language": "en"}
+            ),
+            llm=PresetChoice(provider="speaches", settings=dict(GPU_LLM_SETTINGS)),
+            tts=PresetChoice(provider="speaches", settings={"model": EXPRESSIVE_TTS_MODEL}),
+        ),
+        requires=["deepgram", "speaches"],
+    ),
 )
 _PRESETS = {p.id: p for p in PRESETS}
 # Choices that must use one specific self-hosted server: only connections whose name or
 # address matches one of these hints qualify (otherwise the provider counts as missing).
-# "live-stt": the same server behind an AI gateway (ADR 0007), at <gateway>/live-stt/<secret>.
+# "live-stt": the same server behind an AI gateway (ADR 0007), at <gateway>/live-stt/<secret>;
+# Pocket TTS is at <gateway>/tts/v1 and the expressive voice server at <gateway>/voice/v1
+# (the same hints as voice_cloning.py).
 _STREAMING_STT_HINTS = ("local-stt", "streaming-stt", "live-stt")
+_POCKET_HINTS = ("local-tts", "pocket", "/tts/v1")
+_EXPRESSIVE_HINTS = ("expressive", "chatterbox", "/voice/v1")
 _REQUIRED_HINTS: dict[tuple[str, str], tuple[str, ...]] = {
-    ("private_pocket_tts", "tts"): ("local-tts", "pocket"),
+    ("private_pocket_tts", "tts"): _POCKET_HINTS,
     ("private_streaming", "stt"): _STREAMING_STT_HINTS,
-    ("private_streaming", "tts"): ("local-tts", "pocket"),
+    ("private_streaming", "tts"): _POCKET_HINTS,
+    ("private_gpu", "stt"): _STREAMING_STT_HINTS,
+    ("private_gpu", "tts"): _EXPRESSIVE_HINTS,
 }
+# Presets whose voice is one the server offers (its voices are not known in advance): the
+# organization's voice when it is already on that connection, else the server's default.
+_VOICE_FROM_SERVER = frozenset({"private_gpu"})
 # Dedicated servers that are never a fallback for other presets: a Deepgram connection
 # pointed at the local streaming server cannot serve Flux or cloud-only models.
 _EXCLUSIVE_HINTS = _STREAMING_STT_HINTS
@@ -355,9 +463,9 @@ _EXCLUSIVE_HINTS = _STREAMING_STT_HINTS
 # For a self-hosted provider one tenant often has two connections (language model and
 # speech servers): prefer the one whose name or address suggests the right role.
 _ROLE_HINTS = {
-    "llm": ("llm", "ollama", "11434", "language", "vllm", "lm studio"),
-    "stt": ("speech", "whisper", "stt", ":8000"),
-    "tts": ("speech", "voice", "kokoro", "tts", ":8000"),
+    "llm": ("llm", "ollama", "11434", "language", "vllm", "lm studio", "/llm/v1"),
+    "stt": ("speech", "whisper", "stt", ":8000", "/whisper/v1"),
+    "tts": ("speech", "voice", "kokoro", "tts", ":8000", "/tts/v1", "/voice/v1"),
 }
 
 
@@ -417,6 +525,7 @@ async def apply_preset(db: AsyncSession, ctx: TenantContext, preset_id: str) -> 
     connections = await ai_settings.list_connections(db, ctx)
     chosen: dict[str, ServiceChoice] = {}
     missing: list[str] = []
+    picked: dict[str, ConnectionOut] = {}
     for kind in ("stt", "llm", "tts"):
         choice: PresetChoice = getattr(preset.choices, kind)
         conn = _pick(kind, choice.provider, connections, _REQUIRED_HINTS.get((preset.id, kind), ()))
@@ -424,12 +533,17 @@ async def apply_preset(db: AsyncSession, ctx: TenantContext, preset_id: str) -> 
             if choice.provider not in missing:
                 missing.append(choice.provider)
             continue
+        picked[kind] = conn
         chosen[kind] = ServiceChoice(connection_id=conn.id, settings=dict(choice.settings))
     if missing:
         raise PresetRequirementsMissingError(
             "Add a connection for these providers first", details={"missing": missing}
         )
     current = await ai_settings.get_selection(db, ctx)
+    if preset.id in _VOICE_FROM_SERVER and "voice" not in chosen["tts"].settings:
+        voice = await _server_voice(db, ctx, picked["tts"], current)
+        if voice:
+            chosen["tts"].settings["voice"] = voice
     selection = await ai_settings.save_selection(
         db,
         ctx,
@@ -448,6 +562,20 @@ async def apply_preset(db: AsyncSession, ctx: TenantContext, preset_id: str) -> 
         user_agent=ctx.meta.user_agent,
     )
     return selection
+
+
+async def _server_voice(
+    db: AsyncSession, ctx: TenantContext, conn: ConnectionOut, current: ModelSelection
+) -> str | None:
+    """The organization's voice when it is already on this connection, else the server's
+    default voice; None when the server cannot be asked (the voice is then chosen by hand)."""
+    from app.services import voice_cloning  # imports ai_servers, which imports this module
+
+    if current.tts is not None and current.tts.connection_id == conn.id:
+        voice = current.tts.settings.get("voice")
+        if isinstance(voice, str) and voice:
+            return voice
+    return await voice_cloning.default_voice(db, ctx.org_id, conn)
 
 
 # ------------------------------------------------------------------ pipeline health

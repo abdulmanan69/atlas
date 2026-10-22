@@ -1,7 +1,8 @@
 /**
- * Voice setting for Pocket TTS connections: built-in voices plus this organization's cloned
- * voices (badged "Cloned"), "Clone a voice" for owners and admins, delete with
- * confirmation, and whether voice cloning is on (owners can turn it off).
+ * Voice setting for Pocket TTS and expressive voice connections: built-in voices plus this
+ * organization's cloned voices (badged "Cloned"), "Clone a voice" for owners and admins, delete
+ * with confirmation, and whether voice cloning is on (owners can turn it off). Voices of an
+ * expressive server are badged with the sounds they make ("Laughs, sighs").
  */
 import { useMutation } from "@tanstack/react-query";
 import { Mic, Trash2 } from "lucide-react";
@@ -12,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Badge, Input, Label } from "@/components/ui/primitives";
+import { soundSummary } from "@/features/calls/sound-cues";
 import { useInvalidate } from "@/features/queries";
 import { CloneVoiceDialog } from "@/features/voice/clone-voice-dialog";
 import { deleteVoice, disableCloning, usePocketVoices, type PocketVoice } from "@/features/voice/voice-cloning";
@@ -67,15 +69,22 @@ export function PocketVoicePicker({
 
   const list = voices.data?.voices ?? [];
   const selected = list.find((v) => v.id === value);
+  const sounds = voices.data?.sound_tags ?? [];
+  const expressive = sounds.length ? (
+    <Badge tone="success" title={`Can make these sounds: ${sounds.join(", ")}`}>
+      {soundSummary(sounds)}
+    </Badge>
+  ) : null;
   const options: ComboboxOption[] = list.map((v) => ({
     value: v.id,
     label: v.name,
-    keywords: [v.id, v.cloned ? "cloned" : "built-in"],
+    keywords: [v.id, v.cloned ? "cloned" : "built-in", ...(sounds.length ? ["expressive", ...sounds] : [])],
     description: v.cloned
       ? `Cloned${v.sample_seconds ? ` from a ${Math.round(v.sample_seconds)} s sample` : ""}`
       : [v.default ? "Default" : null, v.license ? `Recording ${v.license}` : null].filter(Boolean).join(" · ") || undefined,
     trailing: v.cloned ? (
       <span className="flex items-center gap-1">
+        {expressive}
         <Badge tone="accent">Cloned</Badge>
         {canManage ? (
           <Button
@@ -93,7 +102,9 @@ export function PocketVoicePicker({
           </Button>
         ) : null}
       </span>
-    ) : undefined,
+    ) : (
+      (expressive ?? undefined)
+    ),
   }));
 
   return (
@@ -132,6 +143,7 @@ export function PocketVoicePicker({
           {selected ? (
             <>
               Selected: {selected.name}
+              {expressive}
               {selected.cloned ? <Badge tone="accent">Cloned</Badge> : null}
             </>
           ) : (

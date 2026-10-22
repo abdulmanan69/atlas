@@ -11,8 +11,9 @@ already cached. Measurements are in docs/local-models.md ("Warming the prompt").
 The cache only helps up to the first token that differs, so the warm-up reproduces the
 voice service's first request (verified against its code and a captured request body):
 
-    system     global rules + blank line + the Start prompt, each rendered with the
-               call's variables (`render_template` mirrors the voice service's renderer)
+    system     global rules (with the rule about sound cues, natural_sounds.py) + blank
+               line + the Start prompt, each rendered with the call's variables
+               (`render_template` mirrors the voice service's renderer)
     tools      one function per path that leaves the Start, in path order
     assistant  the greeting, once it has been spoken
     user       the caller's first words (unknown yet; the warm-up stops before them)
@@ -31,6 +32,7 @@ within a short window.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import ipaddress
 import json
@@ -50,7 +52,7 @@ import httpx
 from app.core.config import get_settings
 from app.core.exceptions import ValidationFailedError
 from app.core.net_policy import validate_destination_url
-from app.integrations.voice_runtime.workflow_builder import effective_flow
+from app.integrations.voice_runtime.workflow_builder import effective_flow, global_rules_text
 from app.schemas.voice import AgentConfig, ServiceChoice
 
 log = logging.getLogger(__name__)
@@ -156,13 +158,19 @@ class WarmupPrompt:
     tools: list[dict[str, Any]] | None  # None: the Start has tools ATLAS cannot rebuild
 
 
-def first_request_prompt(cfg: AgentConfig, variables: Mapping[str, Any]) -> WarmupPrompt | None:
-    """What the voice service's first model request starts with, for these variables."""
+def first_request_prompt(
+    cfg: AgentConfig, variables: Mapping[str, Any], *, sound_rule: str = ""
+) -> WarmupPrompt | None:
+    """What the voice service's first model request starts with, for these variables.
+
+    `sound_rule` is the rule about sound cues the agent was published with
+    (natural_sounds.agent_sound_rule); it ends the global rules.
+    """
     flow = effective_flow(cfg)
     start = next((n for n in flow.nodes if n.kind == "start"), None)
     if start is None:
         return None
-    rules = (cfg.global_rules or "").strip()
+    rules = global_rules_text(cfg, sound_rule)
     parts = [
         render_template(rules, variables) if rules and start.use_global_rules else "",
         render_template(start.prompt, variables),
@@ -215,6 +223,9 @@ class WarmupTarget:
     trusted: bool  # operator-configured (ATLAS_LOCAL_LLM_WARMUP_URL), not tenant-supplied
     # A registered AI server (ADR 0007): reached at its own address with its token.
     api_key: str | None = field(default=None, repr=False)
+    # The rule about sound cues in the agent's global rules (natural_sounds.py), which
+    # depends on its voice.
+    sound_rule: str = ""
 
     @property
     def chat_url(self) -> str:
@@ -364,9 +375,22 @@ async def resolve_target(org_id: uuid.UUID, cfg: AgentConfig) -> WarmupTarget | 
     The agent's own model override wins over the organization's default selection,
     as in the voice service. A connection ATLAS created for a registered AI server is
     warmed at that server's own address with its token, never at the operator's
-    ATLAS_LOCAL_LLM_WARMUP_URL (that is a different server).
+    ATLAS_LOCAL_LLM_WARMUP_URL (that is a different server). The target carries the rule
+    about sound cues for the agent's voice, which is part of the prompt.
     """
     from app.db.session import get_sessionmaker  # local imports: keep this module light
+    from app.services.natural_sounds import agent_sound_rule
+
+    target = await _llm_target(org_id, cfg)
+    if target is None:
+        return None
+    async with get_sessionmaker()() as db:
+        rule = await agent_sound_rule(db, org_id, cfg)
+    return dataclasses.replace(target, sound_rule=rule)
+
+
+async def _llm_target(org_id: uuid.UUID, cfg: AgentConfig) -> WarmupTarget | None:
+    from app.db.session import get_sessionmaker
     from app.services.ai_servers import gateway_for
     from app.services.ai_settings import get_selection_for_org
     from app.services.runtime_accounts import runtime_client
@@ -407,7 +431,7 @@ async def warm_agent_prompt(
         target = await (resolve or resolve_target)(org_id, cfg)
         if target is None:
             return "not_self_hosted"
-        prompt = first_request_prompt(cfg, variables)
+        prompt = first_request_prompt(cfg, variables, sound_rule=target.sound_rule)
         if prompt is None:
             return "no_prompt"
         return await send_warmup(target, build_warmup_body(prompt, target.model))

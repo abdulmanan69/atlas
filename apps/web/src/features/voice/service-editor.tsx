@@ -15,7 +15,7 @@ import { Select, SelectItem } from "@/components/ui/select";
 import { useOrgId } from "@/features/queries";
 import { PocketVoicePicker } from "@/features/voice/pocket-voice-picker";
 import { connectionsFor, providerOf, vk, type Catalog, type Connection, type ServiceChoice, type ServiceKind } from "@/features/voice/queries";
-import { isPocketConnection } from "@/features/voice/voice-cloning";
+import { isPocketConnection, isSelfHostedVoice, useSoundTags } from "@/features/voice/voice-cloning";
 import { api, unwrap } from "@/lib/api";
 import { useDebounced } from "@/lib/hooks";
 
@@ -66,7 +66,9 @@ export function ServiceEditor({
   const options = connectionsFor(kind, catalog, connections);
   const connection = options.find((c) => c.id === value?.connection_id);
   const provider = providerOf(kind, catalog, connection);
-  const pocket = kind === "tts" && isPocketConnection(connection);
+  // Named as a Pocket TTS or expressive server, or an expressive server known by its answer.
+  const sounds = useSoundTags(kind === "tts" && isSelfHostedVoice(connection) && !isPocketConnection(connection) ? connection.id : null);
+  const pocket = kind === "tts" && (isPocketConnection(connection) || sounds.data?.expressive === true);
   const id = useId();
 
   return (
@@ -130,7 +132,7 @@ function SettingField({
   disabled?: boolean;
   provider: string;
   connectionId: string;
-  /** A Pocket TTS connection: its voices (built-in and cloned) are listed by ATLAS. */
+  /** A Pocket TTS or expressive voice connection: its voices (built-in and cloned) are listed by ATLAS. */
   pocket?: boolean;
 }) {
   const id = useId();

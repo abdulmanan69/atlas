@@ -839,3 +839,75 @@ async def test_the_token_is_never_logged_stored_or_returned(
         for table in Base.metadata.sorted_tables:
             rows = (await db.execute(select(table))).all()
             assert HF_TOKEN not in repr(rows), table.name
+
+
+def test_expressive_and_pocket_connections_are_told_apart() -> None:
+    from app.schemas.voice import ConnectionOut
+
+    def conn(name: str, url: str, provider: str = "speaches") -> ConnectionOut:
+        return ConnectionOut(
+            id="c",
+            name=name,
+            provider=provider,
+            provider_title="Self-hosted",
+            connection_settings={"base_url": url},
+            configured_credentials=[],
+        )
+
+    pocket = conn("Pocket TTS", "http://local-tts:8000/v1")
+    gateway_pocket = conn("Voice", "https://ai.example.com/tts/v1")
+    expressive = conn("Expressive voice", "http://10.0.0.5:8000/v1")
+    chatterbox = conn("GPU voice", "http://chatterbox:8000/v1")
+    gateway_expressive = conn("Remote", "https://ai.example.com/voice/v1")
+    kokoro = conn("Local speech", "http://local-speech:8000/v1")
+    cloud = conn("Expressive", "https://api.elevenlabs.io", provider="elevenlabs")
+    for c in (pocket, gateway_pocket, expressive, chatterbox, gateway_expressive):
+        assert voice_cloning.is_pocket_connection(c), c.name
+    for c in (expressive, chatterbox, gateway_expressive):
+        assert voice_cloning.is_expressive_connection(c), c.name
+    for c in (pocket, gateway_pocket, kokoro, cloud):
+        assert not voice_cloning.is_expressive_connection(c), c.name
+    assert not voice_cloning.is_pocket_connection(kokoro)
+    assert not voice_cloning.is_pocket_connection(cloud)
+
+
+async def test_the_expressive_server_has_the_same_voices_and_cloning(
+    client: httpx.AsyncClient,
+    owner: Account,
+    pocket: FakePocket,
+    router: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Same voice and cloning API; reached at its own operator address, never at Pocket TTS's.
+    expressive = FakePocket()
+    monkeypatch.setattr(get_settings(), "expressive_tts_url", "https://expressive.test/v1")
+    router.route(host="expressive.test").mock(side_effect=expressive.handle)
+    r = await client.post(
+        "/api/v1/ai/connections",
+        headers=owner.headers,
+        json={
+            "name": "Chatterbox",
+            "provider": "speaches",
+            "connection_settings": {"base_url": "http://expressive-tts:8000/v1"},
+        },
+    )
+    assert r.status_code == 201, r.text
+    conn = r.json()["id"]
+    listed = await client.get(f"/api/v1/ai/connections/{conn}/voices", headers=owner.headers)
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["cloning_state"] == "on"
+    r = await _clone(client, owner, conn)
+    assert r.status_code == 201, r.text
+    assert len(expressive.posts) == 1 and pocket.posts == []
+    voice = r.json()["id"]
+    listed = await client.get(f"/api/v1/ai/connections/{conn}/voices", headers=owner.headers)
+    assert voice in [v["id"] for v in listed.json()["voices"]]
+    r = await client.delete(f"/api/v1/ai/connections/{conn}/voices/{voice}", headers=owner.headers)
+    assert r.status_code == 204, r.text
+    assert expressive.voices == {}
+
+    # Without its own address it is not sent to the Pocket TTS server either.
+    monkeypatch.setattr(get_settings(), "expressive_tts_url", None)
+    r = await client.get(f"/api/v1/ai/connections/{conn}/voices", headers=owner.headers)
+    assert r.status_code == 503, r.text
+    assert "ATLAS_EXPRESSIVE_TTS_URL" in r.json()["error"]["message"]

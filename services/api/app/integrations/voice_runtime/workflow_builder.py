@@ -149,7 +149,13 @@ def apply_variables(text: str, values: Mapping[str, str]) -> str:
 
 
 def compile_prompt(cfg: AgentConfig) -> str:
-    """The Start prompt of a guided agent: persona, instructions, questions and rules."""
+    """The Start prompt of a guided agent: persona, instructions, questions and rules.
+
+    The fixed wording only changes with the agent's own fields, so the prompt stays the
+    same from call to call (the model's prompt cache). Test calls showed small models
+    re-asking what the caller had just said, writing emoji into spoken replies and
+    claiming actions they had not taken; the checklist and rules below address each.
+    """
     language = LANGUAGE_NAMES.get(cfg.language.split("-")[0], cfg.language)
     parts = [
         f"You are {cfg.persona_name}, speaking on a phone call on behalf of {cfg.company_name}.",
@@ -158,13 +164,16 @@ def compile_prompt(cfg: AgentConfig) -> str:
     if cfg.qualification_questions:
         questions = "\n".join(f"{i}. {q}" for i, q in enumerate(cfg.qualification_questions, 1))
         parts.append(
-            "## Questions to cover\nAsk these naturally, one at a time, and listen to each "
-            f"answer before moving on:\n{questions}"
+            "## Questions to cover\nA checklist, not a script: cover these naturally, one at a "
+            "time. Skip any the person has already answered, even in passing, and never ask "
+            f"for something you already have.\n{questions}"
         )
     rules = [
         "Keep each reply short (one or two sentences): this is a live phone call.",
+        "Use plain spoken words only: no emoji, symbols, markdown or lists.",
         f"Speak in {language} unless the person clearly prefers another language.",
         "Never invent prices, availability, policies or facts that are not in these instructions.",
+        "Never say something was done, booked or sent unless a tool did it in this call.",
         "If the person asks not to be contacted again, apologise, confirm they will not be "
         "called again, and end the call politely.",
     ]
@@ -220,6 +229,16 @@ def effective_flow(cfg: AgentConfig) -> FlowDefinition:
     if cfg.mode == "flow" and cfg.flow is not None:
         return cfg.flow
     return guided_to_flow(cfg)
+
+
+def global_rules_text(cfg: AgentConfig, sound_rule: str = "") -> str:
+    """The global rules as published: the agent's own, then the rule about sound cues.
+
+    `sound_rule` comes from app.services.natural_sounds (it depends on the voice). It goes
+    after the agent's rules and is the same on every call, so the start of the prompt does
+    not change from call to call and stays in the model's prompt cache.
+    """
+    return "\n\n".join(p for p in ((cfg.global_rules or "").strip(), sound_rule.strip()) if p)
 
 
 # ------------------------------------------------------------------ flow → runtime graph
@@ -376,11 +395,13 @@ def compile_workflow(
     webhook: WebhookTarget | None,
     tool_uuids: Mapping[str, str] | None = None,
     document_uuids: Mapping[str, str] | None = None,
+    sound_rule: str = "",
 ) -> CompiledWorkflow:
     """Compile the agent's effective flow into the runtime graph.
 
     `tool_uuids` / `document_uuids` map ATLAS action and document ids to the runtime's
-    uuids; when None, references are not emitted at all.
+    uuids; when None, references are not emitted at all. `sound_rule` is appended to the
+    global rules (`global_rules_text`).
     """
     flow = effective_flow(cfg)
     values = variable_values(cfg)
@@ -399,7 +420,7 @@ def compile_workflow(
             "data": {"name": "API trigger", "enabled": True},
         }
     ]
-    rules = (cfg.global_rules or "").strip()
+    rules = global_rules_text(cfg, sound_rule)
     if rules:
         nodes.append(
             {

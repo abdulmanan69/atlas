@@ -56,14 +56,14 @@ function signIn() {
   } as never);
 }
 
-function stubApi(overrides: Partial<CallDetail> = {}) {
+function stubApi(overrides: Partial<CallDetail> = {}, transcript = "[SIMULATED CALL]\nAgent: Hi Hina, is now a good time?\nHina: Sure, go ahead.") {
   const fetchMock = vi.fn(async (input: Request | string) => {
     const url = new URL(typeof input === "string" ? input : input.url);
     switch (url.pathname) {
       case "/api/v1/calls/c1":
         return json({ ...call, ...overrides });
       case "/api/v1/calls/c1/transcript":
-        return json({ call_id: "c1", mode: "simulated", simulated: true, text: "[SIMULATED CALL]\nAgent: Hi Hina, is now a good time?\nHina: Sure, go ahead." });
+        return json({ call_id: "c1", mode: "simulated", simulated: true, text: transcript });
       case "/api/v1/calls/c1/events":
         return json([{ id: "e1", type: "state_changed", data: { from: "queued", to: "completed" }, occurred_at: "2026-10-18T10:01:01Z" }]);
       case "/api/v1/agents":
@@ -121,6 +121,20 @@ describe("CallDetailPage", () => {
     expect(await screen.findByText("State changed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Open lead/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Hina Khan" })).toHaveAttribute("href", "/leads/l1");
+  });
+
+  it("shows the sounds an expressive voice made as chips, not brackets", async () => {
+    stubApi({}, "[2026-10-22T10:00:00.000+00:00] assistant: [laugh] That's a good one.\n[2026-10-22T10:00:04.000+00:00] user: Ha [inaudible].");
+    renderPage();
+    const conversation = await screen.findByRole("list", { name: "Conversation" });
+    const [agent, caller] = within(conversation).getAllByRole("listitem");
+    const chip = within(agent!).getByTitle("A sound the voice made");
+    expect(chip).toHaveTextContent("laughs");
+    expect(agent).not.toHaveTextContent("[laugh]");
+    expect(agent).toHaveTextContent("That's a good one.");
+    // Other bracketed text is kept as written.
+    expect(caller).toHaveTextContent("Ha [inaudible].");
+    expect(within(caller!).queryByTitle("A sound the voice made")).not.toBeInTheDocument();
   });
 
   it("explains a live call without the simulated note and shows the recording card", async () => {

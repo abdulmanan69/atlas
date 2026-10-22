@@ -168,6 +168,26 @@ describe("voice transcript", () => {
     expect(view(next.items)).toEqual(["agent: Sure. One moment. Ready?", "agent: Are you still there?"]);
   });
 
+  it("picks out sound cues in the agent's words as they arrive", () => {
+    const s = voice([
+      [0, "rtf-bot-started-speaking"],
+      [5, "rtf-bot-text", { text: "[laugh] That's a good one." }],
+      [9, "rtf-bot-text", { text: "Anything [Sighs] else?" }],
+    ]);
+    const reply = agents(s)[0]!;
+    expect(reply.text).toBe("[laugh] That's a good one. Anything [Sighs] else?");
+    expect(reply.parts).toEqual([
+      { kind: "cue", tag: "laugh", label: "laughs" },
+      { kind: "text", text: " That's a good one. Anything " },
+      { kind: "cue", tag: "sigh", label: "sighs" },
+      { kind: "text", text: " else?" },
+    ]);
+    // Typed chats too; other bracketed text stays as written.
+    const typed = chat(["Hi", { type: "agent_text", text: "Ha [chuckle], press [1].", at_ms: 300 } as ChatEvent]);
+    expect(agents(typed)[0]!.parts.map((p) => (p.kind === "cue" ? `(${p.label})` : p.text)).join("")).toBe("Ha (chuckles), press [1].");
+    expect(agents(voice([[0, "rtf-bot-started-speaking"]]))[0]!.parts).toEqual([]);
+  });
+
   it("colours the measured response by the Response times targets", () => {
     const reply = (latency: number) =>
       agents(voice([[0, "rtf-latency-measured", { latency_seconds: latency }], [1, "rtf-bot-started-speaking"]]))[0]!;

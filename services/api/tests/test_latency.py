@@ -506,13 +506,30 @@ async def test_latency_guide_is_honest(client: httpx.AsyncClient, owner: Account
     assert "interrupt" in speaches["note"] and "streaming server" in speaches["note"]
     # Snappy/Balanced wait 0.6 s more after Whisper's transcript (measured, ai_speed.GUIDE).
     assert "0.6 s" in speaches["note"] and "On any speech" in speaches["note"]
-    # Only ATLAS's own self-hosted streaming server carries a measured figure.
+    # Only self-hosted servers ATLAS ships carry measured figures: the streaming server on
+    # CPU, and the three GPU models, each labelled with the GPU they were measured on.
     measured = [p for p in guide["providers"] if p["measured"]]
-    assert [p["model_hint"] for p in measured] == [ai_speed.STREAMING_STT_MODEL]
+    assert [(p["model_hint"], p["measured_on"]) for p in measured] == [
+        (ai_speed.STREAMING_STT_MODEL, None),
+        ("parakeet-en-0.6b-v3", "NVIDIA T4 GPU"),
+        ("qwen3:8b", "NVIDIA T4 GPU"),
+        ("chatterbox-turbo", "NVIDIA T4 GPU"),
+    ]
     streaming = measured[0]
     assert streaming["provider"] == "deepgram" and streaming["kind"] == "stt"
     assert streaming["streaming"] is True and streaming["typical_ms"] > 0
     assert "local-stt" in streaming["note"] and "English only" in streaming["note"]
+    # The figures from docs/perf/gpu-model-eval.md.
+    gpu = {p["model_hint"]: p for p in measured[1:]}
+    assert (
+        gpu["parakeet-en-0.6b-v3"]["typical_ms"] == 88
+        and "5 s of speech" in (gpu["parakeet-en-0.6b-v3"]["note"])
+    )
+    assert gpu["qwen3:8b"]["typical_ms"] == 118 and gpu["qwen3:8b"]["kind"] == "llm"
+    expressive = gpu["chatterbox-turbo"]
+    assert expressive["typical_ms"] == 900 and expressive["streaming"] is False
+    assert "[laugh]" in expressive["note"] and "Natural sounds" in expressive["note"]
+    assert "GPU the row names" in guide["disclaimer"]
     text = str(guide).lower()
     assert "dograh" not in text and "pipecat" not in text
     viewer = await invite_and_join(client, owner, "viewer@example.com", "viewer")
@@ -651,6 +668,117 @@ async def test_apply_private_streaming_preset(
     conns = (await client.get("/api/v1/ai/connections", headers=owner.headers)).json()
     local = next(c for c in conns if c["id"] == stt)
     assert local["connection_settings"] == {"base_url": "http://local-stt:8000"}
+
+
+def test_private_gpu_preset_uses_the_expressive_voice_server() -> None:
+    from app.schemas.voice import ConnectionOut
+
+    def conn(id_: str, name: str, url: str, provider: str = "speaches") -> ConnectionOut:
+        return ConnectionOut(
+            id=id_,
+            name=name,
+            provider=provider,
+            provider_title="Self-hosted",
+            connection_settings={"base_url": url},
+            configured_credentials=[],
+        )
+
+    preset = next(p for p in ai_speed.PRESETS if p.id == "private_gpu")
+    assert preset.choices.stt.settings == {"model": "parakeet-en-0.6b-v3", "language": "en"}
+    assert preset.choices.llm.settings == {"model": "qwen3:8b", "temperature": 0.3}
+    assert preset.choices.tts.settings == {"model": "chatterbox-turbo"}
+    assert set(preset.requires) == {"deepgram", "speaches"}
+    assert "16 GB" in preset.description and "thinking off" in preset.description
+
+    llm = conn("a", "Local LLM", "http://local-llm:11434/v1")
+    pocket = conn("b", "Pocket TTS", "http://local-tts:8000/v1")
+    kokoro = conn("c", "Local speech", "http://local-speech:8000/v1")
+    expressive = conn("d", "Voice", "http://expressive-tts:8000/v1")
+    required = ai_speed._REQUIRED_HINTS[("private_gpu", "tts")]
+    assert ai_speed._pick("tts", "speaches", [llm, pocket, kokoro, expressive], required) is (
+        expressive
+    )
+    assert ai_speed._pick("tts", "speaches", [llm, pocket, kokoro], required) is None
+    # Named instead of addressed, or behind an AI server's gateway.
+    named = conn("e", "GPU box · Chatterbox", "https://ai.example.com/x/v1")
+    remote = conn("f", "Remote voice", "https://ai.example.com/voice/v1")
+    assert ai_speed._pick("tts", "speaches", [pocket, named], required) is named
+    assert ai_speed._pick("tts", "speaches", [pocket, remote], required) is remote
+    # The expressive server is never another preset's voice.
+    assert ai_speed._pick("tts", "speaches", [expressive, kokoro]) is kokoro
+    pocket_hints = ai_speed._REQUIRED_HINTS[("private_pocket_tts", "tts")]
+    assert ai_speed._pick("tts", "speaches", [expressive], pocket_hints) is None
+    # Gateway paths tell the self-hosted roles apart.
+    gw_llm = conn("g", "GPU box", "https://ai.example.com/llm/v1")
+    gw_whisper = conn("h", "GPU box", "https://ai.example.com/whisper/v1")
+    assert ai_speed._pick("llm", "speaches", [gw_whisper, gw_llm]) is gw_llm
+    assert ai_speed._pick("stt", "speaches", [gw_llm, gw_whisper]) is gw_whisper
+
+
+async def test_apply_private_gpu_preset(
+    client: httpx.AsyncClient,
+    owner: Account,
+    runtime: CallsRuntime,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import voice_cloning
+
+    asked: list[str] = []
+
+    async def default_voice(_db: Any, _org: Any, conn: Any) -> str:
+        asked.append(conn.id)
+        return "emily"
+
+    monkeypatch.setattr(voice_cloning, "default_voice", default_voice)
+    url = "/api/v1/ai-settings/presets/private_gpu/apply"
+    llm = await _connect(
+        client, owner, "speaches", connection_settings={"base_url": "http://local-llm:11434/v1"}
+    )
+    await _connect(
+        client, owner, "speaches", connection_settings={"base_url": "http://local-tts:8000/v1"}
+    )
+    stt = await _connect(
+        client, owner, "deepgram", connection_settings={"base_url": "http://local-stt:8000"}
+    )
+    r = await client.post(url, headers=owner.headers)
+    assert r.status_code == 409, r.text
+    assert r.json()["error"]["details"] == {"missing": ["speaches"]}, "Pocket TTS is not enough"
+
+    tts = await _connect(
+        client,
+        owner,
+        "speaches",
+        connection_settings={"base_url": "http://expressive-tts:8000/v1"},
+    )
+    r = await client.post(url, headers=owner.headers)
+    assert r.status_code == 200, r.text
+    selection = r.json()
+    assert selection["stt"] == {
+        "connection_id": stt,
+        "settings": {"model": "parakeet-en-0.6b-v3", "language": "en"},
+    }
+    assert selection["llm"] == {
+        "connection_id": llm,
+        "settings": {"model": "qwen3:8b", "temperature": 0.3},
+    }
+    # The voice is the server's default: its voices are not known in advance.
+    assert selection["tts"] == {
+        "connection_id": tts,
+        "settings": {"model": "chatterbox-turbo", "voice": "emily"},
+    }
+    assert asked == [tts]
+
+    # Applied again: the organization's voice on that server is kept.
+    chosen = {**selection["tts"], "settings": {"model": "chatterbox-turbo", "voice": "sam"}}
+    r = await client.put(
+        "/api/v1/ai/models",
+        headers=owner.headers,
+        json={"llm": selection["llm"], "stt": selection["stt"], "tts": chosen},
+    )
+    assert r.status_code == 200, r.text
+    r = await client.post(url, headers=owner.headers)
+    assert r.json()["tts"]["settings"] == {"model": "chatterbox-turbo", "voice": "sam"}
+    assert asked == [tts]
 
 
 # ------------------------------------------------------------------ pipeline health

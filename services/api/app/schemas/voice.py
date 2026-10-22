@@ -503,6 +503,14 @@ class CallSettings(APIModel):
             "text-to-speech provider that supports it (see the latency guide)"
         ),
     )
+    natural_sounds: bool = Field(
+        default=True,
+        description=(
+            "Let the agent laugh, sigh or gasp where a person naturally would. Only takes "
+            "effect with an expressive voice (GET /ai/connections/{id}/sound-tags); with any "
+            "other voice, or when false, the agent is told not to write sounds"
+        ),
+    )
     max_call_seconds: int = Field(default=300, ge=30, le=1200)
     idle_timeout_seconds: int = Field(
         default=10, ge=3, le=60, description="Hang up after this long without the person talking"

@@ -156,9 +156,13 @@ def _provider_title(pid: str) -> str:
 
 
 async def list_connections(db: AsyncSession, ctx: TenantContext) -> list[ConnectionOut]:
-    account = await ensure_account(db, ctx.org_id)
+    return await list_connections_for_org(db, ctx.org_id)
+
+
+async def list_connections_for_org(db: AsyncSession, org_id: uuid.UUID) -> list[ConnectionOut]:
+    account = await ensure_account(db, org_id)
     supported = {p for providers in SUPPORTED.values() for p in providers}
-    async with runtime_client(db, ctx.org_id) as client:
+    async with runtime_client(db, org_id) as client:
         connections = await client.list_connections()
     out: list[ConnectionOut] = []
     for c in connections:

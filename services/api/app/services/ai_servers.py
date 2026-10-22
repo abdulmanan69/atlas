@@ -845,7 +845,10 @@ async def _voice(
     default: str,
 ) -> str:
     """The organization's current voice when this server has it, else the server's default."""
-    from app.services.voice_cloning import is_pocket_connection  # imports this module
+    from app.services.voice_cloning import (  # imports this module
+        is_expressive_connection,
+        is_pocket_connection,
+    )
 
     if current.tts is None:
         return default
@@ -862,8 +865,10 @@ async def _voice(
         return voice if owner_connection == tts_connection_id else default
     connections = {c.id: c for c in await ai_settings.list_connections(db, ctx)}
     in_use = connections.get(current.tts.connection_id)
-    # Built-in voices are the same on every Pocket TTS server.
-    return voice if in_use is not None and is_pocket_connection(in_use) else default
+    # Built-in voices are the same on every Pocket TTS server (an expressive one has others).
+    if in_use is None or not is_pocket_connection(in_use) or is_expressive_connection(in_use):
+        return default
+    return voice
 
 
 async def use(

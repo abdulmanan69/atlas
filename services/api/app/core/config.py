@@ -134,6 +134,13 @@ class Settings(BaseSettings):
     local_tts_url: str | None = None
     # Only when the Pocket TTS server requires a key (its POCKET_TTS_API_KEY).
     local_tts_api_key: SecretStr = SecretStr("")
+    # The expressive voice server (Chatterbox-Turbo, infra/docker/expressive-tts): the same,
+    # for connections whose name or address names it ("expressive", "chatterbox"), e.g.
+    # http://expressive-tts:8000/v1 for an API container. ATLAS lists its voices, clones
+    # voices and reads the sounds it can make (GET /audio/sound-tags) there.
+    expressive_tts_url: str | None = None
+    # Only when the expressive voice server requires a key.
+    expressive_tts_api_key: SecretStr = SecretStr("")
     # Computing a voice takes a few seconds on CPU, longer while calls are speaking.
     local_tts_timeout_seconds: float = 120.0
     voice_clone_max_upload_bytes: int = 10 * 1024 * 1024

@@ -22,7 +22,8 @@ without consent, fraud, and passing generated speech off as a real person.
 Endpoints (all but /health need POCKET_TTS_API_KEY when it is set):
   GET    /health                 "ok" once the model is loaded
   GET    /v1/models, /v1/audio/voices  the model id and the allowed built-in voices
-  POST   /v1/audio/speech        OpenAI speech API: 24 kHz 16-bit mono PCM or WAV, streamed
+  POST   /v1/audio/speech        OpenAI speech API: 24 kHz 16-bit mono PCM or WAV, streamed;
+                                 sound cues for expressive voices ("[laugh]") are removed
   GET    /v1/audio/phrase-cache  phrase cache counts (never the texts)
   GET    /v1/cloning             cloning state: off, enabling, on or failed, a message, and
                                  where the token comes from (never the token)
@@ -766,6 +767,49 @@ async def _read_token(request: Request) -> str:
     return token
 
 
+# ------------------------------------------------------------------ sound cues
+
+# An expressive voice (infra/docker/expressive-tts) makes sounds where a reply says "[laugh]";
+# this voice cannot, so such cues are removed instead of being read out. The same sounds as
+# that server's GET /v1/audio/sound-tags, in the forms a language model writes them
+# ("[laughs]", "[clears throat]"). Other bracketed text is left as it is.
+SOUND_CUES = (
+    "laugh", "chuckle", "sigh", "gasp", "cough", "clear throat", "groan", "sniff", "shush",
+)
+
+
+def _cue_forms(cue: str) -> str:
+    """'laugh' -> laugh, laughs, laughed, laughing; 'clear throat' -> clears his throat..."""
+    first, _, rest = cue.partition(" ")
+    if first.endswith("e"):
+        word = re.escape(first[:-1]) + "(?:e|es|ed|ing)"
+    else:
+        word = re.escape(first) + "(?:s|es|ed|ing)?"
+    if rest:
+        word += r"(?:\s+(?:my|his|her|their|the))?\s+" + re.escape(rest)
+    return word
+
+
+_SOUND_CUE = re.compile(
+    r"\[\s*(?:"
+    + "|".join([*map(_cue_forms, SOUND_CUES), "laughter", "sniffl(?:e|es|ing)", "shh+"])
+    + r")\s*\]",
+    re.IGNORECASE,
+)
+_SPACE_BEFORE_MARK = re.compile(r"\s+([,.!?;:])")
+
+
+def strip_sound_cues(text: str) -> str:
+    """The text without sound cues such as "[laugh]", which this voice would read out."""
+    if "[" not in text:
+        return text
+    stripped, count = _SOUND_CUE.subn(" ", text)
+    if not count:
+        return text
+    stripped = _SPACE_BEFORE_MARK.sub(r"\1", " ".join(stripped.split()))
+    return stripped.lstrip(",;: ").strip()
+
+
 # ------------------------------------------------------------------ phrase cache
 
 _QUOTES = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"'})
@@ -1331,10 +1375,17 @@ async def speech(
         )
     if body.speed != 1.0:
         logger.info("Pocket TTS has no speed control; ignoring speed=%s", body.speed)
-    text = body.input.strip()
-    if not text:
+    if not body.input.strip():
         raise HTTPException(status_code=400, detail="Input text is empty")
+    text = strip_sound_cues(body.input.strip())
     media_type = "audio/wav" if body.response_format == "wav" else "audio/pcm"
+    if not text:
+        # Only sound cues ("[laugh]"): nothing this voice can say.
+        async def nothing() -> AsyncIterator[bytes]:
+            if body.response_format == "wav":
+                yield _wav_header(sample_rate)
+
+        return StreamingResponse(nothing(), media_type=media_type)
     received = time.perf_counter()
 
     # head: kept audio sent first; rest: text still to synthesise after it (None: nothing).
