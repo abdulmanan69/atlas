@@ -169,7 +169,7 @@ curl -s -H "Authorization: Bearer $TOKEN" https://ai.203-0-113-7.sslip.io/health
 curl -s -H "Authorization: Bearer $TOKEN" https://ai.203-0-113-7.sslip.io/llm/v1/models
 ```
 
-### 6. Connect ATLAS
+### 6. Connect ATLAS to an AI server
 
 Give the ATLAS installation three things:
 
@@ -179,9 +179,96 @@ Give the ATLAS installation three things:
 | Token | the token from step 4 |
 | Live speech-to-text address | `https://ai.203-0-113-7.sslip.io/live-stt/<secret>` (optional) |
 
-Until ATLAS registers models servers in one step (ADR 0007, "AI servers"), add the
-connections by hand in **Voice AI → AI providers**, each **Self-hosted models** with the
-token as its API key:
+#### In the web app
+
+An organization owner or admin opens **Voice AI → AI providers**, and under **AI servers**
+chooses **Add AI server**:
+
+| Field | What to enter |
+|---|---|
+| Name | how the server appears in ATLAS, for example `GPU server` |
+| Address | the gateway address |
+| Token | the token |
+| Live speech-to-text secret | optional: the part after `/live-stt/` in the live speech-to-text address |
+| Deepgram API key | optional: only for live speech-to-text (below) |
+
+**Check and add** then:
+
+1. Applies ATLAS's network policy to the address: https to a public address; plain http
+   or a private address only when the operator of ATLAS set
+   `ATLAS_ALLOW_PRIVATE_MODEL_URLS=true` ([On a private network](#on-a-private-network)).
+2. Asks `GET <address>/health` with the token (8 seconds at most). A refused token, an
+   address that cannot be reached, a TLS certificate that is not accepted or a wrong live
+   speech-to-text secret is shown next to its field, and nothing is saved.
+3. Creates a connection for each service the health check reports as up:
+
+   | Connection | Provider | Base URL | Key |
+   |---|---|---|---|
+   | `<name> · Language model` | Self-hosted | `<address>/llm/v1` | the token |
+   | `<name> · Whisper` | Self-hosted | `<address>/whisper/v1` | the token |
+   | `<name> · Pocket TTS` | Self-hosted | `<address>/tts/v1` | the token |
+   | `<name> · Live speech` | Deepgram | `<address>/live-stt/<secret>` | the Deepgram key |
+
+   A service that is down, still loading its model or not offered gets no connection, and
+   the dialog says why. **Check now** adds the language model, Whisper or Pocket TTS later,
+   once it is up; live speech-to-text is added with **Replace token** (secret and key).
+   Live speech-to-text needs a real Deepgram key because the voice service checks every
+   Deepgram-type key with Deepgram's cloud when it saves the connection, whatever its
+   address ([local-models.md](local-models.md), "Live transcription"). No audio goes to
+   Deepgram, and the gateway does not use the key.
+4. Stores the token and the live speech-to-text secret encrypted
+   (`ATLAS_SECRETS_ENCRYPTION_KEY`). They, and the Deepgram key (kept by the voice service
+   only), are never shown again, logged or written to the audit log. The connection list
+   shows the live speech-to-text address as `<address>/live-stt/[secret]`.
+
+Each server's card shows its status (all services up, some services down, or down), when it
+was last checked, the round trip of that check, and each service with its models. ATLAS
+checks every server every two minutes and records a change of status in the audit log
+(`ai_server.status_changed`).
+
+* **Use for this organization** sets the models for the organization's calls: the
+  server's language model (chosen from the models it lists, at temperature 0.3), live
+  speech-to-text (or Whisper), and Pocket TTS with the organization's current voice when
+  the server has it (otherwise its default voice). It can also name a **fallback language
+  model**, another connection such as a cloud model, that answers a turn when the server
+  has given no output after 2.5 seconds (1 to 6 seconds can be chosen) or fails. Agents
+  with their own models keep them, and an agent with its own language model does not use
+  the fallback.
+* **Replace token** checks the new token with the server first; then every connection of
+  the server uses it ([Rotate the token](#rotate-the-token)). The same dialog replaces the
+  live speech-to-text secret or Deepgram key, or adds live speech-to-text later.
+* **Remove** removes the server and its connections. It is refused while the
+  organization's models or an agent's own models use one of them; the message says where.
+
+ATLAS itself reaches the server in two cases, at the server's address and with its token:
+the language model warm-up at call start, and voice cloning on its Pocket TTS
+(`ATLAS_LOCAL_TTS_URL` is only for a Pocket TTS server next to ATLAS).
+
+#### With the API
+
+The same, for scripts. API keys work with the role they were given.
+
+| Request | Does | Role |
+|---|---|---|
+| `GET /api/v1/ai/servers` | servers, with status and services | manager and up |
+| `GET /api/v1/ai/servers/{id}` | one server | manager and up |
+| `POST /api/v1/ai/servers` `{name, url, token, live_stt_secret?, deepgram_key?}` | register: `201` with `setup` (per service: the connection created, or why none was); `409` when the address is already registered; `422` with `details.field` | admin, owner |
+| `POST /api/v1/ai/servers/{id}/check` | check now; adds connections for services that came up | admin, owner |
+| `PATCH /api/v1/ai/servers/{id}` `{name?, token?, live_stt_secret?, deepgram_key?}` | rename, or replace the token or live speech-to-text details; a new token is checked first (`422` when refused) | admin, owner |
+| `POST /api/v1/ai/servers/{id}/use` `{llm_model?, use_live_stt?, fallback_llm_connection_id?, fallback_llm_model?, fallback_after_ms?}` | set the organization's models to this server; returns them | admin, owner |
+| `DELETE /api/v1/ai/servers/{id}` | remove it and its connections: `204`, or `409` with `details.in_use` | admin, owner |
+
+```bash
+read -rs TOKEN && export TOKEN                      # paste the gateway token
+curl -s -X POST https://atlas.example.com/api/v1/ai/servers \
+  -H "X-API-Key: $ATLAS_API_KEY" -H "Content-Type: application/json" \
+  -d '{"name": "GPU server", "url": "https://ai.203-0-113-7.sslip.io", "token": "'"$TOKEN"'"}'
+```
+
+#### By hand
+
+Without AI servers, add the connections in **Voice AI → AI providers → Add connection**,
+each **Self-hosted models** with the token as its API key:
 
 | Connection | Base URL | Model |
 |---|---|---|
@@ -190,10 +277,9 @@ token as its API key:
 | Pocket TTS | `https://<gateway>/tts/v1` | `pocket-tts`, voice `alba` |
 
 For live speech-to-text add a **Deepgram** connection with the live speech-to-text address
-as its base URL and a real Deepgram API key: the voice service checks every Deepgram key
-with Deepgram's cloud when the connection is saved, whatever the base URL
-([local-models.md](local-models.md), "Live transcription"). No audio goes to Deepgram; the
-key is not used by the gateway.
+as its base URL and a real Deepgram API key (see above). The token then has to be replaced
+in each connection by hand, and ATLAS neither checks the server nor warms its language
+model up.
 
 ### 7. Update
 
@@ -235,9 +321,9 @@ bash infra/deploy/oci/deploy.sh --role models --ai-host http://10.0.0.5
   publishes the port on every interface of the server.
 * The token still travels with every request, unencrypted on that network: use this only
   on a network you control.
-* In production, ATLAS itself sends requests to a models server (the language model
-  warm-up at call start) only over https to a public address, so with plain HTTP those are
-  skipped: the first reply of a call can be slower. Calls work.
+* ATLAS accepts a plain-HTTP or private AI server address only when its operator sets
+  `ATLAS_ALLOW_PRIVATE_MODEL_URLS=true`. The language model warm-up and voice cloning then
+  use the same address. Without that setting, register the server by its https address.
 
 ## Rotate the token
 
@@ -253,7 +339,9 @@ bash infra/deploy/oci/deploy.sh --no-pull --skip-warm
 ```
 
 1. Both tokens now work. In every ATLAS installation that uses this server, replace the
-   token with the new one.
+   token with the new one: **AI providers → AI servers → Replace token** (or
+   `PATCH /api/v1/ai/servers/{id}` with `{"token": ...}`). ATLAS checks it with the server
+   and then updates every connection of that server.
 2. Make the new token the only one: in `.env`, set `ATLAS_AI_TOKEN` to the new value and
    delete the `ATLAS_AI_TOKEN_NEXT` line, then run `deploy.sh` again. The old token is
    refused from then on.
@@ -265,7 +353,8 @@ all-in-one server the web app and calls in progress too).
 
 The live speech-to-text secret is replaced the same way without the second slot: delete
 `ATLAS_AI_LIVE_STT_SECRET` from `.env`, run `deploy.sh` (it shows the new address once),
-then change the Deepgram connection's base URL in ATLAS.
+then give the new secret in ATLAS: **Replace token**, field "Live speech-to-text secret"
+(it changes the live speech connection's address).
 
 ## Privacy
 

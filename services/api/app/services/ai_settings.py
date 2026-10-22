@@ -8,6 +8,7 @@ its own logs and responses, and audits every change.
 from __future__ import annotations
 
 import logging
+import re
 import time
 import uuid
 from typing import Any
@@ -23,6 +24,7 @@ from app.schemas.voice import (
     ConnectionCreate,
     ConnectionOut,
     ConnectionUpdate,
+    LlmFallback,
     ModelSelection,
     ModelSelectionUpdate,
     ProviderCatalog,
@@ -90,6 +92,10 @@ CONNECTION_FIELDS = frozenset(
         "bill_to",
     }
 )
+# The AI gateway's live speech-to-text address carries a secret in its path (ADR 0007):
+# it is shown and audited masked, and a masked value sent back keeps the stored one.
+_LIVE_STT_SECRET = re.compile(r"(/live-stt/)[^/?#]+")
+LIVE_STT_MASK = "[secret]"
 HOSTED_TRIAL_TITLE = "Hosted trial models"
 MANAGED_CONFIG_NAME = "Organization default"
 VOICE_CATALOG_PROVIDERS = frozenset({"elevenlabs", "deepgram", "cartesia", "rime", "sarvam"})
@@ -130,6 +136,14 @@ async def catalog(db: AsyncSession, ctx: TenantContext) -> ProviderCatalog:
     return ProviderCatalog(**out)
 
 
+def mask_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    """Connection settings with a live speech-to-text secret masked."""
+    return {
+        k: _LIVE_STT_SECRET.sub(rf"\g<1>{LIVE_STT_MASK}", v) if isinstance(v, str) else v
+        for k, v in settings.items()
+    }
+
+
 def _provider_title(pid: str) -> str:
     if pid in SELF_HOSTED:
         return "Self-hosted"
@@ -159,9 +173,9 @@ async def list_connections(db: AsyncSession, ctx: TenantContext) -> list[Connect
                 name=HOSTED_TRIAL_TITLE if trial else c.name,
                 provider="hosted_trial" if trial else c.provider,
                 provider_title=HOSTED_TRIAL_TITLE if trial else _provider_title(c.provider),
-                connection_settings={
-                    k: v for k, v in c.connection_settings.items() if k in CONNECTION_FIELDS
-                },
+                connection_settings=mask_settings(
+                    {k: v for k, v in c.connection_settings.items() if k in CONNECTION_FIELDS}
+                ),
                 configured_credentials=[k for k in c.configured_credentials if k in SECRET_FIELDS],
                 hosted_trial=trial,
             )
@@ -203,7 +217,7 @@ async def create_connection(
             "provider": data.provider,
             "name": data.name,
             "credential_fields": sorted(credentials),
-            "connection_settings": settings,
+            "connection_settings": mask_settings(settings),
         },
         ip=ctx.meta.ip,
         user_agent=ctx.meta.user_agent,
@@ -222,6 +236,8 @@ async def update_connection(
         else None
     )
     async with runtime_client(db, ctx.org_id) as client:
+        if settings and any(LIVE_STT_MASK in v for v in settings.values()):
+            settings = await _unmask(client, connection_id, settings)
         await client.update_connection(
             connection_id,
             name=data.name,
@@ -238,12 +254,34 @@ async def update_connection(
         changes={
             "name": data.name,
             "rotated_credentials": sorted(credentials),
-            "connection_settings": settings,
+            "connection_settings": mask_settings(settings) if settings is not None else None,
         },
         ip=ctx.meta.ip,
         user_agent=ctx.meta.user_agent,
     )
     return next(c for c in await list_connections(db, ctx) if c.id == connection_id)
+
+
+async def _unmask(
+    client: VoiceRuntimeClient, connection_id: str, settings: dict[str, str]
+) -> dict[str, str]:
+    """Put the stored secret back into masked values that were sent back unchanged."""
+    stored: dict[str, Any] = next(
+        (c.connection_settings for c in await client.list_connections() if c.uuid == connection_id),
+        {},
+    )
+    out: dict[str, str] = {}
+    for key, value in settings.items():
+        if LIVE_STT_MASK in value:
+            original = stored.get(key)
+            if not isinstance(original, str) or mask_settings({key: original})[key] != value:
+                raise ValidationFailedError(
+                    "Enter the full live speech-to-text address, with its secret.",
+                    details={"field": key},
+                )
+            value = original
+        out[key] = value
+    return out
 
 
 async def _assert_connection(
@@ -259,14 +297,16 @@ async def delete_connection(db: AsyncSession, ctx: TenantContext, connection_id:
     conn = await _assert_connection(db, ctx, connection_id)
     selection = await get_selection(db, ctx)
     in_use = [
-        kind
+        kind.upper()
         for kind in ("llm", "stt", "tts", "embeddings")
         if (choice := getattr(selection, kind)) is not None
         and choice.connection_id == connection_id
     ]
+    if selection.llm_fallback is not None and selection.llm_fallback.connection_id == connection_id:
+        in_use.append("fallback LLM")
     if in_use:
         raise ValidationFailedError(
-            f"This connection is in use for: {', '.join(k.upper() for k in in_use)}. "
+            f"This connection is in use for: {', '.join(in_use)}. "
             "Choose another provider for those first."
         )
     async with runtime_client(db, ctx.org_id) as client:
@@ -289,6 +329,59 @@ def _choice(raw: Any) -> ServiceChoice | None:
         return None
     return ServiceChoice(
         connection_id=str(raw["provider_connection_uuid"]), settings=raw.get("settings") or {}
+    )
+
+
+def _fallback(raw: Any) -> LlmFallback | None:
+    """The voice service's `llm_fallback` policy as one fallback model (ATLAS sets one target)."""
+    rules = raw.get("rules") if isinstance(raw, dict) else None
+    if not isinstance(rules, list):
+        return None
+    target: ServiceChoice | None = None
+    after_ms: int | None = None
+    on_error = False
+    for rule in rules:
+        if not isinstance(rule, dict) or not isinstance(rule.get("condition"), dict):
+            continue
+        target = target or _choice(rule.get("target"))
+        condition = rule["condition"]
+        if condition.get("type") == "no_output" and isinstance(condition.get("after_ms"), int):
+            after_ms = condition["after_ms"]
+        elif condition.get("type") == "error":
+            on_error = True
+    if target is None or (after_ms is None and not on_error):
+        return None
+    return LlmFallback(
+        connection_id=target.connection_id,
+        settings=target.settings,
+        after_ms=after_ms,
+        on_error=on_error,
+    )
+
+
+def _fallback_spec(fallback: LlmFallback) -> dict[str, Any]:
+    """The voice service's `llm_fallback` rule (api/schemas/llm_fallback.py)."""
+    target = {
+        "provider_connection_uuid": fallback.connection_id,
+        "settings": {k: v for k, v in fallback.settings.items() if v not in (None, "")},
+    }
+    rules: list[dict[str, Any]] = []
+    if fallback.after_ms is not None:
+        condition = {"type": "no_output", "after_ms": fallback.after_ms}
+        rules.append({"condition": condition, "target": target})
+    if fallback.on_error:
+        rules.append({"condition": {"type": "error"}, "target": target})
+    return {"version": 1, "rules": rules}
+
+
+def _same_model(fallback: LlmFallback, llm: ServiceChoice) -> bool:
+    """The voice service refuses a fallback identical to the language model it backs up."""
+
+    def clean(settings: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in settings.items() if v not in (None, "")}
+
+    return fallback.connection_id == llm.connection_id and clean(fallback.settings) == clean(
+        llm.settings
     )
 
 
@@ -316,6 +409,7 @@ async def get_selection_for_org(db: AsyncSession, org_id: uuid.UUID) -> ModelSel
         stt=_choice(spec.get("stt")),
         tts=_choice(spec.get("tts")),
         embeddings=_choice(spec.get("embeddings")),
+        llm_fallback=_fallback(spec.get("llm_fallback")),
     )
 
 
@@ -323,7 +417,7 @@ async def save_selection(
     db: AsyncSession, ctx: TenantContext, data: ModelSelectionUpdate
 ) -> ModelSelection:
     account = await ensure_account(db, ctx.org_id)
-    known = {c.id for c in await list_connections(db, ctx)}
+    known = {c.id: c for c in await list_connections(db, ctx)}
     spec: dict[str, Any] = {"version": 3, "mode": "pipeline"}
     for kind in ("llm", "stt", "tts", "embeddings"):
         choice: ServiceChoice | None = getattr(data, kind)
@@ -340,8 +434,34 @@ async def save_selection(
             "provider_connection_uuid": choice.connection_id,
             "settings": {k: v for k, v in choice.settings.items() if v not in (None, "")},
         }
+    keep_fallback = "llm_fallback" not in data.model_fields_set
+    fallback = data.llm_fallback
+    if fallback is not None:
+        target = known.get(fallback.connection_id)
+        if target is None or target.provider not in SUPPORTED["llm"]:
+            raise ValidationFailedError(
+                "Unknown connection for the fallback LLM", details={"field": "llm_fallback"}
+            )
+        if _same_model(fallback, data.llm):
+            raise ValidationFailedError(
+                "The fallback must be another language model than the main one.",
+                details={"field": "llm_fallback"},
+            )
     async with runtime_client(db, ctx.org_id) as client:
         cfg_uuid = account.managed_model_config_uuid
+        if keep_fallback and cfg_uuid:
+            try:
+                current = await client.get_model_configuration(cfg_uuid)
+            except RuntimeRejectedError:
+                current = None
+            fallback = _fallback(current.configuration.get("llm_fallback")) if current else None
+            # A kept fallback must still exist and must not be the new language model itself.
+            if fallback is not None and (
+                fallback.connection_id not in known or _same_model(fallback, data.llm)
+            ):
+                fallback = None
+        if fallback is not None:
+            spec["llm_fallback"] = _fallback_spec(fallback)
         if cfg_uuid:
             try:
                 await client.update_model_configuration(cfg_uuid, spec)

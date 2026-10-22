@@ -20,6 +20,8 @@ _SENSITIVE_KEYS = re.compile(
     r"(authorization|password|secret|token|api[_-]?key|cookie|signature)", re.IGNORECASE
 )
 _BEARER = re.compile(r"Bearer\s+[A-Za-z0-9._\-]+")
+# The AI gateway's live speech-to-text address carries a secret in its path (ADR 0007).
+_LIVE_STT_PATH = re.compile(r"(/live-stt/)[^/\s\"'?#]+")
 
 _RESERVED = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys()) | {
     "message",
@@ -37,8 +39,27 @@ def redact(value: Any) -> Any:
     if isinstance(value, list):
         return [redact(v) for v in value]
     if isinstance(value, str):
-        return _BEARER.sub("Bearer [REDACTED]", value)
+        return scrub_text(value)
     return value
+
+
+def scrub_text(text: str) -> str:
+    """Mask bearer tokens and URL path secrets in free text."""
+    return _LIVE_STT_PATH.sub(r"\1[REDACTED]", _BEARER.sub("Bearer [REDACTED]", text))
+
+
+class _UrlSecretFilter(logging.Filter):
+    """httpx logs every request's URL at INFO; mask path secrets before any handler sees it."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple) and any("/live-stt/" in str(a) for a in record.args):
+            record.args = tuple(
+                scrub_text(str(a)) if "/live-stt/" in str(a) else a for a in record.args
+            )
+        return True
+
+
+logging.getLogger("httpx").addFilter(_UrlSecretFilter())
 
 
 class JsonFormatter(logging.Formatter):
@@ -52,7 +73,7 @@ class JsonFormatter(logging.Formatter):
             "level": record.levelname,
             "service": self.service,
             "logger": record.name,
-            "msg": _BEARER.sub("Bearer [REDACTED]", record.getMessage()),
+            "msg": scrub_text(record.getMessage()),
         }
         if rid := request_id_ctx.get():
             payload["request_id"] = rid

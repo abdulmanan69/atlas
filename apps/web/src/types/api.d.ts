@@ -721,6 +721,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ai/servers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** AI servers of this organization, with the result of their last check */
+        get: operations["list_servers_api_v1_ai_servers_get"];
+        put?: never;
+        /**
+         * Register an AI server and create its model connections
+         * @description Checks `GET {url}/health` with the token, then creates a model connection for each service the server reports as up: '<name> · Language model' (`{url}/llm/v1`), '<name> · Whisper' (`{url}/whisper/v1`) and '<name> · Pocket TTS' (`{url}/tts/v1`), self-hosted connections that send the token as their API key. Live speech-to-text becomes '<name> · Live speech', a Deepgram connection with the base URL `{url}/live-stt/<secret>`, when the server offers it and both `live_stt_secret` and `deepgram_key` are given: the voice service checks every Deepgram connection's key with Deepgram's cloud when the connection is saved, whatever its address, so a real Deepgram key is needed once; no audio goes to Deepgram. `setup` says, per service, which connection was created or why none was. The address must use https, unless the operator allows private model addresses (ATLAS_ALLOW_PRIVATE_MODEL_URLS) and the server is on a private network. The token, the live speech-to-text secret and the Deepgram key are never returned, logged or recorded in the audit log.
+         */
+        post: operations["register_server_api_v1_ai_servers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/servers/{server_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One AI server */
+        get: operations["get_server_api_v1_ai_servers__server_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Remove the server and its connections
+         * @description Refused (409) while the organization's models for calls, or an agent's own models, use one of its connections; the message says where (`details.in_use`). Voices cloned on the server stay on it.
+         */
+        delete: operations["delete_server_api_v1_ai_servers__server_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename the server, or replace its token or live speech-to-text details
+         * @description A new token is checked with the server first and refused (422) before anything changes; then every connection of this server uses it. A new live speech-to-text secret changes the live speech connection's address. A Deepgram key (with a secret given now or before) creates the live speech connection when the server offers it, or replaces the key of the existing one. A new name renames the connections too. The token, the live speech-to-text secret and the Deepgram key are never returned, logged or recorded in the audit log.
+         */
+        patch: operations["update_server_api_v1_ai_servers__server_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/ai/servers/{server_id}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check the server now
+         * @description Asks the server's /health and stores its status, round-trip time and services. A language model, Whisper or Pocket TTS that was down when the server was registered gets its connection now if it is up. Servers are also checked every two minutes; a change of status is recorded in the audit log.
+         */
+        post: operations["check_server_api_v1_ai_servers__server_id__check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/servers/{server_id}/use": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Use this server for the organization's calls
+         * @description Sets the organization's models to this server's connections: its language model (`llm_model`, default the first model it lists) at temperature 0.3, live speech-to-text when it has a live speech connection and `use_live_stt` is true (otherwise Whisper), and Pocket TTS with the organization's current voice when this server has it (otherwise the server's default voice). Knowledge search is kept. With `fallback_llm_connection_id`, another language model answers a turn when this server has given no output after `fallback_after_ms` (default 2500) or fails; without it, any fallback is removed. Agents with their own models keep them; an agent with its own language model does not use the fallback.
+         */
+        post: operations["use_server_api_v1_ai_servers__server_id__use_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/ai/voices": {
         parameters: {
             query?: never;
@@ -2648,6 +2734,252 @@ export interface components {
             note: string | null;
             /** Version */
             version: number;
+        };
+        /** AiServerCreate */
+        AiServerCreate: {
+            /**
+             * Deepgram Key
+             * @description A Deepgram API key, needed only for live speech-to-text: the voice service checks every Deepgram-type connection's key with Deepgram's cloud when it is saved, whatever its address. No audio goes to Deepgram. Kept only by the voice service
+             */
+            deepgram_key?: string | null;
+            /**
+             * Live Stt Secret
+             * @description The secret in the live speech-to-text address: the part after /live-stt/ (ATLAS_AI_LIVE_STT_SECRET). Stored encrypted; never shown again
+             */
+            live_stt_secret?: string | null;
+            /**
+             * Name
+             * @description Shown in ATLAS, e.g. 'GPU server'
+             */
+            name: string;
+            /**
+             * Token
+             * Format: password
+             * @description The gateway's token (ATLAS_AI_TOKEN on the models host). Stored encrypted; never shown again
+             */
+            token: string;
+            /**
+             * Url
+             * @description The AI gateway's address, e.g. https://ai.203-0-113-7.sslip.io. It must use https, unless the operator allows private model addresses (ATLAS_ALLOW_PRIVATE_MODEL_URLS) and the server is on a private network
+             */
+            url: string;
+        };
+        /** AiServerOut */
+        AiServerOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Last Checked At */
+            last_checked_at: string | null;
+            /**
+             * Last Error
+             * @description Why the last check failed
+             */
+            last_error: string | null;
+            /**
+             * Last Latency Ms
+             * @description Round trip of the last health check
+             */
+            last_latency_ms: number | null;
+            /** Live Stt Secret Set */
+            live_stt_secret_set: boolean;
+            /** Name */
+            name: string;
+            /** Services */
+            services: components["schemas"]["AiServerService"][];
+            /**
+             * Status
+             * @description ok: every service up; degraded: some up; down: none, or not reachable
+             * @enum {string}
+             */
+            status: "ok" | "degraded" | "down" | "unchecked";
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Url */
+            url: string;
+        };
+        /** AiServerRegistered */
+        AiServerRegistered: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Last Checked At */
+            last_checked_at: string | null;
+            /**
+             * Last Error
+             * @description Why the last check failed
+             */
+            last_error: string | null;
+            /**
+             * Last Latency Ms
+             * @description Round trip of the last health check
+             */
+            last_latency_ms: number | null;
+            /** Live Stt Secret Set */
+            live_stt_secret_set: boolean;
+            /** Name */
+            name: string;
+            /** Services */
+            services: components["schemas"]["AiServerService"][];
+            /**
+             * Setup
+             * @description Per service: the connection created, or why none was
+             */
+            setup: components["schemas"]["AiServerSetup"][];
+            /**
+             * Status
+             * @description ok: every service up; degraded: some up; down: none, or not reachable
+             * @enum {string}
+             */
+            status: "ok" | "degraded" | "down" | "unchecked";
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Url */
+            url: string;
+        };
+        /**
+         * AiServerService
+         * @description One model server behind the gateway, as the last check found it.
+         */
+        AiServerService: {
+            /**
+             * Cloning
+             * @description Pocket TTS voice cloning state
+             */
+            cloning?: string | null;
+            /**
+             * Connection Id
+             * @description The connection ATLAS created for it, if any
+             */
+            connection_id?: string | null;
+            /** Default Voice */
+            default_voice?: string | null;
+            /**
+             * Error
+             * @description timeout, refused, unreachable, HTTP <code> or invalid response
+             */
+            error?: string | null;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /**
+             * Loaded
+             * @description Language models in memory now; others load on first use
+             */
+            loaded?: string[] | null;
+            /** Max Sessions */
+            max_sessions?: number | null;
+            /** Models */
+            models?: string[];
+            /**
+             * Service
+             * @enum {string}
+             */
+            service: "llm" | "whisper" | "tts" | "live_stt";
+            /** Sessions */
+            sessions?: number | null;
+            /**
+             * State
+             * @description 'not_offered': the server does not run it; 'loading': starting its model
+             * @enum {string}
+             */
+            state: "up" | "loading" | "down" | "not_offered";
+            /** Title */
+            title: string;
+            /** Up */
+            up: boolean;
+            /** Version */
+            version?: string | null;
+            /** Voices */
+            voices?: number | null;
+        };
+        /** AiServerSetup */
+        AiServerSetup: {
+            /** Connection Id */
+            connection_id?: string | null;
+            /** Connection Name */
+            connection_name?: string | null;
+            /** Created */
+            created: boolean;
+            /**
+             * Reason
+             * @description Why no connection was created
+             */
+            reason?: string | null;
+            /**
+             * Service
+             * @enum {string}
+             */
+            service: "llm" | "whisper" | "tts" | "live_stt";
+        };
+        /** AiServerUpdate */
+        AiServerUpdate: {
+            /**
+             * Deepgram Key
+             * @description A Deepgram key for the live speech-to-text connection (see POST)
+             */
+            deepgram_key?: string | null;
+            /**
+             * Live Stt Secret
+             * @description A new live speech-to-text secret
+             */
+            live_stt_secret?: string | null;
+            /** Name */
+            name?: string | null;
+            /**
+             * Token
+             * @description A new token. Checked with the server first; then every connection of this server uses it
+             */
+            token?: string | null;
+        };
+        /** AiServerUse */
+        AiServerUse: {
+            /**
+             * Fallback After Ms
+             * @description Switch to the fallback when the server has given no output this long
+             * @default 2500
+             */
+            fallback_after_ms?: number;
+            /**
+             * Fallback Llm Connection Id
+             * @description Another language model connection that answers when this server does not
+             */
+            fallback_llm_connection_id?: string | null;
+            /**
+             * Fallback Llm Model
+             * @description Model on the fallback connection; default: the model that connection is used with now, if it is the organization's current language model
+             */
+            fallback_llm_model?: string | null;
+            /**
+             * Llm Model
+             * @description Language model on the server; default: the first one it lists
+             */
+            llm_model?: string | null;
+            /**
+             * Use Live Stt
+             * @description Live speech-to-text when the server has it; otherwise Whisper
+             * @default true
+             */
+            use_live_stt?: boolean;
         };
         /**
          * AmbientSettings
@@ -4724,6 +5056,36 @@ export interface components {
             /** Timezone */
             timezone?: string | null;
         };
+        /**
+         * LlmFallback
+         * @description Another language model that answers a turn when the main one fails to.
+         *
+         *     The voice service switches to it for the rest of the turn when the main model has
+         *     produced no output `after_ms` after the request, or answers with an error.
+         */
+        LlmFallback: {
+            /**
+             * After Ms
+             * @description Switch when the main model has given no output this long; null: never
+             * @default 2500
+             */
+            after_ms?: number | null;
+            /** Connection Id */
+            connection_id: string;
+            /**
+             * On Error
+             * @description Switch when the main model fails
+             * @default true
+             */
+            on_error?: boolean;
+            /**
+             * Settings
+             * @description Settings for this model, e.g. its model name
+             */
+            settings?: {
+                [key: string]: string | number | boolean | null;
+            };
+        };
         /** LoginRequest */
         LoginRequest: {
             /**
@@ -4802,6 +5164,7 @@ export interface components {
         ModelSelection: {
             embeddings?: components["schemas"]["ServiceChoice"] | null;
             llm?: components["schemas"]["ServiceChoice"] | null;
+            llm_fallback?: components["schemas"]["LlmFallback"] | null;
             stt?: components["schemas"]["ServiceChoice"] | null;
             tts?: components["schemas"]["ServiceChoice"] | null;
         };
@@ -4809,6 +5172,8 @@ export interface components {
         ModelSelectionUpdate: {
             embeddings?: components["schemas"]["ServiceChoice"] | null;
             llm: components["schemas"]["ServiceChoice"];
+            /** @description Leave out to keep the current fallback (it is dropped when it would be the new language model itself, or its connection is gone); null removes it */
+            llm_fallback?: components["schemas"]["LlmFallback"] | null;
             stt: components["schemas"]["ServiceChoice"];
             tts: components["schemas"]["ServiceChoice"];
         };
@@ -9557,6 +9922,441 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderCheck"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_servers_api_v1_ai_servers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiServerOut"][];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    register_server_api_v1_ai_servers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AiServerCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiServerRegistered"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description This address is already registered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The address is not allowed or not reachable, the server refused the token or the live speech-to-text secret, or the voice service refused a connection. `details.field` names the field to correct */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_server_api_v1_ai_servers__server_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The AI server's id */
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiServerOut"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_server_api_v1_ai_servers__server_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The AI server's id */
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The server is in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_server_api_v1_ai_servers__server_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The AI server's id */
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AiServerUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiServerOut"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    check_server_api_v1_ai_servers__server_id__check_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The AI server's id */
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiServerOut"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    use_server_api_v1_ai_servers__server_id__use_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The AI server's id */
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AiServerUse"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSelection"];
                 };
             };
             /** @description Missing or invalid credentials */

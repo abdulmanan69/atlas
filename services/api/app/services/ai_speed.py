@@ -341,7 +341,8 @@ PRESETS: tuple[LatencyPreset, ...] = (
 _PRESETS = {p.id: p for p in PRESETS}
 # Choices that must use one specific self-hosted server: only connections whose name or
 # address matches one of these hints qualify (otherwise the provider counts as missing).
-_STREAMING_STT_HINTS = ("local-stt", "streaming-stt")
+# "live-stt": the same server behind an AI gateway (ADR 0007), at <gateway>/live-stt/<secret>.
+_STREAMING_STT_HINTS = ("local-stt", "streaming-stt", "live-stt")
 _REQUIRED_HINTS: dict[tuple[str, str], tuple[str, ...]] = {
     ("private_pocket_tts", "tts"): ("local-tts", "pocket"),
     ("private_streaming", "stt"): _STREAMING_STT_HINTS,

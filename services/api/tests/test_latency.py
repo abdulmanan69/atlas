@@ -596,6 +596,10 @@ def test_streaming_server_is_used_only_by_the_private_streaming_preset() -> None
     assert ai_speed._pick("stt", "deepgram", [local, cloud]) is cloud
     # A cloud preset (e.g. Flux) must never land on the local server, even as a fallback.
     assert ai_speed._pick("stt", "deepgram", [local]) is None
+    # The same server on another host, behind the AI gateway (secret masked as listed).
+    remote = deepgram("d3", "GPU box · Live speech", "https://ai.example.com/live-stt/[secret]")
+    assert ai_speed._pick("stt", "deepgram", [cloud, remote], required) is remote
+    assert ai_speed._pick("stt", "deepgram", [remote]) is None
 
     preset = next(p for p in ai_speed.PRESETS if p.id == "private_streaming")
     assert preset.title == "Private streaming (self-hosted)"

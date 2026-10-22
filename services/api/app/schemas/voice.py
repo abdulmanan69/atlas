@@ -82,6 +82,32 @@ class ServiceChoice(APIModel):
     settings: dict[str, Scalar] = Field(default_factory=dict)
 
 
+class LlmFallback(APIModel):
+    """Another language model that answers a turn when the main one fails to.
+
+    The voice service switches to it for the rest of the turn when the main model has
+    produced no output `after_ms` after the request, or answers with an error.
+    """
+
+    connection_id: str = Field(min_length=1, max_length=64)
+    settings: dict[str, Scalar] = Field(
+        default_factory=dict, description="Settings for this model, e.g. its model name"
+    )
+    after_ms: int | None = Field(
+        default=2500,
+        ge=100,
+        le=10000,
+        description="Switch when the main model has given no output this long; null: never",
+    )
+    on_error: bool = Field(default=True, description="Switch when the main model fails")
+
+    @model_validator(mode="after")
+    def _has_a_condition(self) -> LlmFallback:
+        if self.after_ms is None and not self.on_error:
+            raise ValueError("Choose when the fallback answers: after a wait, on errors, or both")
+        return self
+
+
 class ModelSelection(APIModel):
     """Which connection and settings each service uses for this organization's calls."""
 
@@ -89,6 +115,7 @@ class ModelSelection(APIModel):
     stt: ServiceChoice | None = None
     tts: ServiceChoice | None = None
     embeddings: ServiceChoice | None = None
+    llm_fallback: LlmFallback | None = None
 
 
 class ModelSelectionUpdate(APIModel):
@@ -96,6 +123,13 @@ class ModelSelectionUpdate(APIModel):
     stt: ServiceChoice
     tts: ServiceChoice
     embeddings: ServiceChoice | None = None
+    llm_fallback: LlmFallback | None = Field(
+        default=None,
+        description=(
+            "Leave out to keep the current fallback (it is dropped when it would be the new "
+            "language model itself, or its connection is gone); null removes it"
+        ),
+    )
 
 
 class ProviderCheck(APIModel):

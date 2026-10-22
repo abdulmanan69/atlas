@@ -545,5 +545,10 @@ def build_configurations(
                 "provider_connection_uuid": choice.connection_id,
                 "settings": {k: v for k, v in choice.settings.items() if v is not None},
             }
+        if override.llm:
+            # The organization's fallback backs up the organization's language model, not
+            # the agent's own; inherited, it could even be the same model, which the voice
+            # service refuses. An empty rule list turns it off for this agent.
+            spec["llm_fallback"] = {"version": 1, "rules": []}
         configurations["model_configuration_override"] = spec
     return configurations

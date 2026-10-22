@@ -23,8 +23,9 @@ definitions live in the voice service, so the warm-up leaves tools out and still
 the system text.
 
 Everything here is best effort and runs in a background task: it never delays a call or
-makes one fail. Only self-hosted models are warmed, at most one warm-up per server at a
-time, and the same prompt is not sent twice within a short window.
+makes one fail. Only self-hosted models are warmed (registered AI servers with their
+token), at most one warm-up per server at a time, and the same prompt is not sent twice
+within a short window.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
@@ -212,6 +213,8 @@ class WarmupTarget:
     base_url: str  # OpenAI-style base, e.g. http://127.0.0.1:11434/v1
     model: str
     trusted: bool  # operator-configured (ATLAS_LOCAL_LLM_WARMUP_URL), not tenant-supplied
+    # A registered AI server (ADR 0007): reached at its own address with its token.
+    api_key: str | None = field(default=None, repr=False)
 
     @property
     def chat_url(self) -> str:
@@ -268,15 +271,18 @@ async def check_destination(target: WarmupTarget) -> bool:
     may use plain http when its host is internal (a model server on the same Docker
     network); it still gets the credential check, and https otherwise. A tenant's
     connection URL must resolve to a public address unless ATLAS_ALLOW_PRIVATE_MODEL_URLS
-    is true, and must use https outside local development.
+    is true, and must use https outside local development. A registered AI server gets
+    the rules it was registered under: with ATLAS_ALLOW_PRIVATE_MODEL_URLS also plain http
+    on a private network.
     """
     allow_private = target.trusted or get_settings().allow_private_model_urls
+    registered = target.api_key is not None
     try:
         await validate_destination_url(
             target.chat_url,
             label="Self-hosted model",
             allow_private=allow_private,
-            allow_internal_http=target.trusted,
+            allow_internal_http=target.trusted or (registered and allow_private),
         )
     except ValidationFailedError as exc:
         log.info("llm_warmup_skipped", extra={"reason": "destination_policy", "detail": str(exc)})
@@ -325,10 +331,11 @@ async def send_warmup(target: WarmupTarget, body: dict[str, Any]) -> str:
     timeout = get_settings().local_llm_warmup_timeout_seconds
     started = time.perf_counter()
     try:
+        headers = {"Authorization": f"Bearer {target.api_key}"} if target.api_key else None
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(timeout, connect=min(timeout, 3.0)), follow_redirects=False
         ) as client:
-            response = await client.post(key, json=body)
+            response = await client.post(key, json=body, headers=headers)
         outcome = "sent" if response.is_success else f"http_{response.status_code}"
     except httpx.TimeoutException:
         outcome = "timeout"
@@ -355,9 +362,12 @@ async def resolve_target(org_id: uuid.UUID, cfg: AgentConfig) -> WarmupTarget | 
     """The language model this agent's calls use, if it is self-hosted.
 
     The agent's own model override wins over the organization's default selection,
-    as in the voice service.
+    as in the voice service. A connection ATLAS created for a registered AI server is
+    warmed at that server's own address with its token, never at the operator's
+    ATLAS_LOCAL_LLM_WARMUP_URL (that is a different server).
     """
     from app.db.session import get_sessionmaker  # local imports: keep this module light
+    from app.services.ai_servers import gateway_for
     from app.services.ai_settings import get_selection_for_org
     from app.services.runtime_accounts import runtime_client
 
@@ -367,6 +377,14 @@ async def resolve_target(org_id: uuid.UUID, cfg: AgentConfig) -> WarmupTarget | 
             choice = (await get_selection_for_org(db, org_id)).llm
         if choice is None:
             return None
+        gateway = await gateway_for(db, org_id, choice.connection_id, "llm")
+        if gateway is not None:
+            model = str(choice.settings.get("model") or "").strip()
+            if not model:
+                return None
+            return WarmupTarget(
+                base_url=gateway.base_url, model=model, trusted=False, api_key=gateway.token
+            )
         async with runtime_client(db, org_id) as client:
             connections = await client.list_connections()
     connection = next((c for c in connections if c.uuid == choice.connection_id), None)

@@ -78,7 +78,13 @@ async def test_tenant_provisioning_is_isolated_and_removes_vendor_models(
     bootstrap = next(iter(org.connections.values()))
     assert bootstrap["is_active"], "kept until the tenant chooses its own models (runtime rule)"
     models = (await client.get("/api/v1/ai/models", headers=owner.headers)).json()
-    assert models == {"llm": None, "stt": None, "tts": None, "embeddings": None}
+    assert models == {
+        "llm": None,
+        "stt": None,
+        "tts": None,
+        "embeddings": None,
+        "llm_fallback": None,
+    }
     cred = next(iter(org.credentials.values()))
     assert cred["credential_type"] == "custom_header"
 

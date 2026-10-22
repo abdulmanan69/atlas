@@ -17,7 +17,9 @@ to every organization using it. The token is passed straight through to the serv
 never stored, logged, audited or returned here, and is scrubbed from the server's replies.
 
 ATLAS reaches the server at ATLAS_LOCAL_TTS_URL when set (an operator setting, so it may be
-private), otherwise at the connection's base URL under the outbound destination policy.
+private), otherwise at the connection's base URL under the outbound destination policy. The
+Pocket TTS connection of a registered AI server (ADR 0007) is always reached at that server's
+own address, {url}/tts/v1, with its token: the local setting is for another server.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ import logging
 import re
 import unicodedata
 import uuid
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, NoReturn
 
@@ -59,7 +62,7 @@ from app.schemas.voice_cloning import (
     VoiceCloningEnable,
     VoiceCloningStatus,
 )
-from app.services import ai_settings, audit, voice_samples
+from app.services import ai_servers, ai_settings, audit, voice_samples
 
 log = logging.getLogger(__name__)
 
@@ -134,6 +137,31 @@ async def _pocket_connection(
     raise NotFoundError("Connection not found")
 
 
+@dataclass(frozen=True, slots=True)
+class PocketServer:
+    """Where ATLAS reaches a Pocket TTS server, and the key it sends there."""
+
+    base: str  # OpenAI-style base URL (".../v1")
+    api_key: str | None = field(default=None, repr=False)
+    ai_server: str | None = None  # a registered AI server's name: its gateway checks the key
+
+
+async def _server(db: AsyncSession, org_id: uuid.UUID, conn: ConnectionOut) -> PocketServer:
+    """The server's OpenAI-style base URL and key, after the destination policy."""
+    gateway = await ai_servers.gateway_for(db, org_id, conn.id, "tts")
+    if gateway is not None:
+        try:
+            url = await ai_servers.check_address(gateway.base_url)
+        except ValidationFailedError as exc:
+            raise IntegrationUnavailableError(
+                f"ATLAS cannot use the AI server {gateway.server_name}: {exc.message}."
+            ) from None
+        return PocketServer(url.rstrip("/"), gateway.token, gateway.server_name)
+    return PocketServer(
+        await _base_url(conn), get_settings().local_tts_api_key.get_secret_value() or None
+    )
+
+
 async def _base_url(conn: ConnectionOut) -> str:
     """The server's OpenAI-style base URL (".../v1"), after the destination policy."""
     settings = get_settings()
@@ -164,29 +192,47 @@ async def _base_url(conn: ConnectionOut) -> str:
 # ---------------------------------------------------------------- talking to the server
 
 
+def _gateway_refused(response: httpx.Response) -> bool:
+    """The AI gateway's own answer to a wrong token (not the Pocket TTS server's)."""
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    return isinstance(body, dict) and body.get("error") == "unauthorized"
+
+
 async def _send(
-    method: str, base: str, path: str, *, read_seconds: float = 15.0, **kwargs: Any
+    method: str, server: PocketServer, path: str, *, read_seconds: float = 15.0, **kwargs: Any
 ) -> httpx.Response:
-    headers = {}
-    if key := get_settings().local_tts_api_key.get_secret_value():
-        headers["Authorization"] = f"Bearer {key}"
+    headers = {"Authorization": f"Bearer {server.api_key}"} if server.api_key else {}
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(read_seconds, connect=5.0),
             follow_redirects=False,
             headers=headers,
         ) as client:
-            return await client.request(method, f"{base}{path}", **kwargs)
+            response = await client.request(method, f"{server.base}{path}", **kwargs)
     except httpx.TimeoutException:
         raise IntegrationUnavailableError(
             "The Pocket TTS server did not answer in time. Try again in a moment."
         ) from None
     except httpx.HTTPError:
+        if server.ai_server:
+            raise IntegrationUnavailableError(
+                f"ATLAS cannot reach the AI server {server.ai_server}. Check that it is running "
+                "(AI providers, AI servers)."
+            ) from None
         raise IntegrationUnavailableError(
-            f"ATLAS cannot reach the Pocket TTS server at {base}. Check "
+            f"ATLAS cannot reach the Pocket TTS server at {server.base}. Check "
             "that local-tts is running; if the API runs outside Docker, set "
             "ATLAS_LOCAL_TTS_URL (for example http://127.0.0.1:8002/v1)."
         ) from None
+    if server.ai_server and response.status_code == 401 and _gateway_refused(response):
+        raise IntegrationUnavailableError(
+            f"The AI server {server.ai_server} refused its token. Replace the token under AI "
+            "providers, AI servers."
+        )
+    return response
 
 
 def _scrub(text: str, secret: str | None = None) -> str:
@@ -306,15 +352,15 @@ def _sample_seconds(raw: dict[str, Any]) -> float | None:
 
 async def list_voices(db: AsyncSession, ctx: TenantContext, connection_id: str) -> PocketVoiceList:
     conn = await _pocket_connection(db, ctx, connection_id)
-    base = await _base_url(conn)
-    response = await _send("GET", base, "/voices")
+    server = await _server(db, ctx.org_id, conn)
+    response = await _send("GET", server, "/voices")
     if response.status_code in (404, 501):
         # Cloning is off (or an older server): built-in voices still come from the speech API.
         if response.status_code == 404:
             state, message = "unsupported", OLD_SERVER
         else:
-            state, message = await _state_while_off(base, _detail(response))
-        builtins = await _send("GET", base, "/audio/voices")
+            state, message = await _state_while_off(server, _detail(response))
+        builtins = await _send("GET", server, "/audio/voices")
         if not builtins.is_success:
             _raise_for(builtins)
         return PocketVoiceList(
@@ -338,13 +384,13 @@ async def list_voices(db: AsyncSession, ctx: TenantContext, connection_id: str) 
     return PocketVoiceList(voices=voices, cloning_available=True, cloning_state="on")
 
 
-async def _state_while_off(base: str, message: str) -> tuple[CloningState, str]:
+async def _state_while_off(server: PocketServer, message: str) -> tuple[CloningState, str]:
     """Whether a server without working voice cloning is turning it on, or why it failed.
 
     Best effort: the voice list must not fail because of it.
     """
     try:
-        response = await _send("GET", base, "/cloning")
+        response = await _send("GET", server, "/cloning")
     except AppError:
         return "off", message
     if response.status_code == 404:
@@ -397,7 +443,7 @@ async def create_voice(
     conn = await _pocket_connection(db, ctx, connection_id)
     data = await read_sample(audio)
     sample = await prepare_sample(data)
-    base = await _base_url(conn)
+    server = await _server(db, ctx.org_id, conn)
     now = datetime.now(UTC)
     # Kept by the server with the voice, so the store itself shows the attestation's source.
     statement = (
@@ -406,7 +452,7 @@ async def create_voice(
     )
     response = await _send(
         "POST",
-        base,
+        server,
         "/voices",
         read_seconds=get_settings().local_tts_timeout_seconds,
         data={"name": clean, "consent": "true", "consent_statement": statement},
@@ -437,7 +483,7 @@ async def create_voice(
         await db.flush()
     except Exception:
         # Do not leave an unowned voice on the server.
-        await _delete_on_server(base, voice_id, quiet=True)
+        await _delete_on_server(server, voice_id, quiet=True)
         raise
     await audit.record(
         db,
@@ -462,9 +508,9 @@ async def create_voice(
     return _cloned(row, seconds)
 
 
-async def _delete_on_server(base: str, voice_id: str, *, quiet: bool = False) -> None:
+async def _delete_on_server(server: PocketServer, voice_id: str, *, quiet: bool = False) -> None:
     try:
-        response = await _send("DELETE", base, f"/voices/{voice_id}")
+        response = await _send("DELETE", server, f"/voices/{voice_id}")
     except AppError:
         if quiet:
             log.warning("voice_clone_cleanup_failed", extra={"voice_id": voice_id})
@@ -522,8 +568,8 @@ async def delete_voice(
             f"This voice is used by {user}. Choose another voice there first."
         )
     conn = await _pocket_connection(db, ctx, connection_id)
-    base = await _base_url(conn)
-    await _delete_on_server(base, voice_id)
+    server = await _server(db, ctx.org_id, conn)
+    await _delete_on_server(server, voice_id)
     await db.delete(row)
     await audit.record(
         db,
@@ -585,8 +631,8 @@ async def cloning_status(
     db: AsyncSession, ctx: TenantContext, connection_id: str
 ) -> VoiceCloningStatus:
     conn = await _pocket_connection(db, ctx, connection_id)
-    base = await _base_url(conn)
-    response = await _send("GET", base, "/cloning")
+    server = await _server(db, ctx.org_id, conn)
+    response = await _send("GET", server, "/cloning")
     if response.status_code == 404:
         return VoiceCloningStatus(
             state="unsupported",
@@ -628,10 +674,10 @@ async def enable_cloning(
     _require_switch()
     await enforce_rate_limit(f"voice-cloning:{ctx.org_id}", CLONING_CHANGES_PER_MINUTE)
     conn = await _pocket_connection(db, ctx, connection_id)
-    base = await _base_url(conn)
+    server = await _server(db, ctx.org_id, conn)
     token = data.hf_token.get_secret_value()
     # The server checks the token with Hugging Face before answering.
-    response = await _send("PUT", base, "/cloning", read_seconds=30.0, json={"hf_token": token})
+    response = await _send("PUT", server, "/cloning", read_seconds=30.0, json={"hf_token": token})
     if response.status_code not in (200, 202):
         _raise_cloning(response, token=token)
     try:
@@ -659,8 +705,8 @@ async def disable_cloning(db: AsyncSession, ctx: TenantContext, connection_id: s
     _require_switch()
     await enforce_rate_limit(f"voice-cloning:{ctx.org_id}", CLONING_CHANGES_PER_MINUTE)
     conn = await _pocket_connection(db, ctx, connection_id)
-    base = await _base_url(conn)
-    response = await _send("DELETE", base, "/cloning")
+    server = await _server(db, ctx.org_id, conn)
+    response = await _send("DELETE", server, "/cloning")
     if response.status_code not in (200, 204):
         _raise_cloning(response)
     await audit.record(

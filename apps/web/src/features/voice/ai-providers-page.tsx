@@ -10,6 +10,8 @@ import { FormError } from "@/components/ui/form";
 import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { Badge, Card, CardHeader, Skeleton } from "@/components/ui/primitives";
 import { useInvalidate } from "@/features/queries";
+import { formatMs } from "@/features/voice/ai-servers";
+import { AiServersCard } from "@/features/voice/ai-servers-section";
 import { ConnectionDialog } from "@/features/voice/connection-dialog";
 import { SERVICE_LABELS, useCatalog, useConnections, useModelSelection, type Connection, type ModelSelection, type ServiceChoice, type ServiceKind } from "@/features/voice/queries";
 import { ServiceEditor } from "@/features/voice/service-editor";
@@ -47,6 +49,7 @@ export default function AiProvidersPage() {
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
           <div className="flex min-w-0 flex-col gap-5">
             <ModelsCard canEdit={canEdit} />
+            <AiServersCard canEdit={canEdit} />
             <SpeedCard catalog={catalog.data} connections={connections.data} onAddConnection={() => setAdding(true)} />
           </div>
           <div className="flex flex-col gap-5">
@@ -133,15 +136,18 @@ function ModelsCard({ canEdit }: { canEdit: boolean }) {
                 </div>
                 <p className="mt-1 text-[12.5px] text-muted">{SERVICE_LABELS[kind].description}</p>
               </div>
-              <ServiceEditor
-                kind={kind}
-                value={(draft[kind] as ServiceChoice | null | undefined) ?? null}
-                onChange={(v) => setDraft({ ...draft, [kind]: v })}
-                catalog={catalog.data}
-                connections={connections.data}
-                disabled={!canEdit}
-                allowNone={kind === "embeddings"}
-              />
+              <div className="flex min-w-0 flex-col gap-3">
+                <ServiceEditor
+                  kind={kind}
+                  value={(draft[kind] as ServiceChoice | null | undefined) ?? null}
+                  onChange={(v) => setDraft({ ...draft, [kind]: v })}
+                  catalog={catalog.data}
+                  connections={connections.data}
+                  disabled={!canEdit}
+                  allowNone={kind === "embeddings"}
+                />
+                {kind === "llm" && selection.data?.llm_fallback ? <FallbackNote fallback={selection.data.llm_fallback} connections={connections.data} /> : null}
+              </div>
             </section>
           ))}
         </div>
@@ -158,6 +164,19 @@ function ModelsCard({ canEdit }: { canEdit: boolean }) {
         </div>
       ) : null}
     </Card>
+  );
+}
+
+function FallbackNote({ fallback, connections }: { fallback: NonNullable<ModelSelection["llm_fallback"]>; connections: Connection[] | undefined }) {
+  const name = connections?.find((c) => c.id === fallback.connection_id)?.name ?? "another connection";
+  const model = fallback.settings?.model ? ` (${String(fallback.settings.model)})` : "";
+  const after = fallback.after_ms != null ? `gives no output within ${formatMs(fallback.after_ms)}` : null;
+  const when = after && fallback.on_error ? `${after} or fails` : (after ?? "fails");
+  return (
+    <p className="rounded-md bg-surface-2 px-3 py-2 text-[12.5px] text-ink-2">
+      <span className="font-medium">Fallback:</span> if this model {when}, {name}
+      {model} answers instead. It is set with Use for this organization under AI servers.
+    </p>
   );
 }
 
@@ -260,6 +279,9 @@ function SelfHostedCard() {
           <dt className="text-muted">Voice</dt>
           <dd className="font-mono text-[11.5px]">Kokoro · Piper</dd>
         </dl>
+        <p>
+          Running the ATLAS models host on another server? Add it under <strong>AI servers</strong> instead: ATLAS creates these connections for it and keeps its token in one place.
+        </p>
         <p className="rounded-md bg-warn-soft px-3 py-2 text-warn">
           Without a GPU, replies take noticeably longer. Use small models (3B parameters or less) for testing, and a GPU server for production calls.
         </p>
