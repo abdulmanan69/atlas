@@ -34,7 +34,10 @@ to it with `--ai-host` ([below](#lend-an-all-in-one-servers-models)).
   language model once per reply, Pocket TTS once per sentence, live speech-to-text as one
   WebSocket for the whole call. Within one cloud region that adds about a millisecond per
   request; between continents it adds 70 to 150 ms each time, which callers hear. Put the
-  models server in the app server's region.
+  models server in the app server's region. Measured across continents (voice service in
+  Lahore, models on the Oracle server in Ashburn, 3 test calls, all passed): reply heard
+  after 4.1 s (median) against 1.9 s with everything on the Oracle server
+  ([perf/two-server-layout.json](perf/two-server-layout.json)).
 * **One models server for several ATLAS installations**: each one connects with the
   gateway's address and token. Calls of every installation share the models' capacity
   (the language model answers one request at a time on CPU, `OLLAMA_NUM_PARALLEL=1`).
