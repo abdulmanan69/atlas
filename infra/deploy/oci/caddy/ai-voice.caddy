@@ -1,0 +1,10 @@
+# The AI gateway's route to the expressive voice on a GPU host (imported inside the gateway's
+# `route` of ai-gateway.caddy, after the token check, when docker-compose.gpu.yml sets
+# ATLAS_AI_VOICE_ROUTE=ai-voice.caddy). Same API as /tts/v1: OpenAI speech, streamed
+# sentence by sentence, voices, voice cloning (samples up to 10 MB), and the sound tags.
+handle /voice/v1/* {
+	uri strip_prefix /voice
+	reverse_proxy expressive-tts:8000 {
+		import ai_proxy
+	}
+}

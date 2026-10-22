@@ -1,4 +1,4 @@
-"""Live speech-to-text server that speaks the Deepgram v1 live-listen protocol (CPU).
+"""Live speech-to-text server that speaks the Deepgram v1 live-listen protocol (CPU or GPU).
 
 The voice service already streams call audio to Deepgram over a websocket and accepts a
 custom endpoint, so this server answers that same protocol from a local model. Callers
@@ -33,15 +33,24 @@ as it arrives (windowed-sinc filter), for the detector and the model alike.
 
 Environment (defaults in brackets):
   STT_MODEL [parakeet-110m]        which model (fetch_model.MODELS)
+  STT_PROVIDER [cpu]               cpu, or cuda: the model runs on an NVIDIA GPU (the image
+                                   from Dockerfile.gpu, started with a GPU); the server
+                                   refuses to start when the build or the GPU is missing
   STT_MODEL_DIR [/models]          where fetch_model.py stores the models
   STT_MODEL_ID [per model]         name reported in results and /health
-  STT_NUM_THREADS [2]              CPU threads per decode
+  STT_NUM_THREADS [2]              CPU threads per decode (with cuda: for the parts that
+                                   stay on the CPU)
   STT_MAX_SESSIONS [4]             concurrent connections; more get HTTP 503
   STT_ENDPOINT_SILENCE_MS [400]    silence after speech that ends a segment
   STT_MAX_UTTERANCE_S [20]         a segment is finalised after this long regardless
   STT_VAD_THRESHOLD [0.5]          speech probability that counts as speech
   STT_PREROLL_MS [600]             audio before the detected start that is kept
   STT_INTERIM_MS [400]             whole-utterance models: how often live words are refreshed
+                                   (with cuda, skipped while another call's audio is being
+                                   transcribed: finals go first)
+  STT_PAD_MS [500 with cuda, else 0]  whole-utterance models: segments are padded to a
+                                   multiple of this with their background sound, so a GPU
+                                   only ever sees lengths it decoded once at startup
   STT_FINALIZE_PAD_MS [per model]  silence added on a final to flush the last words
   STT_MIN_CONFIDENCE [per model]   text the model is less sure of (mean token probability)
                                    is dropped: background talk, another language, noise
@@ -55,12 +64,15 @@ from __future__ import annotations
 import asyncio
 import collections
 import contextlib
+import glob
 import hashlib
 import json
 import logging
 import math
 import os
 import signal
+import sys
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -73,7 +85,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
 import sherpa_onnx
-from fetch_model import ModelSpec, ensure_model, spec_from_env
+from fetch_model import ModelSpec, ensure_model, provider_from_env, spec_from_env
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
@@ -91,6 +103,7 @@ def _env_float(name: str, default: float) -> float:
     return float(os.environ.get(name, default))
 
 
+PROVIDER = provider_from_env()
 SPEC: ModelSpec = spec_from_env()
 MODEL_DIR = Path(os.environ.get("STT_MODEL_DIR", "/models"))
 MODEL_ID = os.environ.get("STT_MODEL_ID", SPEC.model_id)
@@ -124,6 +137,13 @@ INTERIM_COST_FACTOR = 2.5
 MIN_CONFIDENCE = _env_float("STT_MIN_CONFIDENCE", SPEC.min_confidence)
 # Trailing silence kept on a whole-utterance segment before it is transcribed.
 OFFLINE_TAIL_S = 0.3
+# On a GPU, the first decode of each new audio length costs far more than a repeated one
+# (measured on a T4 with Parakeet 0.6B v3: 61 ms for 5 s heard before, 177 ms p50 for new
+# lengths), and live audio is almost never the same length twice. Whole-utterance models
+# there decode the segment padded up to a multiple of this, with the segment's own background
+# sound, and every padded length is decoded once at startup. 0 = no padding (the CPU default).
+PAD_S = _env_float("STT_PAD_MS", 500 if PROVIDER == "cuda" else 0) / 1000
+PAD_SOURCE_S = 0.1  # the quietest stretch of this length is what fills the padding
 
 _paths: dict[str, Path] = {}
 _engine: Engine | None = None
@@ -183,7 +203,7 @@ class OnlineEngine:
             sample_rate=MODEL_RATE,
             feature_dim=80,
             decoding_method="greedy_search",
-            provider="cpu",
+            provider=PROVIDER,
         )
 
     def start(self, rate: int) -> dict[str, Any]:
@@ -225,10 +245,32 @@ class OnlineEngine:
         return self._hyp(seg)
 
 
+def pad_to_bucket(audio: np.ndarray, rate: int) -> np.ndarray:
+    """The segment padded up to the next multiple of PAD_S with its own quietest stretch,
+    repeated: its background sound. (Digital silence would shift the per-feature
+    normalisation of the model's input; trailing background changes no words.)"""
+    if PAD_S <= 0 or audio.size == 0:
+        return audio
+    missing = -audio.size % int(PAD_S * rate)
+    if not missing:
+        return audio
+    width = int(PAD_SOURCE_S * rate)
+    if audio.size >= width:
+        windows = audio[: audio.size // width * width].reshape(-1, width)
+        quiet = windows[int(np.argmin((windows**2).mean(axis=1)))]
+    else:
+        quiet = audio
+    filler = np.tile(quiet, missing // quiet.size + 1)[:missing]
+    return np.concatenate([audio, filler]).astype(np.float32)
+
+
 class OfflineEngine:
     """Whole-utterance transducer: the segment is transcribed when it ends."""
 
     streaming = False
+    # Decodes running now, over all connections (they share the model).
+    _busy = 0
+    _busy_lock = threading.Lock()
 
     def __init__(self) -> None:
         self.rec = sherpa_onnx.OfflineRecognizer.from_transducer(
@@ -241,6 +283,7 @@ class OfflineEngine:
             feature_dim=80,
             decoding_method="greedy_search",
             model_type=SPEC.model_type or "transducer",
+            provider=PROVIDER,
         )
 
     def start(self, rate: int) -> dict[str, Any]:
@@ -264,9 +307,15 @@ class OfflineEngine:
         if n is not None:
             audio = audio[:n]
         stream = self.rec.create_stream()
-        stream.accept_waveform(seg["rate"], audio)
+        stream.accept_waveform(seg["rate"], pad_to_bucket(audio, seg["rate"]))
         started = time.perf_counter()
-        self.rec.decode_stream(stream)
+        with self._busy_lock:
+            OfflineEngine._busy += 1
+        try:
+            self.rec.decode_stream(stream)
+        finally:
+            with self._busy_lock:
+                OfflineEngine._busy -= 1
         seg["cost"] = time.perf_counter() - started
         result = stream.result
         return Hypothesis(
@@ -279,6 +328,10 @@ class OfflineEngine:
     def partial(self, seg: dict[str, Any]) -> Hypothesis | None:
         wait_s = max(INTERIM_S, INTERIM_COST_FACTOR * seg["cost"])
         if seg["n"] - seg["read_at"] < wait_s * seg["rate"]:
+            return None
+        if PROVIDER == "cuda" and OfflineEngine._busy:
+            # The GPU is transcribing for another call: live words wait (they are tried again
+            # with the next audio), so finals, which end a caller's turn, never queue behind them.
             return None
         seg["read_at"] = seg["n"]
         hyp = self._decode(seg)
@@ -320,6 +373,23 @@ def _trusted(hyp: Hypothesis) -> Hypothesis:
 
 def _load_engine() -> Engine:
     return OnlineEngine() if SPEC.kind == "online" else OfflineEngine()
+
+
+def cuda_problem() -> str | None:
+    """Why STT_PROVIDER=cuda cannot work here, or None. Checked before loading: without
+    the CUDA build or a GPU, sherpa-onnx would quietly run the model on the CPU."""
+    package = Path(sherpa_onnx.__file__).parent
+    if not list(package.rglob("libonnxruntime_providers_cuda.so")):
+        return (
+            "STT_PROVIDER=cuda needs the sherpa-onnx CUDA build: build the image from "
+            "Dockerfile.gpu (infra/deploy/oci/docker-compose.gpu.yml does)"
+        )
+    if not glob.glob("/dev/nvidia[0-9]*"):
+        return (
+            "STT_PROVIDER=cuda but no NVIDIA GPU is visible in this container: start it with "
+            "a GPU (docker-compose.gpu.yml, NVIDIA container toolkit)"
+        )
+    return None
 
 
 # ------------------------------------------------------------------ request options
@@ -763,6 +833,7 @@ def _health() -> dict[str, Any]:
         "model": MODEL_ID,
         "model_key": SPEC.key,
         "model_version": MODEL_VERSION,
+        "provider": PROVIDER,
         "streaming": SPEC.kind == "online",
         "language": "en",
         "sample_rate": MODEL_RATE,
@@ -928,23 +999,39 @@ def _warm_up() -> None:
     warm = Session(Options.from_path("/v1/listen?sample_rate=8000&interim_results=true"))
     warm.feed((noise[::2] * 32767).astype("<i2").tobytes())
     warm.finalize(from_finalize=True)
+    if PAD_S > 0 and isinstance(_engine, OfflineEngine):
+        # Every length a padded segment can have (up to STT_MAX_UTTERANCE_S plus the pre-roll),
+        # once, so no caller waits for a length's first decode.
+        started = time.perf_counter()
+        rng = np.random.default_rng(1)
+        lengths = range(1, math.ceil((MAX_UTTERANCE_S + PREROLL_S + FEED_SLICE_S) / PAD_S) + 1)
+        for k in lengths:
+            seg = _engine.start(MODEL_RATE)
+            n = int(k * PAD_S * MODEL_RATE)
+            _engine.accept(seg, (rng.standard_normal(n) * 0.05).astype(np.float32))
+            _engine.final(seg, None)
+        logger.info("decoded %d padded lengths in %.1fs", len(lengths), time.perf_counter() - started)
 
 
 async def main() -> None:
     global _engine, _paths
     started = time.perf_counter()
+    if PROVIDER == "cuda" and (problem := cuda_problem()):
+        logger.error("%s", problem)
+        sys.exit(2)
     _paths = ensure_model(MODEL_DIR, SPEC)
     engine = _load_engine()
     _engine = engine
     _warm_up()
     logger.info(
-        "ready in %.1fs: model=%s key=%s (%s, %s) threads=%d max_sessions=%d "
+        "ready in %.1fs: model=%s key=%s (%s, %s) provider=%s threads=%d max_sessions=%d "
         "endpoint_silence=%.0fms",
         time.perf_counter() - started,
         MODEL_ID,
         SPEC.key,
         MODEL_VERSION,
         "streaming" if SPEC.kind == "online" else "whole utterance",
+        PROVIDER,
         NUM_THREADS,
         MAX_SESSIONS,
         ENDPOINT_SILENCE_S * 1000,

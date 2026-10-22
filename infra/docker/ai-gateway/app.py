@@ -2,13 +2,16 @@
 
 The gateway (Caddy) checks the token and forwards `GET /health` here; this server publishes
 no port. On every request it asks each model server on the Docker network, with a short
-time budget, whether it answers and what it offers, all four at once:
+time budget, whether it answers and what it offers, all at once:
 
   llm       language model (Ollama): /api/version, /v1/models, /api/ps (models in memory)
   whisper   Whisper speech-to-text (speaches): /health, /v1/models, /openapi.json (version)
   tts       Pocket TTS adapter: /health, /v1/models, /v1/audio/voices, /v1/cloning,
             /openapi.json (version)
   live_stt  live speech-to-text, Deepgram protocol: /health
+  voice     expressive voice on a GPU (Chatterbox-Turbo, infra/docker/expressive-tts; only
+            on GPU hosts): /health, /v1/models, /v1/audio/voices, /v1/audio/sound-tags,
+            /v1/cloning, /openapi.json (version)
 
 Answer (200 when at least one service is up, 503 when none is):
 
@@ -30,8 +33,10 @@ Environment (defaults in brackets):
   AI_HEALTH_WHISPER_URL [http://local-speech:8000]
   AI_HEALTH_TTS_URL [http://local-tts:8000]
   AI_HEALTH_LIVE_STT_URL [http://local-stt:8000]
+  AI_HEALTH_VOICE_URL [http://expressive-tts:8000]
   AI_HEALTH_SERVICES [llm,whisper,tts,live_stt]  the services this host offers; others
                                                  are left out instead of reported down
+                                                 (GPU hosts add voice)
   AI_HEALTH_BUDGET_S [3]       time for all requests to one service
   PORT [8080]
 
@@ -64,8 +69,11 @@ DEFAULT_URLS = {
     "whisper": "http://local-speech:8000",
     "tts": "http://local-tts:8000",
     "live_stt": "http://local-stt:8000",
+    "voice": "http://expressive-tts:8000",
 }
 SERVICES = tuple(DEFAULT_URLS)
+# What every models host runs; the expressive voice needs a GPU (deploy.sh --gpu adds it).
+DEFAULT_SERVICES = ("llm", "whisper", "tts", "live_stt")
 # speaches' OpenAPI document is about 40 kB; anything far larger is not a model server.
 MAX_BODY_BYTES = 2 * 1024 * 1024
 # Model names and voice lists come from the servers; cap them so a misbehaving one cannot
@@ -215,6 +223,11 @@ def cloning_state(base: str, budget: Budget) -> str | None:
 
 
 def check_tts(base: str, budget: Budget) -> dict[str, Any]:
+    return speech_server(base, budget)[0]
+
+
+def speech_server(base: str, budget: Budget) -> tuple[dict[str, Any], Any]:
+    """An OpenAI-compatible voice in the Pocket TTS adapter's shape; also returns its /health."""
     health, latency = timed(lambda: get_ok(base, "/health", budget))
     loading = isinstance(health, dict) and health.get("status") == "loading"
     out: dict[str, Any] = {
@@ -224,7 +237,7 @@ def check_tts(base: str, budget: Budget) -> dict[str, Any]:
         "version": optional(lambda: openapi_version(base, budget)),
     }
     if loading:
-        return out
+        return out, health
     voices = optional(lambda: get_ok(base, "/v1/audio/voices", budget)["data"])
     default = (
         next((v.get("id") for v in voices if isinstance(v, dict) and v.get("default")), None)
@@ -237,7 +250,7 @@ def check_tts(base: str, budget: Budget) -> dict[str, Any]:
         default_voice=text(default),
         cloning=optional(lambda: cloning_state(base, budget)),
     )
-    return out
+    return out, health
 
 
 def check_live_stt(base: str, budget: Budget) -> dict[str, Any]:
@@ -256,6 +269,8 @@ def check_live_stt(base: str, budget: Budget) -> dict[str, Any]:
         "latency_ms": latency,
         "version": text(health.get("model_version")),
         "model": text(health.get("model")),
+        # "cuda" on a GPU; servers older than the GPU build do not say (null).
+        "provider": text(health.get("provider")),
         "streaming": health.get("streaming") if isinstance(health.get("streaming"), bool) else None,
         "language": text(health.get("language")),
         "sessions": number("sessions"),
@@ -263,11 +278,30 @@ def check_live_stt(base: str, budget: Budget) -> dict[str, Any]:
     }
 
 
+def sound_tags(base: str, budget: Budget) -> list[str]:
+    tags = get_ok(base, "/v1/audio/sound-tags", budget)["tags"]
+    return [t[:MAX_TEXT] for t in tags if isinstance(t, str)][:MAX_ITEMS]
+
+
+def check_voice(base: str, budget: Budget) -> dict[str, Any]:
+    """The expressive voice: the Pocket TTS adapter's endpoints, plus where it runs and the
+    sounds it performs when a reply carries them as tags ("[laugh]")."""
+    out, health = speech_server(base, budget)
+    if not out["up"]:
+        return out
+    out.update(
+        device=text(health.get("device")) if isinstance(health, dict) else None,
+        sound_tags=optional(lambda: sound_tags(base, budget)),
+    )
+    return out
+
+
 CHECKS: dict[str, Callable[[str, Budget], dict[str, Any]]] = {
     "llm": check_llm,
     "whisper": check_whisper,
     "tts": check_tts,
     "live_stt": check_live_stt,
+    "voice": check_voice,
 }
 
 
@@ -287,7 +321,7 @@ class Config:
             name: env.get(f"AI_HEALTH_{name.upper()}_URL", default).rstrip("/")
             for name, default in DEFAULT_URLS.items()
         }
-        wanted = [s.strip() for s in env.get("AI_HEALTH_SERVICES", ",".join(SERVICES)).split(",")]
+        wanted = [s.strip() for s in env.get("AI_HEALTH_SERVICES", ",".join(DEFAULT_SERVICES)).split(",")]
         unknown = [s for s in wanted if s and s not in SERVICES]
         if unknown:
             raise ValueError(f"AI_HEALTH_SERVICES: unknown service(s) {', '.join(unknown)}")

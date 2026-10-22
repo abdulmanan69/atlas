@@ -4,6 +4,8 @@
 #   /llm/v1/*                     language model, OpenAI-compatible API only (no /api/*)
 #   /whisper/v1/*                 Whisper speech-to-text (and the Kokoro voice)
 #   /tts/v1/*                     Pocket TTS, its voices and voice cloning
+#   /voice/v1/*                   GPU hosts only: the expressive voice (Chatterbox-Turbo),
+#                                 its voices, voice cloning and sound tags (ai-voice.caddy)
 #   /live-stt/<secret>/v1/listen  live speech-to-text, Deepgram protocol (WebSocket)
 #   /health                       which services answer, their versions and models
 #
@@ -94,6 +96,10 @@
 				import ai_proxy
 			}
 		}
+
+		# /voice/v1/*: docker-compose.gpu.yml sets ATLAS_AI_VOICE_ROUTE=ai-voice.caddy. Without
+		# a GPU the import is an empty file and /voice is an unknown path (404).
+		import {$ATLAS_AI_VOICE_ROUTE:ai-voice-off.caddy}
 
 		handle {
 			import ai_error not_found 404

@@ -99,11 +99,12 @@ speech-to-text chosen in the web app, and the last lines say which one is in use
 |---|---|
 | `--role all\|models` | `all` (default): everything on this server; `models`: only the AI models behind the AI gateway ([docs/deployment-layouts.md](../../../docs/deployment-layouts.md)). Saved in `.env`; a server keeps its role |
 | `--ai-host NAME` | hostname of the AI gateway (models role default: `ai.<ip-with-dashes>.sslip.io`; all-in-one: off unless given). `http://<private IP>` on a private network |
+| `--gpu` | run the models on the server's NVIDIA GPU: `qwen3:8b-nothink`, live speech-to-text with Parakeet 0.6B v3 and the expressive voice ([docs/deployment-layouts.md, "GPU models server"](../../../docs/deployment-layouts.md#gpu-models-server)). Checks the driver and the NVIDIA container toolkit first; saved in `.env` (`ATLAS_GPU=true`) |
 | `--public-ip IP` | the server's public IPv4 (saved in `.env`) |
 | `--web-host`, `--voice-host` | your own hostnames instead of sslip.io |
 | `--preset pocket\|streaming` | apply this speed preset to the demo organization now (default: only on the first setup) |
 | `--no-pull` | deploy the checked-out code as it is |
-| `--rebuild` | rebuild the Pocket TTS and live-transcription images |
+| `--rebuild` | rebuild the Pocket TTS and live-transcription images (with `--gpu` also the expressive voice) |
 | `--skip-warm` | do not load the models into memory at the end |
 
 `.env` also sets `COMPOSE_FILE` and `COMPOSE_PROFILES`, so plain `docker compose ps`,

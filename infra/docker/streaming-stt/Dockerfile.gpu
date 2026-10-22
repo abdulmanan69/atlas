@@ -1,0 +1,50 @@
+# Live speech-to-text (Deepgram v1 live-listen protocol) on sherpa-onnx, on an NVIDIA GPU.
+# Build: docker compose build local-stt, with infra/deploy/oci/docker-compose.gpu.yml in
+# COMPOSE_FILE (deploy.sh --gpu); the CPU build is Dockerfile.
+#
+# CUDA: the CUDA 12.9 runtime libraries and cuDNN 9.10 are NVIDIA's own pip packages, pinned
+# to the versions in the nvidia/cuda:12.9.1-cudnn-runtime image (requirements.gpu.txt), on the
+# same pinned Python image as the CPU build: an nvidia/cuda base has no Python that can be
+# pinned, and this way every layer is pinned and the base is shared with the other images.
+# The host provides the NVIDIA driver (525 or newer) and the NVIDIA container toolkit;
+# Compose passes the GPU in (deploy.resources.reservations.devices).
+FROM python:3.12.15-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    STT_MODEL_DIR=/models \
+    STT_PROVIDER=cuda \
+    STT_MODEL=parakeet-0.6b-v3 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+RUN useradd --create-home --uid 1000 app
+
+# sherpa-onnx's CUDA build links the ALSA library (its microphone tools), which the slim image
+# lacks: without it the module does not import. Pinned to Debian 12's version.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libasound2=1.2.8-1+b1 libasound2-data=1.2.8-1 \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.gpu.txt /tmp/requirements.gpu.txt
+RUN pip install --only-binary=:all: -r /tmp/requirements.gpu.txt && rm /tmp/requirements.gpu.txt
+
+# Where ONNX Runtime's CUDA provider (inside the sherpa-onnx wheel) finds the CUDA libraries.
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.12/site-packages/nvidia/cufft/lib:/usr/local/lib/python3.12/site-packages/nvidia/curand/lib:/usr/local/lib/python3.12/site-packages/nvidia/nvjitlink/lib:/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib
+
+WORKDIR /srv
+COPY fetch_model.py app.py /srv/
+
+# The model chosen with STT_MODEL (about 2.5 GB for Parakeet 0.6B v3 in full precision) and
+# the voice activity detector are downloaded on first start into this directory, pinned to a
+# commit and checked by SHA-256; mount a volume here so they are kept between restarts.
+RUN mkdir -p /models && chown app:app /models
+USER app
+VOLUME ["/models"]
+
+EXPOSE 8000
+HEALTHCHECK --interval=15s --timeout=5s --start-period=900s --retries=5 \
+  CMD python -c "import json,urllib.request;r=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health'));exit(0 if r['status']=='ok' else 1)"
+CMD ["python", "app.py"]

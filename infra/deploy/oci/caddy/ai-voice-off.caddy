@@ -1,0 +1,3 @@
+# Imported by ai-gateway.caddy when this host has no GPU voice (ATLAS_AI_VOICE_ROUTE unset):
+# deliberately empty, so /voice/v1/* is an unknown path. docker-compose.gpu.yml points the
+# import at ai-voice.caddy.

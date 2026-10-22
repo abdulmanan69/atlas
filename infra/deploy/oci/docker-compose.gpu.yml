@@ -1,0 +1,95 @@
+# GPU models server (deploy.sh --gpu; docs/deployment-layouts.md, "GPU models server"): the
+# language model, live speech-to-text and the expressive voice share one NVIDIA GPU. Extends
+# the role's files; deploy.sh writes into .env (the AI gateway's file last, when it is on):
+#
+#   role models: COMPOSE_FILE=docker-compose.yml:infra/deploy/oci/docker-compose.models.yml:<this file>:...ai-gateway.yml
+#   role all:    COMPOSE_FILE=docker-compose.yml:infra/deploy/oci/docker-compose.prod.yml:<this file>
+#
+# The host needs the NVIDIA driver and the NVIDIA container toolkit (deploy.sh checks both
+# and stops when one is missing). Measured on one T4 (16 GB, Kaggle): all three use about
+# 11 GB of GPU memory. Without this file nothing here applies: the models run on the CPU.
+
+name: atlas
+
+# The GPU every model server gets: ATLAS_GPU_DEVICE in .env (default 0, the first GPU).
+x-gpu: &gpu
+  devices:
+    - driver: nvidia
+      device_ids: ["${ATLAS_GPU_DEVICE:-0}"]
+      capabilities: [gpu]
+
+services:
+  local-llm:
+    environment:
+      # Two replies are written at once (two calls speaking at the same moment), each with
+      # its own 4k context: about 0.6 GB more GPU memory than one. The CPU setting is 1.
+      OLLAMA_NUM_PARALLEL: "${LOCAL_LLM_GPU_PARALLEL:-2}"
+      # qwen3:8b-nothink (the voice agents' model) and qwen2.5:1.5b (the CPU default, kept for
+      # connections made before the GPU) both fit, so a request for one never unloads the other.
+      OLLAMA_MAX_LOADED_MODELS: "2"
+    volumes:
+      # The no-think alias's Modelfile; deploy.sh runs `ollama create` with it.
+      - ./infra/deploy/oci/ollama:/etc/atlas/ollama:ro
+    deploy:
+      resources:
+        limits:
+          # The weights live in GPU memory; this covers the server, its model loader and the
+          # page cache of the 5 GB model file while it loads.
+          memory: 6g
+        reservations: *gpu
+
+  # Live speech-to-text on the GPU: the image from Dockerfile.gpu (sherpa-onnx's CUDA build)
+  # with NVIDIA Parakeet TDT 0.6B v3 in full precision (about 2.5 GB, downloaded on first
+  # start into the same volume). Same Deepgram connection in ATLAS: http://local-stt:8000.
+  local-stt:
+    build:
+      dockerfile: Dockerfile.gpu
+    image: atlas/local-stt:2-sherpa-onnx-1.13.8-cuda12.9
+    environment:
+      STT_MODEL: "${LOCAL_STT_GPU_MODEL:-parakeet-0.6b-v3}"
+      STT_PROVIDER: cuda
+      # Calls transcribed at once. Each decode takes GPU memory while it runs: measured on a
+      # T4 with the language model and the voice loaded (12.6 GB), 8 streams used 14.6 GB and
+      # answered in 0.86 s (p90 1.4 s); at 12 the GPU memory ran out and every connection
+      # failed. More needs a GPU with more memory.
+      STT_MAX_SESSIONS: "${LOCAL_STT_GPU_SESSIONS:-8}"
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+        reservations: *gpu
+
+  # Resemble AI Chatterbox-Turbo (MIT) behind the OpenAI speech API, with human sounds
+  # ("[laugh]", "[sigh]", ...), built from infra/docker/expressive-tts. In ATLAS: a self-hosted
+  # connection with base URL http://expressive-tts:8000/v1 (same host) or <gateway>/voice/v1
+  # (other hosts). No port is published: it is reachable on the Docker network only.
+  expressive-tts:
+    profiles: ["local-ai"]
+    build:
+      context: infra/docker/expressive-tts
+    image: atlas/expressive-tts:chatterbox-turbo-0.1.7
+    environment:
+      # Refuse to start without the GPU instead of falling back to the CPU (too slow for calls).
+      EXPRESSIVE_TTS_DEVICE: cuda
+      LOG_LEVEL: info
+    volumes:
+      # Two volumes: cloned voices (voices/ in the image's cache folder) and the model weights
+      # (about 3 GB, downloaded on first start), so either can be kept or removed alone. Both
+      # are folders the image creates for its user, so both stay writable.
+      - expressive_tts_voices:/home/app/.cache
+      - expressive_tts_models:/home/app/.cache/huggingface
+    deploy:
+      resources:
+        limits:
+          memory: 6g
+        reservations: *gpu
+    restart: unless-stopped
+
+  # The AI gateway (when it is on) also serves /voice/v1/* (caddy/ai-voice.caddy).
+  caddy:
+    environment:
+      ATLAS_AI_VOICE_ROUTE: ai-voice.caddy
+
+volumes:
+  expressive_tts_models:
+  expressive_tts_voices:

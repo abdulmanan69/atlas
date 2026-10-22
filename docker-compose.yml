@@ -210,6 +210,9 @@ services:
   # and, for live English transcription, a Deepgram connection with base URL
   #   http://local-stt:8000         (streaming speech-to-text, optional)
   # Every setting below is tuned for reply latency on CPU; see docs/local-models.md.
+  # With an NVIDIA GPU, infra/deploy/oci/docker-compose.gpu.yml (deploy.sh --gpu) puts the
+  # language model and live speech-to-text on the GPU and adds the expressive voice
+  #   http://expressive-tts:8000/v1 (self-hosted voice with sounds; docs/deployment-layouts.md)
   local-llm:
     profiles: ["local-ai"]
     image: ollama/ollama:0.40.6

@@ -61,7 +61,28 @@ Details and the measurements behind the default: `docs/local-models.md`.
     NVIDIA Corporation under the NVIDIA Open Model License
     ([agreement](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/)).
   - Parakeet TDT 0.6B v2 (`parakeet-tdt-v2`), by NVIDIA, CC BY 4.0.
+  - **Parakeet TDT 0.6B v3** (`parakeet-0.6b-v3`, the default on a GPU), by NVIDIA, licensed
+    under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+    ([nvidia/parakeet-tdt-0.6b-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)). Used as
+    the ONNX exports published by the sherpa-onnx project (int8 on CPU, full precision on a
+    GPU); ATLAS does not modify the model.
   - Streaming Zipformer EN 2023-06-26 (`zipformer-en`), k2-fsa, Apache License 2.0.
+
+## Self-hosted models on a GPU (optional, `deploy.sh --gpu`)
+
+Downloaded or built on the server when it runs with a GPU; none of them is stored in this
+repository.
+
+- The GPU build of the live transcription server (`Dockerfile.gpu`) installs sherpa-onnx's
+  CUDA build, which bundles ONNX Runtime (MIT) with its CUDA provider, and NVIDIA's CUDA
+  runtime, cuBLAS, cuFFT, cuRAND, nvJitLink and cuDNN libraries (pip packages
+  `nvidia-*-cu12`), which are licensed by NVIDIA under the terms shipped inside those
+  packages (NVIDIA Software License Agreement / CUDA Toolkit EULA).
+- **Qwen3 8B** (`qwen3:8b`, and the alias `qwen3:8b-nothink` with the same weights), by the
+  Qwen team, Alibaba Cloud, Apache License 2.0, downloaded through Ollama's library.
+- **Chatterbox-Turbo** (the expressive voice, `infra/docker/expressive-tts`), by Resemble AI,
+  MIT License ([ResembleAI/chatterbox-turbo](https://huggingface.co/ResembleAI/chatterbox-turbo)),
+  including its built-in voice; every output carries Resemble AI's Perth watermark.
 
 ## Application dependencies
 

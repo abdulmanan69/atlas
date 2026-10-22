@@ -48,8 +48,34 @@ TTS = {
 LIVE_STT = {
     "/health": (200, {
         "status": "ok", "model": "parakeet-en-110m", "model_key": "parakeet-110m",
-        "model_version": "parakeet-110m-int8@f628312e", "streaming": False, "language": "en",
-        "sample_rate": 16000, "sessions": 1, "max_sessions": 4, "min_confidence": 0.6,
+        "model_version": "parakeet-110m-int8@f628312e", "provider": "cpu", "streaming": False,
+        "language": "en", "sample_rate": 16000, "sessions": 1, "max_sessions": 4,
+        "min_confidence": 0.6,
+    }),
+}
+# The expressive voice (infra/docker/expressive-tts) and a GPU host's servers, trimmed.
+VOICE = {
+    "/health": (200, {"status": "ok", "device": "cuda"}),
+    "/v1/models": (200, {"object": "list", "data": [
+        {"id": "chatterbox-turbo", "object": "model", "sample_rate": 24000, "voices": ["default"]}]}),
+    "/v1/audio/voices": (200, {"object": "list", "data": [
+        {"id": "default", "license": "MIT", "default": True}]}),
+    "/v1/audio/sound-tags": (200, {"tags": ["[laugh]", "[sigh]", "[gasp]", "[chuckle]"]}),
+    "/v1/cloning": (200, {"state": "on", "message": None}),
+    "/openapi.json": (200, {"info": {"title": "Chatterbox-Turbo (OpenAI-compatible)", "version": "1.0.0"}}),
+}
+GPU_LLM = {
+    **LLM,
+    "/v1/models": (200, {"object": "list", "data": [
+        {"id": "qwen3:8b-nothink", "object": "model"}, {"id": "qwen3:8b", "object": "model"},
+        {"id": "qwen2.5:1.5b", "object": "model"}]}),
+    "/api/ps": (200, {"models": [{"name": "qwen3:8b-nothink", "size": 1}]}),
+}
+GPU_LIVE_STT = {
+    "/health": (200, {
+        **LIVE_STT["/health"][1], "model": "parakeet-en-0.6b-v3", "model_key": "parakeet-0.6b-v3-fp32",
+        "model_version": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3@1a468a35", "provider": "cuda",
+        "max_sessions": 16,
     }),
 }
 
@@ -147,6 +173,7 @@ class HealthTest(unittest.TestCase):
         self.assertEqual(s["tts"]["cloning"], "on")
         self.assertEqual(s["live_stt"]["model"], "parakeet-en-110m")
         self.assertEqual(s["live_stt"]["version"], "parakeet-110m-int8@f628312e")
+        self.assertEqual(s["live_stt"]["provider"], "cpu")
         self.assertIs(s["live_stt"]["streaming"], False)
         self.assertEqual((s["live_stt"]["sessions"], s["live_stt"]["max_sessions"]), (1, 4))
 
@@ -266,7 +293,60 @@ class HealthTest(unittest.TestCase):
         cfg = app.Config({})
         self.assertEqual(cfg.urls["llm"], "http://local-llm:11434")
         self.assertEqual(cfg.urls["live_stt"], "http://local-stt:8000")
+        self.assertEqual(cfg.urls["voice"], "http://expressive-tts:8000")
+        # The expressive voice is asked only on GPU hosts (deploy.sh --gpu adds it).
         self.assertEqual(cfg.services, ["llm", "whisper", "tts", "live_stt"])
+
+    def test_gpu_host(self) -> None:
+        """What a GPU models server answers: the expressive voice with its sounds, the no-think
+        alias among the language models, live speech-to-text on the GPU."""
+        cfg = self.config(
+            llm=self.serve("llm", GPU_LLM), whisper=self.serve("whisper", WHISPER),
+            tts=self.serve("tts", TTS), live_stt=self.serve("live_stt", GPU_LIVE_STT),
+            voice=self.serve("voice", VOICE),
+        )
+        self.assertEqual(cfg.services, ["llm", "whisper", "tts", "live_stt"])
+        cfg = app.Config({**{f"AI_HEALTH_{k.upper()}_URL": v for k, v in cfg.urls.items()},
+                          "AI_HEALTH_SERVICES": "llm,whisper,tts,live_stt,voice"})
+        status, body = app.health(cfg, self.pool)
+        self.assertEqual((status, body["status"]), (200, "ok"))
+        s = body["services"]
+        self.assertEqual(list(s), ["llm", "whisper", "tts", "live_stt", "voice"])
+        self.assertEqual(s["llm"]["models"], ["qwen3:8b-nothink", "qwen3:8b", "qwen2.5:1.5b"])
+        self.assertEqual(s["llm"]["loaded"], ["qwen3:8b-nothink"])
+        self.assertEqual((s["live_stt"]["model"], s["live_stt"]["provider"]), ("parakeet-en-0.6b-v3", "cuda"))
+        v = s["voice"]
+        self.assertEqual((v["up"], v["state"], v["device"]), (True, "up", "cuda"))
+        self.assertEqual(v["models"], ["chatterbox-turbo"])
+        self.assertEqual((v["voices"], v["default_voice"], v["cloning"]), (1, "default", "on"))
+        self.assertEqual(v["sound_tags"], ["[laugh]", "[sigh]", "[gasp]", "[chuckle]"])
+        self.assertEqual(v["version"], "1.0.0")
+        asked = {path for path, _ in self.servers["voice"].requests}
+        self.assertEqual(asked, set(VOICE))
+        self.assertNotIn("http", json.dumps(v))
+
+    def test_voice_loading_down_and_odd_answers(self) -> None:
+        cfg = self.config(voice=self.serve("voice", {"/health": (200, {"status": "loading"})}))
+        cfg.services = ["voice"]
+        status, body = app.health(cfg, self.pool)
+        self.assertEqual((status, body["services"]["voice"]["state"]), (503, "loading"))
+        self.assertNotIn("sound_tags", body["services"]["voice"])
+        odd = {**VOICE, "/v1/audio/sound-tags": (200, {"tags": ["[laugh]", 7, "x" * 500] + ["[sigh]"] * 300}),
+               "/health": (200, {"status": "ok"})}
+        cfg = self.config(voice=self.serve("odd", odd))
+        cfg.services = ["voice"]
+        v = app.health(cfg, self.pool)[1]["services"]["voice"]
+        self.assertIsNone(v["device"])
+        self.assertEqual(v["sound_tags"][:2], ["[laugh]", "x" * app.MAX_TEXT])
+        self.assertEqual(len(v["sound_tags"]), app.MAX_ITEMS)
+        cfg = self.config(voice=self.serve("no-tags", {k: x for k, x in VOICE.items() if k != "/v1/audio/sound-tags"}))
+        cfg.services = ["voice"]
+        v = app.health(cfg, self.pool)[1]["services"]["voice"]
+        self.assertIsNone(v["sound_tags"])
+        self.assertIs(v["up"], True)
+        cfg = self.config(voice=closed_port_url())
+        cfg.services = ["voice"]
+        self.assertEqual(app.health(cfg, self.pool)[1]["services"]["voice"]["error"], "refused")
 
 
 class ServerTest(unittest.TestCase):

@@ -12,6 +12,11 @@
 #                      for other ATLAS installations. Role models: default
 #                      ai.<ip-with-dashes>.sslip.io. Role all: no gateway unless given.
 #                      http://<private IP> serves plain HTTP, on a private network only.
+#   --gpu              run the models on this server's NVIDIA GPU (docker-compose.gpu.yml): the
+#                      language model qwen3:8b-nothink, live speech-to-text with Parakeet 0.6B v3
+#                      and the expressive voice (Chatterbox-Turbo). Needs the NVIDIA driver and
+#                      the NVIDIA container toolkit (checked first). Saved in .env (ATLAS_GPU);
+#                      delete that line to go back to the CPU. Any role.
 #   --public-ip IP     the server's public IPv4 (default: .env, else asked from the internet)
 #   --web-host NAME    web app + API hostname (default: atlas.<ip-with-dashes>.sslip.io)
 #   --voice-host NAME  voice signalling hostname (default: voice.<ip-with-dashes>.sslip.io)
@@ -20,7 +25,8 @@
 #                      applied only on the first setup (streaming when available, else
 #                      pocket); later runs keep whatever the organisation chose.
 #   --no-pull          do not `git pull` first
-#   --rebuild          rebuild the two model images (Pocket TTS, live transcription)
+#   --rebuild          rebuild the model images (Pocket TTS, live transcription; with --gpu
+#                      also the expressive voice)
 #   --skip-warm        do not load the models into memory at the end
 #
 # Live transcription: put a Deepgram key in the environment variable ATLAS_DEMO_DEEPGRAM_KEY
@@ -39,19 +45,28 @@ ENV_FILE="$ROOT/.env"
 COMPOSE_FILES="docker-compose.yml:infra/deploy/oci/docker-compose.prod.yml"
 MODELS_COMPOSE_FILES="docker-compose.yml:infra/deploy/oci/docker-compose.models.yml"
 GATEWAY_COMPOSE_FILE="infra/deploy/oci/docker-compose.ai-gateway.yml"
+GPU_COMPOSE_FILE="infra/deploy/oci/docker-compose.gpu.yml"
 NODE_IMAGE="node:22.23.2-bookworm-slim"
 LLM_MODEL="qwen2.5:1.5b"
+# With --gpu: qwen3:8b, and the alias with its thinking off that voice agents use
+# (ollama/qwen3-8b-nothink.Modelfile; docs/deployment-layouts.md, "GPU models server").
+GPU_LLM_MODEL="qwen3:8b"
+GPU_LLM_ALIAS="qwen3:8b-nothink"
+# Any small image: the NVIDIA container toolkit brings nvidia-smi into it. This one is the
+# base of the model images built below, so it is pulled once either way.
+GPU_PROBE_IMAGE="python:3.12.15-slim-bookworm"
 # Whisper model of the Pocket TTS preset (used when live transcription is not available).
 STT_MODEL="Systran/faster-whisper-base"
 WEB_VOLUME="atlas_web_dist"
 PNPM_VOLUME="atlas_pnpm_store"
 MIN_FREE_GB=4
 
-ROLE="" AI_HOST="" PUBLIC_IP="" WEB_HOST="" VOICE_HOST="" PRESET=auto PULL=1 REBUILD=0 SKIP_WARM=0
+ROLE="" AI_HOST="" PUBLIC_IP="" WEB_HOST="" VOICE_HOST="" PRESET=auto PULL=1 REBUILD=0 SKIP_WARM=0 GPU=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --role) ROLE="${2:-}"; shift ;;
     --ai-host) AI_HOST="${2:-}"; shift ;;
+    --gpu) GPU=1 ;;
     --public-ip) PUBLIC_IP="${2:-}"; shift ;;
     --web-host) WEB_HOST="${2:-}"; shift ;;
     --voice-host) VOICE_HOST="${2:-}"; shift ;;
@@ -59,7 +74,7 @@ while [ $# -gt 0 ]; do
     --no-pull) PULL=0 ;;
     --rebuild) REBUILD=1 ;;
     --skip-warm) SKIP_WARM=1 ;;
-    -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,39p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
   esac
   shift
@@ -127,6 +142,39 @@ if [ "$PULL" = 1 ] && [ -d .git ]; then
   fi
 fi
 info "commit $(git rev-parse --short HEAD 2>/dev/null || echo unknown)$( [ -n "$(git status --porcelain 2>/dev/null)" ] && echo ' (with local changes)')"
+
+# ------------------------------------------------------------------------- GPU
+# --gpu, or a server set up with it (ATLAS_GPU=true in .env). Checked before anything is
+# written: the driver must see the GPU, and Docker must be able to hand it to a container
+# (the NVIDIA container toolkit), the way Compose will hand it to the model servers.
+SAVED_GPU="$(env_get ATLAS_GPU)"
+case "$SAVED_GPU" in ""|true) ;; *) die "ATLAS_GPU in .env must be true (or delete the line to run the models on the CPU)" ;; esac
+[ "$SAVED_GPU" = true ] && GPU=1
+if [ "$GPU" = 1 ]; then
+  step "GPU"
+  GPU_DEVICE="$(env_get ATLAS_GPU_DEVICE)"
+  GPU_DEVICE="${GPU_DEVICE:-0}"
+  printf '%s' "$GPU_DEVICE" | grep -q -E '^[0-9]+$' || die "ATLAS_GPU_DEVICE in .env must be a GPU index such as 0: $GPU_DEVICE"
+  command -v nvidia-smi >/dev/null 2>&1 \
+    || die "--gpu: nvidia-smi was not found. Install the NVIDIA driver for this GPU (535 or newer), reboot, and re-run (docs/deployment-layouts.md, 'GPU models server')."
+  GPU_INFO="$(nvidia-smi -i "$GPU_DEVICE" --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits 2>&1)" \
+    || die "--gpu: the NVIDIA driver does not answer for GPU $GPU_DEVICE: $(printf '%s' "$GPU_INFO" | head -n 1)"
+  GPU_NAME="$(printf '%s' "$GPU_INFO" | cut -d, -f1 | sed 's/^ *//; s/ *$//')"
+  GPU_MIB="$(printf '%s' "$GPU_INFO" | cut -d, -f2 | tr -d ' ')"
+  GPU_DRIVER="$(printf '%s' "$GPU_INFO" | cut -d, -f3 | tr -d ' ')"
+  info "GPU $GPU_DEVICE: $GPU_NAME, $GPU_MIB MiB, driver $GPU_DRIVER"
+  # CUDA 12 runtimes (the live speech-to-text image: 12.9, the voice's torch: 12.4) need 525+.
+  [ "${GPU_DRIVER%%.*}" -ge 525 ] 2>/dev/null \
+    || die "--gpu: NVIDIA driver $GPU_DRIVER is too old for the CUDA 12 model servers: install 535 or newer"
+  [ "${GPU_MIB%%.*}" -ge 15000 ] 2>/dev/null \
+    || warn "the three GPU model servers need about 11 GB of GPU memory together (measured on a 16 GB T4); this GPU has $GPU_MIB MiB"
+  have_image "$GPU_PROBE_IMAGE" || "${DOCKER[@]}" pull -q "$GPU_PROBE_IMAGE" >/dev/null || die "pulling $GPU_PROBE_IMAGE failed"
+  if ! GPU_PROBE="$("${DOCKER[@]}" run --rm --gpus "device=$GPU_DEVICE" -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+      "$GPU_PROBE_IMAGE" nvidia-smi -L 2>&1)"; then
+    die "--gpu: Docker cannot give a container the GPU, so the NVIDIA container toolkit is missing or not set up for Docker. Install it (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html), run 'sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker', and re-run. Docker said: $(printf '%s' "$GPU_PROBE" | tail -n 1)"
+  fi
+  info "Docker hands the GPU to containers ($(printf '%s' "$GPU_PROBE" | head -n 1 | cut -d'(' -f1 | sed 's/ *$//'))"
+fi
 
 # ------------------------------------------------------------------------- 2. settings
 step "Settings (.env)"
@@ -225,6 +273,12 @@ else
   env_default ATLAS_LOCAL_TTS_URL "http://local-tts:8000/v1"
   env_default POCKET_TTS_HF_TOKEN ""
 fi
+if [ "$GPU" = 1 ]; then
+  env_default ATLAS_GPU true
+  # Where the ATLAS API reaches the expressive voice on this server (its voices, cloning and
+  # sound tags).
+  [ "$ROLE" = models ] || env_default ATLAS_EXPRESSIVE_TTS_URL "http://expressive-tts:8000/v1"
+fi
 if [ -n "$AI_HOST" ]; then
   if [ -n "$AI_HOST_GIVEN" ] && env_has ATLAS_AI_HOST && [ "$(env_get ATLAS_AI_HOST)" != "$AI_HOST" ]; then
     env_set ATLAS_AI_HOST "$AI_HOST"
@@ -258,20 +312,22 @@ for spec in $SECRET_SPECS; do
   env_set "$k" "$v"  # present but empty: filled in place
   SECRETS_ADDED+=("$k")
 done
-# The gateway's Compose file follows ATLAS_AI_HOST: added when it is set, removed when the
-# line is deleted from .env (that turns the gateway off).
+# The optional Compose files follow .env: the GPU file while ATLAS_GPU=true, then the
+# gateway's while ATLAS_AI_HOST is set (last: it adds to services of both). Each is removed
+# when its line is deleted from .env (that turns it off).
 CF="$(env_get COMPOSE_FILE)"
-if [ -n "$AI_HOST" ]; then
-  case ":$CF:" in
-    *":$GATEWAY_COMPOSE_FILE:"*) ;;
-    *) env_set COMPOSE_FILE "$CF:$GATEWAY_COMPOSE_FILE"; info "COMPOSE_FILE: AI gateway added" ;;
-  esac
-else
-  case ":$CF:" in
-    *":$GATEWAY_COMPOSE_FILE:"*)
-      env_set COMPOSE_FILE "$(printf '%s' ":$CF:" | sed "s#:$GATEWAY_COMPOSE_FILE:#:#; s#^:##; s#:\$##")"
-      info "COMPOSE_FILE: AI gateway removed (ATLAS_AI_HOST is not set)" ;;
-  esac
+NEW_CF="$(printf '%s' ":$CF:" | sed "s#:$GPU_COMPOSE_FILE:#:#; s#:$GATEWAY_COMPOSE_FILE:#:#; s#^:##; s#:\$##")"
+[ "$GPU" = 0 ] || NEW_CF="$NEW_CF:$GPU_COMPOSE_FILE"
+[ -z "$AI_HOST" ] || NEW_CF="$NEW_CF:$GATEWAY_COMPOSE_FILE"
+if [ "$NEW_CF" != "$CF" ]; then
+  env_set COMPOSE_FILE "$NEW_CF"
+  in_list() { case ":$1:" in *":$2:"*) return 0 ;; esac; return 1; }
+  for spec in "$GPU_COMPOSE_FILE|GPU models|ATLAS_GPU" "$GATEWAY_COMPOSE_FILE|AI gateway|ATLAS_AI_HOST"; do
+    IFS='|' read -r f what key <<<"$spec"
+    if in_list "$NEW_CF" "$f" && ! in_list "$CF" "$f"; then info "COMPOSE_FILE: $what added"
+    elif in_list "$CF" "$f" && ! in_list "$NEW_CF" "$f"; then info "COMPOSE_FILE: $what removed ($key is not set)"
+    fi
+  done
 fi
 chmod 600 "$ENV_FILE"
 umask 022
@@ -364,16 +420,21 @@ if [ "$ROLE" = all ]; then
   need_disk 2 "building the API image"
   dc build --quiet api worker || die "building the API image failed"
 fi
-for pair in local-tts=atlas/local-tts:pocket-tts-3.3.0 local-stt=atlas/local-stt:2-sherpa-onnx-1.13.8; do
-  svc="${pair%%=*}" img="${pair#*=}"
+# service=image=GB of disk the build needs. On a GPU the live speech-to-text image is the CUDA
+# build (Dockerfile.gpu), and the expressive voice is built too (torch with its CUDA libraries).
+MODEL_IMAGES="local-tts=atlas/local-tts:pocket-tts-3.3.0=4 local-stt=atlas/local-stt:2-sherpa-onnx-1.13.8=4"
+[ "$GPU" = 0 ] || MODEL_IMAGES="local-tts=atlas/local-tts:pocket-tts-3.3.0=4
+  local-stt=atlas/local-stt:2-sherpa-onnx-1.13.8-cuda12.9=7 expressive-tts=atlas/expressive-tts:chatterbox-turbo-0.1.7=10"
+for spec in $MODEL_IMAGES; do
+  IFS='=' read -r svc img gb <<<"$spec"
   if [ "$REBUILD" = 1 ] || ! have_image "$img"; then
-    need_disk 4 "building $img"
+    need_disk "$gb" "building $img"
     info "building $img (once; a few minutes)"
     dc build --quiet "$svc" || die "building $img failed"
   fi
 done
 if [ -n "$AI_HOST" ]; then
-  # One Python file on the base image of the two above: built every run (a no-op when it
+  # One Python file on the base image of the model images: built every run (a no-op when it
   # did not change), so an update reaches the running service.
   dc build --quiet ai-health || die "building the AI gateway's health service failed"
 fi
@@ -420,6 +481,21 @@ else
   need_disk 2 "downloading $LLM_MODEL"
   info "downloading $LLM_MODEL (about 1 GB)"
   dc exec -T local-llm ollama pull "$LLM_MODEL" >/dev/null || die "could not download $LLM_MODEL"
+fi
+WARM_LLM="$LLM_MODEL"
+if [ "$GPU" = 1 ]; then
+  if dc exec -T local-llm ollama list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -qx "$GPU_LLM_MODEL"; then
+    info "$GPU_LLM_MODEL is present"
+  else
+    need_disk 6 "downloading $GPU_LLM_MODEL"
+    info "downloading $GPU_LLM_MODEL (about 5.2 GB)"
+    dc exec -T local-llm ollama pull "$GPU_LLM_MODEL" >/dev/null || die "could not download $GPU_LLM_MODEL"
+  fi
+  # Every run, so a changed Modelfile reaches the alias; it only writes a template (seconds).
+  dc exec -T local-llm ollama create "$GPU_LLM_ALIAS" -f /etc/atlas/ollama/qwen3-8b-nothink.Modelfile >/dev/null \
+    || die "could not create $GPU_LLM_ALIAS (docker compose logs --tail 40 local-llm)"
+  info "$GPU_LLM_ALIAS is ready ($GPU_LLM_MODEL with thinking off, for voice agents)"
+  WARM_LLM="$GPU_LLM_ALIAS"
 fi
 api_python() {  # api_python <script> [args...]: run a repository script inside the API container
   local script="$1"; shift
@@ -472,17 +548,21 @@ fi
 
 # ------------------------------------------------------------------------- 10. warm-up
 step "Loading the models into memory"
-if [ "$ROLE" = models ]; then
-  # Pocket TTS and live speech-to-text load their models when they start, and Whisper
-  # loads one on its first request; the language model is loaded here and kept.
-  if [ "$SKIP_WARM" = 1 ]; then info "skipped (--skip-warm)"
-  elif dc exec -T ai-health python -c "
+llm_load() {  # llm_load <model>: load a language model into memory (GPU memory with --gpu), kept
+  if dc exec -T "$HELPER" python -c "
 import json, urllib.request
-body = json.dumps({'model': '$LLM_MODEL', 'prompt': '', 'stream': False}).encode()
+body = json.dumps({'model': '$1', 'prompt': '', 'stream': False}).encode()
 urllib.request.urlopen(urllib.request.Request('http://local-llm:11434/api/generate', data=body, headers={'Content-Type': 'application/json'}), timeout=600).read()"; then
-    info "$LLM_MODEL is in memory"
+    info "$1 is in memory"
   else
-    warn "loading $LLM_MODEL failed; the first reply will be slower"
+    warn "loading $1 failed; the first reply will be slower"
+  fi
+}
+if [ "$ROLE" = models ]; then
+  # Pocket TTS, live speech-to-text and the expressive voice load their models when they
+  # start, and Whisper loads one on its first request; the language model is loaded here.
+  if [ "$SKIP_WARM" = 1 ]; then info "skipped (--skip-warm)"
+  else llm_load "$WARM_LLM"
   fi
 else
   # Whisper is loaded only when calls use it (STT=whisper:<model>); the streaming server
@@ -497,6 +577,7 @@ else
     api_python infra/scripts/bench_local_models.py --warm-only --stt-model "${WHISPER:-$STT_MODEL}" --skip "$SKIP" \
       --llm-url http://local-llm:11434/v1 --speech-url http://local-speech:8000/v1 --pocket-url http://local-tts:8000/v1 \
       | sed 's/^/    /' || warn "warming the models failed; the first reply of the first call will be slower"
+    [ "$GPU" = 0 ] || llm_load "$GPU_LLM_ALIAS"
   fi
 fi
 
@@ -549,13 +630,22 @@ ai_summary() {
   else
     echo "  Live STT:    $AI_URL/live-stt/<ATLAS_AI_LIVE_STT_SECRET in .env>   (Deepgram base URL)"
   fi
+  [ "$GPU" = 0 ] || echo "  Voice:       $AI_URL/voice/v1   (expressive voice, OpenAI speech API, same token)"
+}
+gpu_summary() {
+  echo "  GPU:         $GPU_NAME: $GPU_LLM_ALIAS (language model, thinking off), live speech-to-text with Parakeet 0.6B v3, expressive voice (Chatterbox-Turbo)"
 }
 
 echo
 if [ "$ROLE" = models ]; then
   printf '\033[32mATLAS models host is deployed.\033[0m\n'
   ai_summary
-  echo "  Models:      $LLM_MODEL, $STT_MODEL, Pocket TTS, live speech-to-text"
+  if [ "$GPU" = 1 ]; then
+    gpu_summary
+    echo "  Models:      $GPU_LLM_ALIAS, $GPU_LLM_MODEL, $LLM_MODEL, $STT_MODEL, Pocket TTS, live speech-to-text, expressive voice"
+  else
+    echo "  Models:      $LLM_MODEL, $STT_MODEL, Pocket TTS, live speech-to-text"
+  fi
   echo "  Check:       curl -H \"Authorization: Bearer \$TOKEN\" $AI_URL/health"
   echo "  Update:      git pull is part of this script: bash infra/deploy/oci/deploy.sh"
   exit 0
@@ -571,4 +661,9 @@ echo "  Preset:      ${ACTIVE:-unknown} (speech-to-text: ${STT_IN_USE:-unknown};
 echo "  Test call:   Agents > Mortgage lead qualifier > Test call (allow the microphone)"
 echo "  Check:       python3 infra/scripts/e2e_test_call.py --runs 2 --api http://api:8080 --signalling ws://localhost:8000"
 echo "  Update:      git pull is part of this script: bash infra/deploy/oci/deploy.sh"
+if [ "$GPU" = 1 ]; then
+  gpu_summary
+  echo "               to use them: AI providers > language model $GPU_LLM_ALIAS; Deepgram connection http://local-stt:8000;"
+  echo "               self-hosted voice http://expressive-tts:8000/v1 (docs/deployment-layouts.md, 'GPU models server')"
+fi
 [ -z "$AI_HOST" ] || ai_summary

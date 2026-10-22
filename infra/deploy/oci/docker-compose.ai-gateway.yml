@@ -33,6 +33,9 @@ services:
     image: atlas/ai-health:1
     environment:
       LOG_LEVEL: INFO
+      # A GPU host (deploy.sh --gpu writes ATLAS_GPU=true into .env) also runs the expressive
+      # voice (docker-compose.gpu.yml); every other host offers these four.
+      AI_HEALTH_SERVICES: llm,whisper,tts,live_stt${ATLAS_GPU:+,voice}
     deploy:
       resources:
         limits:

@@ -4,7 +4,8 @@ activity detector replaced by fakes (no model download needed).
 They check what the voice service relies on: interim results while words change, a final
 with from_finalize=true right after Finalize (an empty one when nothing was said), finals
 at a pause unless endpointing=false, the audio kept from before the detected start of
-speech, the cap on live re-reads for whole-utterance models, and the request options.
+speech, the cap on live re-reads for whole-utterance models, and the request options; and
+the model and GPU settings (STT_MODEL, STT_PROVIDER), without a GPU.
 
 Run inside the image (stdlib unittest; the folder is mounted, not copied into the image):
 
@@ -15,16 +16,21 @@ Run inside the image (stdlib unittest; the folder is mounted, not copied into th
 
 from __future__ import annotations
 
+import os
+import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest import mock
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app as server
+import fetch_model
 
 
 class FakeVad:
@@ -243,6 +249,43 @@ class OfflineEngineTest(unittest.TestCase):
         self.assertEqual(eng.partial(seg).text, "n32000")  # type: ignore[union-attr]
         self.assertEqual(eng.final(seg, None).text, "n32000")
 
+    def test_gpu_rereads_wait_while_another_call_is_decoded(self) -> None:
+        eng = self.engine()
+        seg = eng.start(16000)
+        eng.accept(seg, np.ones(16000, np.float32))
+        with mock.patch.object(server, "PROVIDER", "cuda"), \
+                mock.patch.object(server.OfflineEngine, "_busy", 1):
+            self.assertIsNone(eng.partial(seg), "another call's decode is running")
+            self.assertEqual(seg["read_at"], 0, "tried again with the next audio")
+            self.assertEqual(eng.calls, [])  # type: ignore[attr-defined]
+        with mock.patch.object(server, "PROVIDER", "cpu"), \
+                mock.patch.object(server.OfflineEngine, "_busy", 1):
+            self.assertIsNotNone(eng.partial(seg), "the CPU keeps its behaviour")
+        self.assertEqual(server.OfflineEngine._busy, 0)
+        eng.final(seg, None)
+        self.assertEqual(server.OfflineEngine._busy, 0, "counted down after every decode")
+
+    def test_segments_are_padded_to_the_bucket_on_a_gpu(self) -> None:
+        eng = self.engine()
+        rate = 16000
+        loud, quiet = tone(1.0, rate, 0.5), np.full(int(0.25 * rate), 0.001, np.float32)
+        with mock.patch.object(server, "PAD_S", 0.5):
+            seg = eng.start(rate)
+            eng.accept(seg, np.concatenate([loud, quiet]))  # 1.25 s
+            eng.final(seg, None)
+            self.assertEqual(eng.calls[-1], int(1.5 * rate))  # type: ignore[attr-defined]
+            padded = server.pad_to_bucket(np.concatenate([loud, quiet]), rate)
+            self.assertEqual(padded.size, int(1.5 * rate))
+            self.assertTrue(np.all(np.abs(padded[int(1.25 * rate):]) <= 0.001), "background, not speech")
+            same = np.ones(rate, np.float32)
+            self.assertIs(server.pad_to_bucket(same, rate), same, "already a whole bucket")
+            short = np.full(100, 0.2, np.float32)
+            self.assertEqual(server.pad_to_bucket(short, rate).size, int(0.5 * rate))
+            self.assertEqual(server.pad_to_bucket(np.zeros(0, np.float32), rate).size, 0)
+        with mock.patch.object(server, "PAD_S", 0.0):
+            x = np.ones(12345, np.float32)
+            self.assertIs(server.pad_to_bucket(x, rate), x, "no padding on the CPU")
+
     def test_pause_is_transcribed_before_finalize(self) -> None:
         eng = self.engine()
         seg = eng.start(16000)
@@ -281,6 +324,116 @@ class OptionsTest(unittest.TestCase):
             self.assertAlmostEqual(float(np.sqrt(np.mean(body**2))), 0.5 / np.sqrt(2), delta=0.01)
             spectrum = np.abs(np.fft.rfft(body))
             self.assertAlmostEqual(np.argmax(spectrum) * 16000 / body.size, 220, delta=3)
+
+
+class ModelSettingsTest(unittest.TestCase):
+    """STT_MODEL and STT_PROVIDER: which files are fetched and where the model runs."""
+
+    def spec(self, **env: str) -> fetch_model.ModelSpec:
+        with mock.patch.dict(os.environ, env, clear=False):
+            for name in ("STT_MODEL", "STT_PROVIDER"):
+                if name not in env:
+                    os.environ.pop(name, None)
+            return fetch_model.spec_from_env()
+
+    def test_every_model_is_pinned(self) -> None:
+        for key, spec in fetch_model.MODELS.items():
+            with self.subTest(model=key):
+                self.assertEqual(spec.key, key)
+                self.assertTrue({"encoder", "decoder", "joiner", "tokens"} <= set(spec.files))
+                for name, sha in spec.files.values():
+                    self.assertRegex(sha, r"^[0-9a-f]{64}$", name)
+                if spec.archive:
+                    self.assertRegex(spec.archive_sha256, r"^[0-9a-f]{64}$")
+                else:
+                    self.assertRegex(spec.revision, r"^[0-9a-f]{40}$", "a commit, not a branch")
+
+    def test_parakeet_v3(self) -> None:
+        spec = self.spec(STT_MODEL="parakeet-0.6b-v3")
+        self.assertEqual((spec.key, spec.model_id), ("parakeet-0.6b-v3", "parakeet-en-0.6b-v3"))
+        self.assertEqual((spec.kind, spec.model_type, spec.licence), ("offline", "nemo_transducer", "CC BY 4.0"))
+        self.assertTrue(spec.cased)
+        self.assertTrue(spec.files["encoder"][0].endswith(".int8.onnx"), "int8 on the CPU")
+        self.assertEqual(spec.version, "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8@2bda32ec")
+
+    def test_provider_default_and_values(self) -> None:
+        for value, expected in (("", "cpu"), ("cpu", "cpu"), ("CUDA", "cuda"), (" cuda ", "cuda")):
+            with self.subTest(value=value), mock.patch.dict(os.environ, {"STT_PROVIDER": value}):
+                self.assertEqual(fetch_model.provider_from_env(), expected)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("STT_PROVIDER", None)
+            self.assertEqual(fetch_model.provider_from_env(), "cpu")
+        for bad in ("gpu", "tensorrt", "rocm"):
+            with self.subTest(value=bad), mock.patch.dict(os.environ, {"STT_PROVIDER": bad}):
+                with self.assertRaises(SystemExit) as ctx:
+                    fetch_model.provider_from_env()
+                self.assertIn("cpu, cuda", str(ctx.exception))
+
+    def test_cuda_uses_the_full_precision_export(self) -> None:
+        spec = self.spec(STT_MODEL="parakeet-0.6b-v3", STT_PROVIDER="cuda")
+        self.assertEqual(spec.key, "parakeet-0.6b-v3-fp32")
+        self.assertEqual(spec.model_id, "parakeet-en-0.6b-v3", "the same name in results and /health")
+        self.assertEqual(spec.files["encoder"][0], "encoder.onnx")
+        self.assertEqual(spec.files["encoder_weights"][0], "encoder.weights", "beside the encoder")
+        self.assertEqual(
+            spec.files["tokens"], fetch_model.MODELS["parakeet-0.6b-v3"].files["tokens"]
+        )
+        # Models without a GPU export keep their files on either provider.
+        self.assertEqual(self.spec(STT_MODEL="parakeet-110m", STT_PROVIDER="cuda").key, "parakeet-110m")
+        self.assertEqual(self.spec().key, fetch_model.DEFAULT_MODEL)
+        with self.assertRaises(SystemExit):
+            self.spec(STT_MODEL="parakeet-0.6b-v4", STT_PROVIDER="cuda")
+
+    def test_data_files_are_fetched_beside_the_model(self) -> None:
+        spec = fetch_model.MODELS["parakeet-0.6b-v3-fp32"]
+        fetched: list[str] = []
+
+        def fake_fetch(url: str, target: Path, expected: str) -> None:
+            fetched.append(url)
+            target.write_bytes(b"x")
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(fetch_model, "_fetch", fake_fetch):
+            paths = fetch_model.ensure_model(Path(tmp), spec)
+            self.assertEqual(paths["encoder_weights"].parent, paths["encoder"].parent)
+            self.assertEqual(paths["encoder_weights"].name, "encoder.weights")
+        self.assertIn(f"{spec.base_url}/encoder.weights", fetched)
+        self.assertTrue(all(re.search(r"/resolve/[0-9a-f]{40}/", u) for u in fetched if "huggingface" in u))
+
+    def test_recognizers_get_the_provider(self) -> None:
+        calls: list[dict[str, Any]] = []
+        fake = SimpleNamespace(
+            OfflineRecognizer=SimpleNamespace(from_transducer=lambda **kw: calls.append(kw)),
+            OnlineRecognizer=SimpleNamespace(from_transducer=lambda **kw: calls.append(kw)),
+        )
+        paths = {role: Path(f"/models/x/{role}") for role in ("encoder", "decoder", "joiner", "tokens")}
+        for provider in ("cpu", "cuda"):
+            with self.subTest(provider=provider), mock.patch.object(server, "sherpa_onnx", fake), \
+                    mock.patch.object(server, "PROVIDER", provider), \
+                    mock.patch.object(server, "_paths", paths):
+                calls.clear()
+                server.OfflineEngine()
+                server.OnlineEngine()
+                self.assertEqual([c["provider"] for c in calls], [provider, provider])
+
+    def test_cuda_problem(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp) / "sherpa_onnx"
+            (package / "lib").mkdir(parents=True)
+            fake = SimpleNamespace(__file__=str(package / "__init__.py"))
+            gpus: list[str] = []
+            with mock.patch.object(server, "sherpa_onnx", fake), \
+                    mock.patch.object(server.glob, "glob", lambda pattern: list(gpus)):
+                self.assertIn("Dockerfile.gpu", server.cuda_problem() or "", "CPU build")
+                (package / "lib" / "libonnxruntime_providers_cuda.so").write_bytes(b"")
+                self.assertIn("no NVIDIA GPU", server.cuda_problem() or "", "no GPU passed in")
+                gpus.append("/dev/nvidia0")
+                self.assertIsNone(server.cuda_problem())
+
+    def test_health_reports_the_provider(self) -> None:
+        with mock.patch.object(server, "PROVIDER", "cuda"):
+            health = server._health()
+        self.assertEqual(health["provider"], "cuda")
+        self.assertEqual(health["model"], server.MODEL_ID)
 
 
 if __name__ == "__main__":

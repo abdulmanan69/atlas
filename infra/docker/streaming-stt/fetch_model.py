@@ -19,12 +19,22 @@ Models (licences checked at the source, see docs/local-models.md):
   nemotron-en-160   The same model exported with 160 ms chunks.
   parakeet-tdt-v2   NVIDIA Parakeet TDT 0.6B v2, int8, used like parakeet-110m. More
                     accurate on benchmarks, about 1 s per utterance on CPU. CC BY 4.0.
+  parakeet-0.6b-v3  NVIDIA Parakeet TDT 0.6B v3, used like parakeet-110m. The most
+                    accurate on South Asian English and phone audio in ATLAS's GPU tests
+                    (docs/perf/gpu-model-eval.md); for a GPU (STT_PROVIDER=cuda, the image
+                    from Dockerfile.gpu). int8 weights on CPU (about 0.7 s per 5 s of speech
+                    on 2 threads: too slow for calls); with STT_PROVIDER=cuda the
+                    full-precision export of the same model (CUDA_VARIANTS). CC BY 4.0.
   zipformer-en      k2-fsa streaming Zipformer (LibriSpeech only), int8. Apache 2.0. The
                     first model: fast, but it failed on real callers (docs/local-models.md).
 
 The voice activity detector (Silero VAD, MIT) is fetched the same way for every model.
 
-Run directly to pre-fetch: `python fetch_model.py` (uses STT_MODEL and STT_MODEL_DIR).
+Where the model runs: STT_PROVIDER, `cpu` (default) or `cuda` (an NVIDIA GPU; needs the
+sherpa-onnx CUDA build of Dockerfile.gpu).
+
+Run directly to pre-fetch: `python fetch_model.py` (uses STT_MODEL, STT_PROVIDER and
+STT_MODEL_DIR).
 """
 
 from __future__ import annotations
@@ -43,6 +53,8 @@ from pathlib import Path
 logger = logging.getLogger("streaming_stt.fetch")
 
 DEFAULT_MODEL = "parakeet-110m"
+PROVIDERS = ("cpu", "cuda")
+DEFAULT_PROVIDER = "cpu"
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +181,72 @@ MODELS: dict[str, ModelSpec] = {
         cased=True,
         model_type="nemo_transducer",
     ),
+    "parakeet-0.6b-v3": ModelSpec(
+        key="parakeet-0.6b-v3",
+        model_id="parakeet-en-0.6b-v3",
+        kind="offline",
+        arch="fastconformer-tdt",
+        # The sherpa-onnx maintainers' export of nvidia/parakeet-tdt-0.6b-v3.
+        repo="csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+        revision="2bda32ec70b097a55adaa07d9a7173915b43cc78",
+        files={
+            "encoder": (
+                "encoder.int8.onnx",
+                "acfc2b4456377e15d04f0243af540b7fe7c992f8d898d751cf134c3a55fd2247",
+            ),
+            "decoder": (
+                "decoder.int8.onnx",
+                "179e50c43d1a9de79c8a24149a2f9bac6eb5981823f2a2ed88d655b24248db4e",
+            ),
+            "joiner": (
+                "joiner.int8.onnx",
+                "3164c13fc2821009440d20fcb5fdc78bff28b4db2f8d0f0b329101719c0948b3",
+            ),
+            # Plain (non-LFS) file, so the Hub lists no hash: computed from the file.
+            "tokens": (
+                "tokens.txt",
+                "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
+            ),
+        },
+        licence="CC BY 4.0",
+        cased=True,
+        model_type="nemo_transducer",
+    ),
+    "parakeet-0.6b-v3-fp32": ModelSpec(
+        key="parakeet-0.6b-v3-fp32",
+        model_id="parakeet-en-0.6b-v3",
+        kind="offline",
+        arch="fastconformer-tdt",
+        # The same model in full precision (the encoder's weights are a separate file).
+        repo="csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3",
+        revision="1a468a35cbba69418f126de829e75261dea4a4e4",
+        files={
+            "encoder": (
+                "encoder.onnx",
+                "3eed7ce424bf8339ad09233533c687e2dbd07e74ccf5027b5e7344019ea373b0",
+            ),
+            # Read by ONNX Runtime from the encoder's directory, not passed to sherpa-onnx.
+            "encoder_weights": (
+                "encoder.weights",
+                "3af3f51af5f2d01dbbf5af47d42c7962a2c205f11004254bb4f2b979862f39a8",
+            ),
+            "decoder": (
+                "decoder.onnx",
+                "d593cdb0e571f5a457ec2219af9968cbf6b0e8198e8f7839b40a8754593bf68c",
+            ),
+            "joiner": (
+                "joiner.onnx",
+                "b9b0bcf88ac571902e69a6536223ed2d94885e981b85045410f1403d53121a63",
+            ),
+            "tokens": (
+                "tokens.txt",
+                "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
+            ),
+        },
+        licence="CC BY 4.0",
+        cased=True,
+        model_type="nemo_transducer",
+    ),
     "parakeet-110m": ModelSpec(
         key="parakeet-110m",
         model_id="parakeet-en-110m",
@@ -254,12 +332,27 @@ VAD_SHA256 = "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
 _LEGACY_FILES = [name for name, _ in MODELS["zipformer-en"].files.values()]
 
 
+# STT_PROVIDER=cuda runs these models from another export: int8 weights are made for CPUs.
+# Measured on a T4 (whole clips, no server): Parakeet 0.6B v3 int8 decodes 5 s in 731 ms on
+# the GPU against 61 ms in full precision, and misses more words of accented speech (EdAcc
+# South Asian 14.8 % against 12.0 %; full precision matches NVIDIA's own model).
+CUDA_VARIANTS = {"parakeet-0.6b-v3": "parakeet-0.6b-v3-fp32"}
+
+
+def provider_from_env() -> str:
+    provider = os.environ.get("STT_PROVIDER", DEFAULT_PROVIDER).strip().lower() or DEFAULT_PROVIDER
+    if provider not in PROVIDERS:
+        raise SystemExit(f"STT_PROVIDER={provider!r} is not one of: {', '.join(PROVIDERS)}")
+    return provider
+
+
 def spec_from_env() -> ModelSpec:
     key = os.environ.get("STT_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
-    try:
-        return MODELS[key]
-    except KeyError:
-        raise SystemExit(f"STT_MODEL={key!r} is not one of: {', '.join(MODELS)}") from None
+    if key not in MODELS:
+        raise SystemExit(f"STT_MODEL={key!r} is not one of: {', '.join(MODELS)}")
+    if provider_from_env() == "cuda":
+        key = CUDA_VARIANTS.get(key, key)
+    return MODELS[key]
 
 
 def _sha256(path: Path) -> str:
@@ -318,7 +411,8 @@ def _fetch_from_archive(spec: ModelSpec, target_dir: Path) -> None:
 
 
 def ensure_model(model_dir: Path, spec: ModelSpec) -> dict[str, Path]:
-    """Fetch any missing or corrupt file; return role -> path (plus "vad").
+    """Fetch any missing or corrupt file; return role -> path (plus "vad"). Roles other than
+    encoder, decoder, joiner and tokens are data files the model reads by itself.
 
     Raises on a bad download.
     """

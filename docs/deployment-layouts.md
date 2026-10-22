@@ -51,6 +51,7 @@ Caddy on the models server, the only thing that server publishes (TCP 80 and 443
 | `/llm/v1/*` | language model, OpenAI-compatible API only (Ollama's `/api/*` management is not reachable) | HTTP, streamed |
 | `/whisper/v1/*` | Whisper speech-to-text (the same server also has the Kokoro voice) | HTTP |
 | `/tts/v1/*` | Pocket TTS, its voices and voice cloning | HTTP, streamed |
+| `/voice/v1/*` | GPU servers only ([below](#gpu-models-server)): the expressive voice, its voices, voice cloning and sound tags | HTTP, streamed |
 | `/live-stt/<secret>/v1/listen` | live speech-to-text, Deepgram protocol | WebSocket |
 | `/health` | which services answer, their versions and models | HTTP |
 
@@ -87,9 +88,20 @@ The files: [`infra/deploy/oci/caddy/ai-gateway.caddy`](../infra/deploy/oci/caddy
     "tts": {"up": true, "state": "up", "latency_ms": 2, "version": "1.0.0", "models": ["pocket-tts"],
             "voices": 20, "default_voice": "alba", "cloning": "off"},
     "live_stt": {"up": true, "state": "up", "latency_ms": 2, "version": "...", "model": "parakeet-en-110m",
-                 "streaming": false, "language": "en", "sessions": 0, "max_sessions": 4}
+                 "provider": "cpu", "streaming": false, "language": "en", "sessions": 0, "max_sessions": 4}
   }
 }
+```
+
+A GPU server ([below](#gpu-models-server)) also reports the expressive voice, with the sounds
+it makes; its language models include `qwen3:8b-nothink`, and live speech-to-text says
+`"provider": "cuda"`:
+
+```json
+    "voice": {"up": true, "state": "up", "latency_ms": 3, "version": "1.0.0", "models": ["chatterbox-turbo"],
+              "voices": 1, "default_voice": "default", "cloning": "on", "device": "cuda",
+              "sound_tags": ["[laugh]", "[chuckle]", "[sigh]", "[gasp]", "[cough]", "[clear throat]",
+                             "[groan]", "[sniff]", "[shush]"]}
 ```
 
 `status` is `ok` (all up), `degraded` (some up; HTTP 200) or `down` (none; HTTP 503). A
@@ -112,8 +124,8 @@ for a Pocket TTS server without voice-cloning settings. Nothing secret is in the
   [local-models.md](local-models.md) for the speed settings. Disk: about 25 GB (images
   15 GB, of which the language model server's is 9.4 GB; models 2 to 4 GB; room for
   builds), as the script stops when less than 4 GB would stay free.
-* These files run the models on CPU. A GPU needs the NVIDIA container toolkit and a GPU
-  device for `local-llm`; `deploy.sh` does not set that up yet.
+* These files run the models on CPU. With an NVIDIA GPU, add `--gpu`
+  ([GPU models server](#gpu-models-server)).
 
 ### 1. Network
 
@@ -290,6 +302,163 @@ Run the same command again (`bash infra/deploy/oci/deploy.sh`): it does `git pul
 pulls updated images, rebuilds the health service, restarts what changed and keeps `.env`,
 the models and the certificate. `--skip-warm`, `--rebuild` and `--no-pull` work as on an all-in-one server.
 
+## GPU models server
+
+One NVIDIA GPU runs the three models that make calls sound human and answer quickly
+([perf/gpu-model-eval.md](perf/gpu-model-eval.md) compares the candidates):
+
+| Server | On the GPU | Without a GPU |
+|---|---|---|
+| language model (`local-llm`) | `qwen3:8b-nothink`: Qwen3 8B with its thinking turned off ([below](#why-qwen38b-nothink)) | `qwen2.5:1.5b` (still downloaded, for existing connections) |
+| live speech-to-text (`local-stt`) | NVIDIA Parakeet TDT 0.6B v3, full precision, on the sherpa-onnx CUDA build (`Dockerfile.gpu`) | Parakeet TDT-CTC 110M, int8, on the CPU |
+| expressive voice (`expressive-tts`, new) | Resemble AI Chatterbox-Turbo: sighs, laughs, gasps where a reply carries `[sigh]`, `[laugh]`, ... | none (Pocket TTS) |
+
+Whisper and Pocket TTS stay as they are, on the CPU. Without `--gpu` nothing of this
+applies.
+
+### What you need
+
+* One NVIDIA GPU with 16 GB of memory or more (T4, L4, A10G, ...): all three need 12.6 GB
+  together on a T4, 14.6 GB with 8 calls transcribed at once
+  ([measured](#measured-on-one-t4)). With less, they do not all fit.
+* The NVIDIA driver, 535 or newer (`nvidia-smi` must work on the host), and the
+  [NVIDIA container toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+  set up for Docker:
+
+  ```bash
+  sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+  ```
+
+* Memory: 16 GB or more on a models server (the language model, live speech-to-text and the
+  voice are limited to 6, 4 and 6 GB of RAM; Whisper and Pocket TTS as before). Disk: about
+  45 GB more than without a GPU (images: the voice 7 GB with its CUDA libraries, live
+  speech-to-text 4 GB; models: Qwen3 8B 5.2 GB, Parakeet 2.5 GB, Chatterbox-Turbo 3 GB).
+
+### Deploy
+
+```bash
+bash infra/deploy/oci/deploy.sh --role models --gpu --public-ip <public IP>   # a models server
+bash infra/deploy/oci/deploy.sh --gpu                                          # an all-in-one server
+```
+
+`deploy.sh --gpu` first checks that the driver answers for the GPU (`nvidia-smi`, driver 525
+or newer, a warning under 15 GB) and that Docker can hand the GPU to a container (the
+toolkit); when one is missing it stops and says what to install, before anything is
+changed. Then it saves `ATLAS_GPU=true` in `.env` (later runs need no option), adds
+`infra/deploy/oci/docker-compose.gpu.yml` to `COMPOSE_FILE`, builds the GPU image of live
+speech-to-text and the voice's image, downloads `qwen3:8b`, creates `qwen3:8b-nothink`
+from [`infra/deploy/oci/ollama/qwen3-8b-nothink.Modelfile`](../infra/deploy/oci/ollama/qwen3-8b-nothink.Modelfile)
+(every run, so a changed Modelfile takes effect) and loads it into GPU memory. The first
+start of each server downloads its model (about 11 GB in all). On a server with the AI
+gateway, the gateway also serves `/voice/v1/*` and `/health` reports the voice.
+
+`docker-compose.gpu.yml` gives each of the three servers the GPU
+(`deploy.resources.reservations.devices`, driver `nvidia`), sets Ollama to write two
+replies at once (`OLLAMA_NUM_PARALLEL=2`) and to keep two models in memory, and runs live
+speech-to-text with `STT_PROVIDER=cuda`. No port is published.
+
+### Use them in ATLAS
+
+| What | Connection |
+|---|---|
+| Language model | the same Self-hosted connection as before (`<gateway>/llm/v1`, or `http://local-llm:11434/v1` on an all-in-one server), model **`qwen3:8b-nothink`** |
+| Live speech-to-text | unchanged: the Deepgram connection now reaches the GPU server (same address) |
+| Expressive voice | a Self-hosted voice connection, base URL `<gateway>/voice/v1` with the token (or `http://expressive-tts:8000/v1` on an all-in-one server), model `chatterbox-turbo`, voice `default` |
+
+Use `qwen3:8b-nothink`, not `qwen3:8b`: through Ollama's OpenAI-compatible API, which the
+voice service uses, `qwen3:8b` thinks before every reply.
+
+### Why qwen3:8b-nothink
+
+Ollama 0.40.6 turns Qwen3's thinking on for every request that does not turn it off, and on
+its OpenAI-compatible endpoint only `reasoning_effort: "none"` turns it off
+([perf/gpu-model-eval.md](perf/gpu-model-eval.md)). The voice service cannot send that
+field. The alias needs none: its template is `qwen3:8b`'s own with thinking set to off, so
+Ollama builds exactly the prompt that `qwen3:8b` gets with `reasoning_effort: "none"` (the
+caller's line ends with `/no_think`, the reply starts after an empty `<think></think>`). It
+has the same weights, loaded once for both names, and the same settings.
+
+Two details matter, both handled in the Modelfile: Ollama uses a Modelfile's template only
+when it offers the same capabilities (tools, thinking) as the chat template inside the
+model file, otherwise it quietly falls back to that one, with thinking on (and with tools,
+a `500 tools param requires --jinja flag`); and the template must have Unix line endings,
+as a git checkout on Linux has.
+
+### Measured on one T4
+
+2026-10-22, one NVIDIA Tesla T4 (16 GB) with 4 vCPUs in a private Kaggle notebook, benchmark
+only: Ollama 0.40.6, the live speech-to-text server and the expressive voice exactly as the
+Compose files run them (same images' packages, same settings), on 127.0.0.1, no tunnel,
+public test data, synthetic caller lines. The summaries: `stack.json` and `stt-v3.json` of
+the notebooks `atlas-gpu-stack` and `atlas-gpu-stt-v3` (account `abdulmananxx`).
+
+**A caller's turn**, the 4 lines of the demo call × 3 rounds (12 turns), from the moment
+the caller stops to the first agent audio, each stage through its real protocol:
+
+| Stage | p50 | p90 |
+|---|---:|---:|
+| caller stops → final transcript (Finalize after 0.2 s, as the voice service sends it) | 373 ms | 419 ms |
+| language model, first sentence (`qwen3:8b-nothink`, streamed, tools present) | 141 ms | 209 ms |
+| voice, first audio (the sentence's opener is kept in memory) | 2 ms | 2 ms |
+| **caller stops → first agent audio** | **0.91 s** | **1.15 s** |
+
+Not one of the 12 replies (24 over two runs) carried thinking text; the same request to
+`qwen3:8b` itself produced 251 characters of reasoning and no words within 60 tokens. The
+alias's prompts have the same token counts as `qwen3:8b`'s with `reasoning_effort: "none"`
+(503, 533, 562, 597 for the four turns) and, at temperature 0, 3 of the 4 replies were
+identical (the fourth differed in its opener word only). First token 83 ms p50 on its own.
+
+**GPU memory:** language model 6.2 GB (two replies at once), live speech-to-text 3.4 GB,
+voice 3.0 GB: 12.6 GB loaded, 12.7 GB during the turns, 14.6 GB with 8 calls transcribed
+at once. CPU memory: voice 2.8 GB, language model 1.2 GB, speech-to-text 1.1 GB.
+
+**Live speech-to-text with Parakeet 0.6B v3 on the GPU** (the 110M CPU model in brackets,
+measured on the same 4 vCPUs):
+
+| | Parakeet 0.6B v3, T4 | Parakeet 110M, CPU |
+|---|---:|---:|
+| final transcript after the caller stops, p50 / p90 (16 and 8 kHz) | 0.40 s / 0.48 s | 0.34 s / 0.84 s |
+| after Finalize, p50 / p90 | 190 ms / 273 ms | 123 ms / 629 ms |
+| words wrong, LibriSpeech test-clean (40 clips) | 3.5–4.1 % | 3.5 % |
+| words wrong, EdAcc South Asian English (40 clips, 5 speakers) | 14.3–16.5 % | 19.8 % |
+| same, Urdu first language | 16.9–19.0 % | 23.7 % |
+| same at 8 kHz, μ-law (a phone line) | 18.6–20.8 % | 23.9 % |
+| calls transcribed at once, final p50 / p90 | 8: 0.86 s / 1.36 s; 12: GPU memory exhausted | 2 (CPU) |
+
+The ranges are two runs (the second with the other two models loaded). Fed whole clips
+without the server's pause detection, the same model scores 2.3 % / 12.0 % / 13.3 %, as
+NVIDIA's own model does ([perf/gpu-model-eval.md](perf/gpu-model-eval.md)): the live path
+costs 2 to 4 points on conversational speech, on the GPU as on the CPU. The int8 export of
+v3 is not used on the GPU: it decodes 5 s of speech in 731 ms there against 61 ms in full
+precision, and mishears more (14.8 % on EdAcc). Both runs used the sherpa-onnx CUDA build
+1.13.8 with ONNX Runtime 1.28.2, CUDA 12.9 and cuDNN 9.10.
+
+**The gateway** in front of them: `/health` reports all three up (`"status": "ok"`), the
+voice with its nine sound tags and `"device": "cuda"`; `/voice/v1/*` answers 401 without
+the token and 404 on a host without the GPU voice; a first sentence not kept in memory
+("Thanks for waiting, I just checked your file.") reached its first audio in 1.1–1.4 s
+straight from the voice and in 1.2–1.3 s through the gateway.
+
+### Settings
+
+In `.env`, then run `deploy.sh`:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `ATLAS_GPU` | `true` with `--gpu` | delete the line to run the models on the CPU again |
+| `ATLAS_GPU_DEVICE` | `0` | which GPU, on a server with several |
+| `LOCAL_LLM_GPU_PARALLEL` | `2` | replies the language model writes at once (each one 0.6 GB of GPU memory for its context) |
+| `LOCAL_STT_GPU_SESSIONS` | `8` | live speech-to-text connections at once (calls); more are refused with HTTP 503. 8 is what a 16 GB GPU holds next to the other two models ([measured](#measured-on-one-t4)) |
+| `LOCAL_STT_GPU_MODEL` | `parakeet-0.6b-v3` | the live speech-to-text model on the GPU |
+
+### Back to the CPU
+
+Delete the `ATLAS_GPU=true` line from `.env` and run `deploy.sh`: it removes the GPU file
+from `COMPOSE_FILE`, removes the voice's container (its volumes, with cloned voices, stay)
+and runs live speech-to-text from the CPU image again. ATLAS connections to the voice stop
+working; set the language model back to `qwen2.5:1.5b`. `qwen3:8b` stays on disk:
+`docker compose exec local-llm ollama rm qwen3:8b-nothink qwen3:8b` frees its 5.2 GB.
+
 ## Lend an all-in-one server's models
 
 An all-in-one server can also serve other ATLAS installations, on a third hostname:
@@ -375,7 +544,7 @@ between installations of the same operator.
 | Symptom | Cause |
 |---|---|
 | `401 {"error":"unauthorized"}` | token missing or wrong (`Authorization: Bearer <token>`, exactly) |
-| `404 {"error":"not_found"}` | the path is not one of the five above (Ollama's `/api/*` is never reachable) |
+| `404 {"error":"not_found"}` | the path is not one of those above (Ollama's `/api/*` is never reachable; `/voice/v1` only on a GPU server) |
 | `502 {"error":"Bad Gateway"}` | that model server is not running: `docker compose ps`, `docker compose logs --tail 80 local-llm` |
 | `/health` says `degraded` | the service named `"up": false` is down or still loading |
 | no answer on 443 | TCP 80/443 closed in the cloud's firewall, or the certificate is not issued yet: `docker compose logs caddy` |
