@@ -1,27 +1,31 @@
 #!/usr/bin/env python3
-"""Testing only: run the language model on a Kaggle GPU and point ATLAS at it.
+"""Testing only: run ATLAS's models on a Kaggle GPU and point ATLAS at them.
 
   python infra/scripts/kaggle_gpu.py start     start a GPU session on Kaggle, connect ATLAS
-  python infra/scripts/kaggle_gpu.py start --voice
-                                               the same, with the expressive voice too
+  python infra/scripts/kaggle_gpu.py start --voice --stt
+                                               the same, with the expressive voice and live
+                                               speech-to-text on the GPU too
   python infra/scripts/kaggle_gpu.py connect --api https://atlas.example.com
                                                connect another ATLAS to the running session
   python infra/scripts/kaggle_gpu.py status    session and connections
   python infra/scripts/kaggle_gpu.py stop      put every connected ATLAS back, end the session
 
 `start` pushes a private Kaggle notebook that runs Ollama (the same version as the
-self-hosted stack) on the notebook's GPU behind a token check and opens a temporary
-Cloudflare tunnel to it. ATLAS gets a connection "GPU test (Kaggle)" with that address and
-token, and the organisation's language model is switched to it; the model chosen before is
-kept and put back by `stop`. With --voice the session also runs the expressive voice server
-(infra/docker/expressive-tts, Chatterbox-Turbo: it can laugh, sigh and gasp) on the same GPU
-at <address>/voice/v1; ATLAS gets a connection "Expressive voice GPU test (Kaggle)" and the
-organisation's voice is switched to it; the voice chosen before is put back by `stop`.
-Speech-to-text stays where it is.
+self-hosted stack) on the notebook's GPU behind an AI gateway (ADR 0007: a token check,
+/health, /llm/v1 and, when asked for, /voice/v1 and /live-stt/<secret>) and opens a
+temporary Cloudflare tunnel to it. ATLAS registers that address as the AI server
+"GPU test (Kaggle)" and uses it: the language model switches to it, with the model chosen
+before as the fallback; `stop` puts the earlier models back and removes the server.
+
+--voice also runs the expressive voice server (infra/docker/expressive-tts, Chatterbox-Turbo:
+it can laugh, sigh and gasp) and switches the organisation's voice to it. --stt also runs the
+live speech-to-text server (infra/docker/streaming-stt, Parakeet TDT 0.6B v3 on CUDA) and
+points the organisation's live speech-to-text connection at it for the session; that
+connection keeps its own key, which this script never sees.
 
 For tests, not for real calls: a Kaggle session ends after --hours (at most 12), the address
-changes every session, the call's text goes through Kaggle and Cloudflare, and Kaggle's
-acceptable-use policy does not allow running a service's backend there.
+changes every session, the call's audio and text go through Kaggle and Cloudflare, and
+Kaggle's acceptable-use policy does not allow running a service's backend there.
 
 Needs: the Kaggle CLI (`pip install kaggle`; set KAGGLE_CLI if it is not on PATH) signed in
 with an API token (KAGGLE_API_TOKEN or ~/.kaggle/access_token) of a phone-verified account;
@@ -53,55 +57,96 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 STATE = ROOT / ".cache" / "kaggle-gpu" / "session.json"
 KERNEL_SLUG = "atlas-gpu-llm"
-CONNECTION_NAME = "GPU test (Kaggle)"
-VOICE_CONNECTION_NAME = "Expressive voice GPU test (Kaggle)"
-VOICE_SRC = ROOT / "infra" / "docker" / "expressive-tts"
-VOICE_MODEL = "chatterbox-turbo"
+SERVER_NAME = "GPU test (Kaggle)"
 DEMO_EMAIL = "demo@example.com"
 DEMO_ORG_NAME = "Demo Realty (demo data)"
 DEFAULT_MODELS = ["qwen3:8b", "qwen2.5:7b"]
-VOICE_MODELS = ["qwen3:8b"]  # with the voice on the same T4 (16 GB), one language model
+STACK_MODELS = ["qwen3:8b"]  # with the voice or speech-to-text on the same T4, one model
+FALLBACK_AFTER_MS = 3000
+# The servers the notebook runs besides Ollama, embedded unchanged (base64) from these files.
+EMBEDDED = {
+    "voice": ("infra/docker/expressive-tts", ("app.py", "requirements.txt")),
+    "stt": ("infra/docker/streaming-stt", ("app.py", "fetch_model.py", "requirements.gpu.txt")),
+    "health": ("infra/docker/ai-gateway", ("app.py",)),
+}
 # The address line carries the session's id, so a log of an earlier run is never taken for it.
 URL_LINE = re.compile(r"ATLAS_GPU_URL=(https://[a-z0-9-]+\.trycloudflare\.com) session=([0-9a-f]{12})")
 FAILED_LINE = re.compile(r"ATLAS_GPU_FAILED session=([0-9a-f]{12}): ([^\"\\]*)")
 
-# The notebook. Placeholders are filled by render_kernel(); it never holds the token itself,
-# only its SHA-256, so the notebook's source is useless to anyone who reads it.
+# The notebook. Placeholders are filled by render_kernel(); it never holds the token or the
+# live speech-to-text secret, only their SHA-256, so its source is useless to anyone who
+# reads it.
 KERNEL = r'''# ATLAS GPU test session (testing only), started by infra/scripts/kaggle_gpu.py.
-# Ollama (and with VOICE the expressive voice server) on this notebook's GPU behind a token
-# check, reachable through a temporary Cloudflare tunnel until the session is stopped or
-# HOURS have passed.
+# Ollama (and with VOICE / STT the expressive voice and live speech-to-text servers) on this
+# notebook's GPU behind an AI gateway with a token check, reachable through a temporary
+# Cloudflare tunnel until the session is stopped or HOURS have passed.
 import base64, json, os, re, shutil, subprocess, sys, threading, time, urllib.error, urllib.request
 
 TOKEN_SHA256 = "@TOKEN_SHA256@"
+LIVE_SHA256 = "@LIVE_SHA256@"
 MODELS = @MODELS@
 HOURS = @HOURS@
 VOICE = @VOICE@
-# infra/docker/expressive-tts/app.py and requirements.txt, unchanged (base64).
-VOICE_FILES = @VOICE_FILES@
+STT = @STT@
+FILES = @FILES@  # {"voice/app.py": base64, ...}: the servers' own files, unchanged
 OLLAMA_VERSION = "0.40.6"
 PORT = 8000
 VOICE_PORT = 8001
-VOICE_WORK = "/tmp/atlas-voice"
+STT_PORT = 8010
+HEALTH_PORT = 8020
+WORK = "/tmp/atlas"
 CLOUDFLARED = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
 
 PROXY = r"""
-import hashlib, hmac, json, os, subprocess
-from aiohttp import ClientSession, ClientTimeout, web
+import asyncio, hashlib, hmac, json, os, subprocess
+from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
 TOKEN_SHA256 = os.environ["ATLAS_TOKEN_SHA256"]
-UP = "http://127.0.0.1:11434"
+LIVE_SHA256 = os.environ.get("ATLAS_LIVE_SHA256", "")
+LLM_UP = "http://127.0.0.1:11434"
 VOICE_UP = os.environ.get("ATLAS_VOICE_UP", "")
+STT_UP = os.environ.get("ATLAS_STT_UP", "")
+HEALTH_UP = os.environ["ATLAS_HEALTH_UP"]
 DROP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers",
-        "transfer-encoding", "upgrade", "host", "content-length", "authorization"}
-served = {"requests": 0}
+        "transfer-encoding", "upgrade", "host", "content-length", "authorization",
+        "sec-websocket-key", "sec-websocket-version", "sec-websocket-extensions", "sec-websocket-accept"}
+served = {"requests": 0, "streams": 0}
+
+def digest(value):
+    return hashlib.sha256(value.encode()).hexdigest()
 
 def allowed(req):
     got = req.headers.get("Authorization", "")
-    digest = hashlib.sha256(got[7:].encode()).hexdigest() if got.startswith("Bearer ") else ""
-    return hmac.compare_digest(digest, TOKEN_SHA256)
+    return got.startswith("Bearer ") and hmac.compare_digest(digest(got[7:]), TOKEN_SHA256)
+
+async def relay(req):
+    # The live speech-to-text WebSocket (Deepgram's protocol): both ways, until either side closes.
+    client = web.WebSocketResponse(max_msg_size=0)
+    await client.prepare(req)
+    served["streams"] += 1
+    target = STT_UP.replace("http://", "ws://") + "/v1/listen" + ("?" + req.query_string if req.query_string else "")
+    try:
+        async with req.app["s"].ws_connect(target, max_msg_size=0) as server:
+            async def pump(src, dst):
+                async for msg in src:
+                    if msg.type == WSMsgType.TEXT:
+                        await dst.send_str(msg.data)
+                    elif msg.type == WSMsgType.BINARY:
+                        await dst.send_bytes(msg.data)
+                    else:
+                        break
+                await dst.close()
+            await asyncio.gather(pump(client, server), pump(server, client))
+    except Exception:
+        await client.close(code=1011)
+    return client
 
 async def handle(req):
+    parts = req.path.split("/")
+    if len(parts) == 5 and parts[1] == "live-stt" and parts[3:] == ["v1", "listen"]:
+        if not (STT_UP and LIVE_SHA256 and hmac.compare_digest(digest(parts[2]), LIVE_SHA256)):
+            return web.json_response({"error": "not found"}, status=404)
+        return await relay(req)
     if not allowed(req):
         return web.json_response({"error": "unauthorized"}, status=401)
     if req.path == "/atlas/stop" and req.method == "POST":
@@ -110,18 +155,20 @@ async def handle(req):
     if req.path == "/atlas/health":
         gpu = subprocess.run("nvidia-smi --query-gpu=name,utilization.gpu,memory.used --format=csv,noheader",
                              shell=True, capture_output=True, text=True).stdout.strip()
-        return web.json_response({"gpu": gpu, "requests": served["requests"], "voice": bool(VOICE_UP)})
-    if VOICE_UP and (req.path.startswith("/voice/v1/") or req.path == "/voice/health"):
+        return web.json_response({"gpu": gpu, **served, "voice": bool(VOICE_UP), "stt": bool(STT_UP)})
+    if req.path == "/health":
+        target = HEALTH_UP + "/health"
+    elif req.path.startswith("/llm/v1/"):
+        target = LLM_UP + req.path_qs[len("/llm"):]
+    elif VOICE_UP and req.path.startswith("/voice/v1/"):
         target = VOICE_UP + req.path_qs[len("/voice"):]
-    elif req.path.startswith("/v1/"):
-        target = UP + req.path_qs
     else:
         return web.json_response({"error": "not found"}, status=404)
     served["requests"] += 1
     body = await req.read()
     # qwen3 thinks before answering unless asked not to, and the voice service cannot send
     # that field: add it here for chat requests to qwen3 models.
-    if target.startswith(UP) and req.path.endswith("/chat/completions") and body:
+    if target.startswith(LLM_UP) and req.path.endswith("/chat/completions") and body:
         try:
             payload = json.loads(body)
             if str(payload.get("model", "")).startswith("qwen3") and "reasoning_effort" not in payload:
@@ -175,18 +222,38 @@ def wait_http(url, tries):
     return False
 
 
-def voice_env(filter_ld):
-    """The voice server's environment: its own venv and caches, no Hugging Face token."""
+def unpack(name):
+    """The embedded files of one server, written under WORK/<name>/srv."""
+    srv = os.path.join(WORK, name, "srv")
+    os.makedirs(srv, exist_ok=True)
+    for path, b64 in FILES.items():
+        if path.startswith(name + "/"):
+            with open(os.path.join(srv, path.split("/", 1)[1]), "wb") as f:
+                f.write(base64.b64decode(b64))
+    return srv
+
+
+def uv_path():
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "uv"], check=True)
+    return shutil.which("uv") or os.path.join(os.path.dirname(sys.executable), "uv")
+
+
+def clean_env(**extra):
+    """An environment for one of the servers: no notebook Python, no Hugging Face token."""
     env = dict(os.environ)
     for k in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "HF_TOKEN", "HUGGING_FACE_HUB_TOKEN",
               "HUGGINGFACE_HUB_TOKEN"):
         env.pop(k, None)
-    venv = os.path.join(VOICE_WORK, "venv")
-    env.update(VIRTUAL_ENV=venv, PATH=os.path.join(venv, "bin") + os.pathsep + env.get("PATH", ""),
-               HF_HOME=os.path.join(VOICE_WORK, "hf"), HF_HUB_DISABLE_IMPLICIT_TOKEN="1",
-               HF_HUB_DISABLE_PROGRESS_BARS="1", TQDM_DISABLE="1", PYTHONUNBUFFERED="1",
-               TOKENIZERS_PARALLELISM="false", CUDA_VISIBLE_DEVICES="0",
-               EXPRESSIVE_TTS_VOICE_DIR=os.path.join(VOICE_WORK, "voices"))
+    env.update(HF_HUB_DISABLE_IMPLICIT_TOKEN="1", HF_HUB_DISABLE_PROGRESS_BARS="1", TQDM_DISABLE="1",
+               PYTHONUNBUFFERED="1", TOKENIZERS_PARALLELISM="false", CUDA_VISIBLE_DEVICES="0", **extra)
+    return env
+
+
+def voice_env(filter_ld):
+    venv = os.path.join(WORK, "voice", "venv")
+    env = clean_env(VIRTUAL_ENV=venv, PATH=os.path.join(venv, "bin") + os.pathsep + os.environ.get("PATH", ""),
+                    HF_HOME=os.path.join(WORK, "voice", "hf"),
+                    EXPRESSIVE_TTS_VOICE_DIR=os.path.join(WORK, "voice", "voices"))
     if filter_ld:  # CUDA libraries of the image that clash with the torch wheels' own
         keep = [p for p in env.get("LD_LIBRARY_PATH", "").split(":")
                 if p and ("nvidia/lib" in p or "x86_64-linux-gnu" in p)]
@@ -194,21 +261,16 @@ def voice_env(filter_ld):
     return env
 
 
-voice_setup = {}
+setup = {}
 
 
 def install_voice():
     """The image's `pip install --no-deps -r requirements.txt`, into a venv, with uv for speed."""
     try:
-        srv = os.path.join(VOICE_WORK, "srv")
-        os.makedirs(srv, exist_ok=True)
-        for name, b64 in VOICE_FILES.items():
-            with open(os.path.join(srv, name), "wb") as f:
-                f.write(base64.b64decode(b64))
-        venv = os.path.join(VOICE_WORK, "venv")
+        srv = unpack("voice")
+        venv = os.path.join(WORK, "voice", "venv")
         py = os.path.join(venv, "bin", "python")
-        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "uv"], check=True)
-        uv = shutil.which("uv") or os.path.join(os.path.dirname(sys.executable), "uv")
+        uv = uv_path()
         env = dict(os.environ, UV_HTTP_TIMEOUT="600", UV_LINK_MODE="copy")
         subprocess.run([uv, "venv", "-q", venv, "--python", sys.executable, "--seed"], check=True, env=env)
         subprocess.run([uv, "pip", "install", "-q", "--python", py, "--no-deps", "-r",
@@ -216,11 +278,57 @@ def install_voice():
         check = "import torch, perth, chatterbox.tts_turbo; assert torch.cuda.is_available()"
         for filter_ld in (False, True):
             if subprocess.run([py, "-c", check], env=voice_env(filter_ld), capture_output=True).returncode == 0:
-                voice_setup.update(srv=srv, py=py, filter_ld=filter_ld)
+                setup["voice"] = dict(srv=srv, py=py, filter_ld=filter_ld)
                 return
-        voice_setup["error"] = "the voice packages do not import"
+        setup["voice_error"] = "the voice packages do not import"
     except Exception as e:
-        voice_setup["error"] = f"the voice install failed ({type(e).__name__})"
+        setup["voice_error"] = f"the voice install failed ({type(e).__name__})"
+
+
+def stt_env():
+    """The image's environment (Dockerfile.gpu): the CUDA libraries from the pinned NVIDIA
+    packages first; the notebook's own path after them, where the driver's libcuda.so.1 is."""
+    venv = os.path.join(WORK, "stt", "venv")
+    sp = os.path.join(venv, "lib", "python3.12", "site-packages", "nvidia")
+    libs = [os.path.join(sp, d, "lib") for d in ("cuda_runtime", "cublas", "cufft", "curand", "nvjitlink", "cudnn")]
+    return clean_env(VIRTUAL_ENV=venv, PATH=os.path.join(venv, "bin") + os.pathsep + os.environ.get("PATH", ""),
+                     LD_LIBRARY_PATH=":".join(libs + [os.environ.get("LD_LIBRARY_PATH", "")]),
+                     STT_MODEL_DIR=os.path.join(WORK, "stt", "models"), STT_MODEL="parakeet-0.6b-v3",
+                     STT_PROVIDER="cuda", STT_MAX_SESSIONS="8", PORT=str(STT_PORT), LOG_LEVEL="INFO")
+
+
+def install_stt():
+    """The GPU image's `pip install -r requirements.gpu.txt` (sherpa-onnx's CUDA build, cp312)
+    into a Python 3.12 venv, then the model files, pinned and checked by fetch_model.py."""
+    try:
+        srv = unpack("stt")
+        venv = os.path.join(WORK, "stt", "venv")
+        py = os.path.join(venv, "bin", "python")
+        uv = uv_path()
+        env = dict(os.environ, UV_HTTP_TIMEOUT="600", UV_LINK_MODE="copy")
+        subprocess.run([uv, "venv", "-q", "-p", "3.12", venv], check=True, env=env)
+        subprocess.run([uv, "pip", "install", "-q", "-p", py, "-r", os.path.join(srv, "requirements.gpu.txt")],
+                       check=True, env=env)
+        subprocess.run([py, "fetch_model.py"], cwd=srv, env=stt_env(), check=True)
+        setup["stt"] = dict(srv=srv, py=py)
+    except Exception as e:
+        setup["stt_error"] = f"the speech-to-text install failed ({type(e).__name__})"
+
+
+def wait_ready(name, proc, port, tries, log):
+    for _ in range(tries):
+        if proc.poll() is not None:
+            print("".join(open(log).readlines()[-5:]), flush=True)
+            fail(f"the {name} server exited")
+        try:
+            health = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=3))
+            if health.get("status") == "ok":
+                print(f"{name} server ready", flush=True)
+                return
+        except (OSError, ValueError):
+            pass
+        time.sleep(1)
+    fail(f"the {name} server did not get ready")
 
 
 gpu = subprocess.run("nvidia-smi --query-gpu=name --format=csv,noheader", shell=True,
@@ -228,13 +336,19 @@ gpu = subprocess.run("nvidia-smi --query-gpu=name --format=csv,noheader", shell=
 print("GPU:", gpu or "none", flush=True)
 if not gpu:
     fail("no GPU in this session (accelerator not granted)")
-installing = threading.Thread(target=install_voice, daemon=True)
+installs = []
 if VOICE:
-    installing.start()  # meanwhile Ollama installs and downloads its models
+    installs.append(threading.Thread(target=install_voice, daemon=True))
+if STT:
+    installs.append(threading.Thread(target=install_stt, daemon=True))
+for t in installs:
+    t.start()  # meanwhile Ollama installs and downloads its models
 sh("command -v zstd >/dev/null || (apt-get update -qq && apt-get install -y -qq zstd >/dev/null)")
 sh(f"curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION={OLLAMA_VERSION} sh >/dev/null")
+# Two slots, like the GPU models host: the agent's prompt stays cached in one while the call's
+# end-of-call requests (outcome, variables) use the other.
 env = dict(os.environ, OLLAMA_HOST="127.0.0.1:11434", OLLAMA_KEEP_ALIVE="-1", OLLAMA_FLASH_ATTENTION="1",
-           OLLAMA_CONTEXT_LENGTH="4096", OLLAMA_NUM_PARALLEL="1", OLLAMA_MAX_LOADED_MODELS=str(len(MODELS)),
+           OLLAMA_CONTEXT_LENGTH="4096", OLLAMA_NUM_PARALLEL="2", OLLAMA_MAX_LOADED_MODELS=str(len(MODELS)),
            CUDA_VISIBLE_DEVICES="0")
 ollama = subprocess.Popen(["ollama", "serve"], env=env, stdout=open("/tmp/ollama.log", "w"), stderr=subprocess.STDOUT)
 if not wait_http("http://127.0.0.1:11434/api/version", 120):
@@ -246,32 +360,40 @@ for m in MODELS:
                                  data=('{"model": "%s", "prompt": "hi", "stream": false, "options": {"num_predict": 1}}' % m).encode())
     urllib.request.urlopen(req, timeout=600).read()
 
-voice = None
+for t in installs:
+    t.join()
+for key in ("voice_error", "stt_error"):
+    if key in setup:
+        fail(setup[key])
+
+voice = stt = None
 if VOICE:
-    installing.join()
-    if "error" in voice_setup:
-        fail(voice_setup["error"])
     # Downloads the weights (about 3 GB), loads and warms the model and makes the kept openers.
-    voice = subprocess.Popen([voice_setup["py"], "-m", "uvicorn", "app:app", "--host", "127.0.0.1",
-                              "--port", str(VOICE_PORT), "--workers", "1"], cwd=voice_setup["srv"],
-                             env=voice_env(voice_setup["filter_ld"]), stdout=open("/tmp/voice.log", "w"),
+    voice = subprocess.Popen([setup["voice"]["py"], "-m", "uvicorn", "app:app", "--host", "127.0.0.1",
+                              "--port", str(VOICE_PORT), "--workers", "1"], cwd=setup["voice"]["srv"],
+                             env=voice_env(setup["voice"]["filter_ld"]), stdout=open("/tmp/voice.log", "w"),
                              stderr=subprocess.STDOUT)
-    ready = False
-    for _ in range(900):
-        if voice.poll() is not None:
-            print("".join(open("/tmp/voice.log").readlines()[-5:]), flush=True)
-            fail("the voice server exited")
-        try:
-            health = json.load(urllib.request.urlopen(f"http://127.0.0.1:{VOICE_PORT}/health", timeout=3))
-            ready = health.get("status") == "ok"
-        except (OSError, ValueError):
-            pass
-        if ready:
-            break
-        time.sleep(1)
-    if not ready:
-        fail("the voice server did not get ready")
-    print("voice server ready", flush=True)
+if STT:
+    # Loads the model on the GPU and decodes every padded length once (about half a minute).
+    stt = subprocess.Popen([setup["stt"]["py"], "app.py"], cwd=setup["stt"]["srv"], env=stt_env(),
+                           stdout=open("/tmp/stt.log", "w"), stderr=subprocess.STDOUT)
+if voice is not None:
+    wait_ready("voice", voice, VOICE_PORT, 900, "/tmp/voice.log")
+if stt is not None:
+    wait_ready("speech-to-text", stt, STT_PORT, 600, "/tmp/stt.log")
+
+# The AI gateway's health report (infra/docker/ai-gateway/app.py, unchanged), for ATLAS's
+# AI servers screen: which services run here, their models, voices and sounds.
+health_srv = unpack("health")
+services = ["llm"] + (["voice"] if VOICE else []) + (["live_stt"] if STT else [])
+health = subprocess.Popen([sys.executable, "app.py"], cwd=health_srv,
+                          env=dict(os.environ, PORT=str(HEALTH_PORT), AI_HEALTH_SERVICES=",".join(services),
+                                   AI_HEALTH_LLM_URL="http://127.0.0.1:11434",
+                                   AI_HEALTH_VOICE_URL=f"http://127.0.0.1:{VOICE_PORT}",
+                                   AI_HEALTH_LIVE_STT_URL=f"http://127.0.0.1:{STT_PORT}"),
+                          stdout=open("/tmp/health.log", "w"), stderr=subprocess.STDOUT)
+if not wait_http(f"http://127.0.0.1:{HEALTH_PORT}/health", 60):
+    fail("the health report did not start")
 
 try:
     import aiohttp  # noqa: F401
@@ -280,9 +402,11 @@ except ImportError:
 with open("/tmp/atlas_proxy.py", "w") as f:
     f.write(PROXY)
 proxy = subprocess.Popen([sys.executable, "/tmp/atlas_proxy.py"],
-                         env=dict(os.environ, ATLAS_TOKEN_SHA256=TOKEN_SHA256, ATLAS_PORT=str(PORT),
-                                  ATLAS_VOICE_UP=f"http://127.0.0.1:{VOICE_PORT}" if VOICE else ""))
-if not wait_http(f"http://127.0.0.1:{PORT}/v1/models", 30):
+                         env=dict(os.environ, ATLAS_TOKEN_SHA256=TOKEN_SHA256, ATLAS_LIVE_SHA256=LIVE_SHA256,
+                                  ATLAS_PORT=str(PORT), ATLAS_HEALTH_UP=f"http://127.0.0.1:{HEALTH_PORT}",
+                                  ATLAS_VOICE_UP=f"http://127.0.0.1:{VOICE_PORT}" if VOICE else "",
+                                  ATLAS_STT_UP=f"http://127.0.0.1:{STT_PORT}" if STT else ""))
+if not wait_http(f"http://127.0.0.1:{PORT}/health", 30):
     fail("the token check did not start")
 
 sh(f"curl -fsSL -o /tmp/cloudflared {CLOUDFLARED} && chmod +x /tmp/cloudflared")
@@ -302,7 +426,7 @@ if url is None:
 reachable = False
 for _ in range(40):
     try:
-        urllib.request.urlopen(url + "/v1/models", timeout=10)
+        urllib.request.urlopen(url + "/health", timeout=10)
     except urllib.error.HTTPError as e:
         reachable = e.code == 401
     except OSError:
@@ -316,19 +440,19 @@ print(f"ATLAS_GPU_URL={url} session={TOKEN_SHA256[:12]}", flush=True)
 
 end = time.time() + HOURS * 3600
 reason = "time limit reached"
+procs = [p for p in (ollama, voice, stt, health, proxy, tunnel) if p is not None]
 while time.time() < end:
     if os.path.exists("/tmp/atlas-stop"):
         reason = "stopped by kaggle_gpu.py stop"
         break
-    if any(p.poll() is not None for p in (ollama, proxy, tunnel, voice) if p is not None):
+    if any(p.poll() is not None for p in procs):
         reason = "a process exited"
         break
     time.sleep(20)
     if int(time.time()) % 300 < 20:
         print(time.strftime("%H:%M:%S"), "session running", flush=True)
-for p in (tunnel, proxy, voice, ollama):
-    if p is not None:
-        p.terminate()
+for p in reversed(procs):
+    p.terminate()
 print("ATLAS GPU session ended:", reason, flush=True)
 '''
 
@@ -393,6 +517,10 @@ def http(method: str, url: str, body: Any = None, headers: dict[str, str] | None
             return e.code, raw.decode(errors="replace")[:300]
 
 
+def sha256(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
 # ------------------------------------------------------------------ Kaggle
 
 
@@ -431,12 +559,22 @@ def gpu_hours_left() -> float | None:
     return float(m.group(1)) if m else None
 
 
-def render_kernel(token: str, models: list[str], hours: float, voice: bool = False) -> str:
-    files = ({n: base64.b64encode((VOICE_SRC / n).read_bytes()).decode() for n in ("app.py", "requirements.txt")}
-             if voice else {})
-    return (KERNEL.replace("@TOKEN_SHA256@", hashlib.sha256(token.encode()).hexdigest())
+def embedded_files(voice: bool, stt: bool) -> dict[str, str]:
+    files: dict[str, str] = {}
+    for name, (folder, names) in EMBEDDED.items():
+        if (name == "voice" and not voice) or (name == "stt" and not stt):
+            continue
+        for n in names:
+            files[f"{name}/{n}"] = base64.b64encode((ROOT / folder / n).read_bytes()).decode()
+    return files
+
+
+def render_kernel(token: str, live_secret: str, models: list[str], hours: float, *,
+                  voice: bool = False, stt: bool = False) -> str:
+    return (KERNEL.replace("@TOKEN_SHA256@", sha256(token)).replace("@LIVE_SHA256@", sha256(live_secret))
             .replace("@MODELS@", json.dumps(models)).replace("@HOURS@", repr(hours))
-            .replace("@VOICE_FILES@", json.dumps(files)).replace("@VOICE@", repr(voice)))
+            .replace("@FILES@", json.dumps(embedded_files(voice, stt)))
+            .replace("@VOICE@", repr(voice)).replace("@STT@", repr(stt)))
 
 
 def push_kernel(ref: str, source: str) -> None:
@@ -452,7 +590,7 @@ def push_kernel(ref: str, source: str) -> None:
 
 def session_id(token: str) -> str:
     """The id a session prints with its address: the start of its token's SHA-256."""
-    return hashlib.sha256(token.encode()).hexdigest()[:12]
+    return sha256(token)[:12]
 
 
 def wait_for_url(ref: str, session: str, timeout_s: float) -> str:
@@ -523,74 +661,81 @@ def atlas_password(explicit: str | None) -> str:
     return pw
 
 
-def upsert_connection(atlas: Atlas, conns: list[dict[str, Any]], name: str, base_url: str,
-                      token: str) -> dict[str, Any]:
-    existing = next((c for c in conns if c["name"] == name), None)
-    settings, credentials = {"base_url": base_url}, {"api_key": token}
-    if existing:
-        return atlas.call("PATCH", f"/ai/connections/{existing['id']}",
-                          {"connection_settings": settings, "credentials": credentials})
-    return atlas.call("POST", "/ai/connections", {"name": name, "provider": "speaches",
-                                                  "connection_settings": settings, "credentials": credentials})
+def selection_body(selection: dict[str, Any]) -> dict[str, Any]:
+    return {k: selection.get(k) for k in ("llm", "stt", "tts", "embeddings", "llm_fallback")}
 
 
 def connect(state: dict[str, Any], api_base: str, password: str, model: str) -> None:
+    """Register the session as an AI server in this ATLAS and use it for the organisation."""
     atlas = Atlas(api_base, password)
-    conns = atlas.call("GET", "/ai/connections")
-    conn = upsert_connection(atlas, conns, CONNECTION_NAME, state["url"] + "/v1", state["token"])
-    selection = atlas.call("GET", "/ai/models")
     recorded = state["connected"].get(api_base, {})
-    previous = recorded.get("previous_llm")
-    if previous is None:
-        previous = selection.get("llm")
-        if previous and previous.get("connection_id") == conn["id"]:
-            previous = None  # left over from an earlier session that was not stopped
-    selection["llm"] = {"connection_id": conn["id"], "settings": {"model": model, "temperature": 0.3}}
-    if previous and previous.get("connection_id") and previous["connection_id"] != conn["id"]:
+    selection = atlas.call("GET", "/ai/models")
+    # What to put back: recorded by the first connect of this session, never overwritten.
+    previous = recorded.get("previous") or selection_body(selection)
+    for server in atlas.call("GET", "/ai/servers"):
+        if server["name"] == SERVER_NAME and server["url"] != state["url"]:
+            # An earlier session that was not stopped: its server is gone, remove its record.
+            its = {s.get("connection_id") for s in server["services"]}
+            if previous.get("llm") and (selection.get("llm") or {}).get("connection_id") in its:
+                atlas.call("PUT", "/ai/models", previous)
+            atlas.call("DELETE", f"/ai/servers/{server['id']}", ok=(200, 204, 404))
+    servers = atlas.call("GET", "/ai/servers")
+    server = next((s for s in servers if s["url"] == state["url"]), None)
+    if server is None:
+        body: dict[str, Any] = {"name": SERVER_NAME, "url": state["url"], "token": state["token"]}
+        if state.get("stt"):
+            body["live_stt_secret"] = state["live_secret"]
+        server = atlas.call("POST", "/ai/servers", body)
+    services = {s["service"]: s for s in server["services"]}
+    up = sorted(name for name, s in services.items() if s.get("connection_id"))
+    say(f"{api_base}: AI server {SERVER_NAME} is {server['status']} ({', '.join(up)})")
+
+    # Live speech-to-text: the organisation's own live-speech connection, which keeps its key,
+    # points at the session's server meanwhile (ATLAS never gets the key from here).
+    stt_patched = recorded.get("stt_patched")
+    if state.get("stt") and not stt_patched:
+        current_stt = (previous.get("stt") or {}).get("connection_id")
+        conn = next((c for c in atlas.call("GET", "/ai/connections") if c["id"] == current_stt), None)
+        if conn and conn["provider"] == "deepgram":
+            old = str((conn.get("connection_settings") or {}).get("base_url") or "")
+            atlas.call("PATCH", f"/ai/connections/{conn['id']}",
+                       {"connection_settings": {"base_url": f"{state['url']}/live-stt/{state['live_secret']}"}})
+            stt_patched = {"connection_id": conn["id"], "base_url": old}
+            say(f"{api_base}: live speech-to-text now runs on the GPU (Parakeet 0.6B v3)")
+        else:
+            say(f"{api_base}: no live speech-to-text (Deepgram-type) connection in use; "
+                "speech-to-text stays where it is")
+
+    use: dict[str, Any] = {"llm_model": model, "use_live_stt": False, "fallback_after_ms": FALLBACK_AFTER_MS}
+    fallback = (previous.get("llm") or {}).get("connection_id")
+    if fallback and fallback not in {s.get("connection_id") for s in server["services"]}:
         # If the Kaggle session ends or stalls, the model chosen before answers instead.
-        selection["llm_fallback"] = {"connection_id": previous["connection_id"],
-                                     "settings": previous.get("settings") or {}, "after_ms": 3000, "on_error": True}
-    entry: dict[str, Any] = {"connection_id": conn["id"], "previous_llm": previous, "model": model}
+        use["fallback_llm_connection_id"] = fallback
     if state.get("voice"):
-        vconn = upsert_connection(atlas, conns, VOICE_CONNECTION_NAME, state["url"] + "/voice/v1", state["token"])
-        previous_tts = recorded.get("previous_tts")
-        if previous_tts is None:
-            previous_tts = selection.get("tts")
-            if previous_tts and previous_tts.get("connection_id") == vconn["id"]:
-                previous_tts = None
-        selection["tts"] = {"connection_id": vconn["id"], "settings": {"model": VOICE_MODEL, "voice": "default"}}
-        entry.update(voice_connection_id=vconn["id"], previous_tts=previous_tts)
-    atlas.call("PUT", "/ai/models", selection)
-    state["connected"][api_base] = entry
+        use["voice"] = "expressive"
+    atlas.call("POST", f"/ai/servers/{server['id']}/use", use)
+    state["connected"][api_base] = {"server_id": server["id"], "previous": previous, "model": model,
+                                    "stt_patched": stt_patched}
     save_state(state)
     check = atlas.call("POST", "/ai/models/check")
-    voice = " and the voice is the expressive one" if state.get("voice") else ""
-    say(f"{api_base}: language model is now {model} on the Kaggle GPU{voice} "
+    with_voice = " and the voice is the expressive one" if state.get("voice") else ""
+    say(f"{api_base}: language model is now {model} on the Kaggle GPU{with_voice} "
         f"(models check: {'ok' if check.get('ok') else check.get('problems')})")
 
 
 def disconnect(api_base: str, info: dict[str, Any], password: str) -> None:
     atlas = Atlas(api_base, password)
-    selection = atlas.call("GET", "/ai/models")
-    put_back = []
-    if info.get("previous_llm"):
-        selection["llm"] = info["previous_llm"]
-        selection["llm_fallback"] = None  # it pointed at the model that is now the main one again
-        put_back.append("language model")
-    elif (selection.get("llm") or {}).get("connection_id") == info["connection_id"]:
-        say(f"{api_base}: no earlier language model was recorded; choose one under AI providers")
-    voice_id = info.get("voice_connection_id")
-    if voice_id and info.get("previous_tts"):
-        selection["tts"] = info["previous_tts"]
-        put_back.append("voice")
-    elif voice_id and (selection.get("tts") or {}).get("connection_id") == voice_id:
-        say(f"{api_base}: no earlier voice was recorded; choose one under AI providers")
-    if put_back:
-        atlas.call("PUT", "/ai/models", selection)
-        say(f"{api_base}: {' and '.join(put_back)} put back")
-    for conn_id in (info["connection_id"], voice_id):
-        if conn_id:
-            atlas.call("DELETE", f"/ai/connections/{conn_id}", ok=(200, 204, 404, 409))
+    if info.get("previous"):
+        atlas.call("PUT", "/ai/models", info["previous"])
+        say(f"{api_base}: models put back")
+    patched = info.get("stt_patched")
+    if patched and patched.get("base_url"):
+        atlas.call("PATCH", f"/ai/connections/{patched['connection_id']}",
+                   {"connection_settings": {"base_url": patched["base_url"]}}, ok=(200, 404))
+        say(f"{api_base}: live speech-to-text put back")
+    if info.get("server_id"):
+        atlas.call("DELETE", f"/ai/servers/{info['server_id']}", ok=(200, 204, 404))
+        say(f"{api_base}: AI server {SERVER_NAME} removed")
 
 
 # ------------------------------------------------------------------ commands
@@ -614,13 +759,14 @@ def cmd_start(args: argparse.Namespace) -> int:
             die(f"only {left:.1f} GPU hours left; use --hours {max(left - 0.1, 0.25):.1f} or less")
     user = kaggle_user()
     ref = f"{user}/{KERNEL_SLUG}"
-    token = secrets.token_urlsafe(32)
-    models = args.model or (VOICE_MODELS if args.voice else DEFAULT_MODELS)
-    with_voice = " and the expressive voice" if args.voice else ""
-    say(f"starting {ref} on a T4 GPU with {', '.join(models)}{with_voice} for at most {hours:g} h")
-    push_kernel(ref, render_kernel(token, models, hours, args.voice))
-    state = {"kernel": ref, "token": token, "models": models, "voice": args.voice, "hours": hours,
-             "started": now(), "url": None, "connected": {}}
+    token, live_secret = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
+    models = args.model or (STACK_MODELS if args.voice or args.stt else DEFAULT_MODELS)
+    extras = [n for n, on in (("the expressive voice", args.voice), ("live speech-to-text", args.stt)) if on]
+    say(f"starting {ref} on a T4 GPU with {', '.join(models + extras)} for at most {hours:g} h")
+    push_kernel(ref, render_kernel(token, live_secret, models, hours, voice=args.voice, stt=args.stt))
+    state = {"kernel": ref, "token": token, "live_secret": live_secret, "models": models,
+             "voice": args.voice, "stt": args.stt, "hours": hours, "started": now(), "url": None,
+             "connected": {}}
     save_state(state)
     return finish_start(state, args, password)
 
@@ -628,17 +774,16 @@ def cmd_start(args: argparse.Namespace) -> int:
 def finish_start(state: dict[str, Any], args: argparse.Namespace, password: str) -> int:
     token = state["token"]
     url = wait_for_url(state["kernel"], session_id(token), timeout_s=args.wait_minutes * 60)
-    code_ok, _ = http("GET", url + "/v1/models", headers={"Authorization": f"Bearer {token}"})
-    code_no, _ = http("GET", url + "/v1/models")
-    if code_ok != 200 or code_no != 401:
+    code_ok, health = http("GET", url + "/health", headers={"Authorization": f"Bearer {token}"})
+    code_no, _ = http("GET", url + "/health")
+    if code_ok not in (200, 503) or code_no != 401 or not isinstance(health, dict):
         die(f"the GPU address does not answer as expected (with token {code_ok}, without {code_no})")
-    if state.get("voice"):
-        code_v, body_v = http("GET", url + "/voice/health", headers={"Authorization": f"Bearer {token}"})
-        if code_v != 200 or not isinstance(body_v, dict) or body_v.get("status") != "ok":
-            die(f"the voice server does not answer as expected (HTTP {code_v})")
+    down = [n for n, s in (health.get("services") or {}).items() if not s.get("up")]
+    if down:
+        die(f"the GPU server reports these services down: {', '.join(down)}")
     state["url"] = url
     save_state(state)
-    say("GPU address is up and refuses requests without the token")
+    say(f"GPU address is up ({', '.join(health.get('services') or {})}) and refuses requests without the token")
     connect(state, args.api, password, state["models"][0])
     say(f"Done. Test calls now use the GPU. When finished: python {Path(__file__).name} stop")
     return 0
@@ -657,9 +802,9 @@ def cmd_status(args: argparse.Namespace) -> int:
     if not state:
         say("no GPU session recorded")
         return 0
-    with_voice = " and the expressive voice" if state.get("voice") else ""
+    extras = [n for n, on in (("the expressive voice", state.get("voice")), ("live speech-to-text", state.get("stt"))) if on]
     say(f"session {state['kernel']} started {state['started']} for at most {state['hours']:g} h; "
-        f"models {', '.join(state['models'])}{with_voice}")
+        f"{', '.join(state['models'] + extras)}")
     say("Kaggle: " + kaggle("kernels", "status", state["kernel"]).strip())
     if state.get("url"):
         code, data = http("GET", state["url"] + "/atlas/health", headers={"Authorization": f"Bearer {state['token']}"},
@@ -682,7 +827,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
             del state["connected"][api_base]
             save_state(state)
         except SystemExit as exc:
-            say(f"{api_base}: could not put the model back ({exc}); run stop again")
+            say(f"{api_base}: could not put the models back ({exc}); run stop again")
             return 1
     if state.get("url"):
         code, _ = http("POST", state["url"] + "/atlas/stop", headers={"Authorization": f"Bearer {state['token']}"},
@@ -711,6 +856,9 @@ def main() -> int:
             s.add_argument("--wait-minutes", type=float, default=20.0, help="give up if not ready by then")
             s.add_argument("--voice", action="store_true",
                            help="also run the expressive voice (Chatterbox-Turbo) and switch ATLAS's voice to it")
+            s.add_argument("--stt", action="store_true",
+                           help="also run live speech-to-text (Parakeet 0.6B v3 on CUDA) and point ATLAS's "
+                                "live speech connection at it")
     args = p.parse_args()
     return {"start": cmd_start, "connect": cmd_connect, "status": cmd_status, "stop": cmd_stop}[args.command](args)
 

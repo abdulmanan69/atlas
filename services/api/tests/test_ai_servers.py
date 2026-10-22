@@ -68,6 +68,18 @@ HEALTH: dict[str, dict[str, Any]] = {
         "default_voice": "alba",
         "cloning": "off",
     },
+    "voice": {
+        "up": True,
+        "state": "up",
+        "latency_ms": 5,
+        "version": "0.1.7",
+        "models": ["chatterbox-turbo"],
+        "voices": 1,
+        "default_voice": "default",
+        "cloning": "on",
+        "device": "cuda",
+        "sound_tags": ["laugh", "chuckle", "sigh", "gasp"],
+    },
     "live_stt": {
         "up": True,
         "state": "up",
@@ -122,6 +134,19 @@ class FakeGateway:
             )
         if path == "/tts/v1/cloning":
             return self._json(200, {"state": "on", "terms_url": None, "token_source": "saved"})
+        if path == "/voice/v1/voices":
+            return self._json(
+                200,
+                {
+                    "data": [
+                        {"id": "default", "name": "default", "type": "builtin", "default": True}
+                    ]
+                },
+            )
+        if path == "/voice/v1/cloning":
+            return self._json(200, {"state": "on", "terms_url": None, "token_source": "saved"})
+        if path == "/voice/v1/audio/sound-tags":
+            return self._json(200, {"tags": ["laugh", "chuckle", "sigh", "gasp"]})
         return self._json(404, {"error": "not_found"})
 
     def paths(self) -> list[str]:
@@ -228,6 +253,7 @@ async def test_register_creates_a_connection_for_every_service_that_is_up(
         ("llm", True),
         ("whisper", True),
         ("tts", True),
+        ("voice", True),
         ("live_stt", True),
     ]
     services = {s["service"]: s for s in server["services"]}
@@ -236,6 +262,9 @@ async def test_register_creates_a_connection_for_every_service_that_is_up(
     assert services["tts"]["default_voice"] == "alba" and services["tts"]["voices"] == 20
     assert services["live_stt"]["models"] == ["parakeet-en-110m"]
     assert services["live_stt"]["max_sessions"] == 4
+    assert services["voice"]["title"] == "Expressive voice"
+    assert services["voice"]["device"] == "cuda"
+    assert services["voice"]["sound_tags"] == ["laugh", "chuckle", "sigh", "gasp"]
 
     health = next(r for r in gateway.requests if r.url.path == "/health")
     assert health.headers["authorization"] == f"Bearer {TOKEN}"
@@ -247,9 +276,10 @@ async def test_register_creates_a_connection_for_every_service_that_is_up(
         ("GPU box · Language model", "speaches", {"base_url": f"{GATEWAY}/llm/v1"}),
         ("GPU box · Whisper", "speaches", {"base_url": f"{GATEWAY}/whisper/v1"}),
         ("GPU box · Pocket TTS", "speaches", {"base_url": f"{GATEWAY}/tts/v1"}),
+        ("GPU box · Expressive voice", "speaches", {"base_url": f"{GATEWAY}/voice/v1"}),
         ("GPU box · Live speech", "deepgram", {"base_url": f"{GATEWAY}/live-stt/{LIVE_SECRET}"}),
     ]
-    assert [c["credentials"] for c in created] == [{"api_key": TOKEN}] * 3 + [
+    assert [c["credentials"] for c in created] == [{"api_key": TOKEN}] * 4 + [
         {"api_key": DEEPGRAM_KEY}
     ]
 
@@ -344,11 +374,18 @@ async def test_only_services_that_are_up_get_a_connection(
         "llm": None,
         "whisper": "The server reports it down (timeout).",
         "tts": "It is still loading its model. Check the server again in a few minutes.",
+        "voice": None,
         "live_stt": "The server does not offer it.",
     }
     states = {s["service"]: s["state"] for s in server["services"]}
-    assert states == {"llm": "up", "whisper": "down", "tts": "loading", "live_stt": "not_offered"}
-    assert runtime.count("POST", "provider-connections") == 1
+    assert states == {
+        "llm": "up",
+        "whisper": "down",
+        "tts": "loading",
+        "voice": "up",
+        "live_stt": "not_offered",
+    }
+    assert runtime.count("POST", "provider-connections") == 2, "the language model and the voice"
 
     # Once Pocket TTS has loaded, checking the server adds its connection.
     gateway.services["tts"] = copy.deepcopy(HEALTH["tts"])
@@ -409,10 +446,11 @@ async def test_replacing_the_token_updates_every_connection(
             f"/model-connections/provider-connections/{ids[s]}",
             {"credentials": {"api_key": NEW_TOKEN}},
         )
-        for s in ("llm", "whisper", "tts")
+        for s in ("llm", "whisper", "tts", "voice")
     ], "live speech-to-text keeps its Deepgram key"
     logs = await _audit("ai_server.token_rotated")
-    assert len(logs) == 1 and logs[0].changes == {"connections": ["llm", "tts", "whisper"]}
+    assert len(logs) == 1
+    assert logs[0].changes == {"connections": ["llm", "tts", "voice", "whisper"]}
 
     # The old token is retired on the models host: ATLAS uses the new one.
     gateway.tokens = {NEW_TOKEN}
@@ -434,6 +472,7 @@ async def test_replacing_the_token_updates_every_connection(
         for c in (await client.get("/api/v1/ai/connections", headers=owner.headers)).json()
     )
     assert names == [
+        "Big GPU · Expressive voice",
         "Big GPU · Language model",
         "Big GPU · Live speech",
         "Big GPU · Pocket TTS",
@@ -466,9 +505,10 @@ async def test_use_for_the_organization_with_a_fallback(
         "connection_id": ids["live_stt"],
         "settings": {"model": "parakeet-en-110m", "language": "en"},
     }
+    # The server's expressive voice, with its own built-in voice (Pocket's "alba" is not there).
     assert selection["tts"] == {
-        "connection_id": ids["tts"],
-        "settings": {"model": "pocket-tts", "voice": "alba"},
+        "connection_id": ids["voice"],
+        "settings": {"model": "chatterbox-turbo", "voice": "default"},
     }
     # The cloud model answers when the server is slow or fails, with its current settings.
     assert selection["llm_fallback"] == {
@@ -497,9 +537,12 @@ async def test_use_for_the_organization_with_a_fallback(
     r = await client.delete(f"/api/v1/ai/connections/{cloud['openai']}", headers=owner.headers)
     assert r.status_code == 422 and "fallback LLM" in r.json()["error"]["message"]
 
-    # Whisper instead of live speech, another model on the server, and no fallback.
+    # Whisper instead of live speech, Pocket TTS instead of the expressive voice, another
+    # model on the server, and no fallback.
     r = await client.post(
-        use, headers=owner.headers, json={"llm_model": "llama3.2:3b", "use_live_stt": False}
+        use,
+        headers=owner.headers,
+        json={"llm_model": "llama3.2:3b", "use_live_stt": False, "voice": "pocket"},
     )
     assert r.status_code == 200, r.text
     selection = r.json()
@@ -508,6 +551,11 @@ async def test_use_for_the_organization_with_a_fallback(
         "connection_id": ids["whisper"],
         "settings": {"model": "Systran/faster-whisper-base"},
     }
+    assert selection["tts"] == {
+        "connection_id": ids["tts"],
+        "settings": {"model": "pocket-tts", "voice": "alba"},
+    }
+    assert (await _audit("ai_server.used"))[-1].changes["voice_server"] == "tts"
     assert selection["llm_fallback"] is None
     assert "llm_fallback" not in runtime.last("PATCH", "model-configurations")["configuration"]
 
@@ -572,7 +620,7 @@ async def test_removing_is_refused_while_in_use(
     assert all(not org.connections[c]["is_active"] for c in ids.values() if c)
     assert (await client.get(url, headers=owner.headers)).status_code == 404
     logs = await _audit("ai_server.deleted")
-    assert len(logs) == 1 and logs[0].changes["connections_removed"] == 4
+    assert len(logs) == 1 and logs[0].changes["connections_removed"] == 5
 
 
 async def test_editing_the_live_speech_connection_keeps_its_secret(
@@ -697,6 +745,41 @@ async def test_voice_cloning_reaches_the_servers_pocket_tts(
     assert r.json()["error"]["message"] == (
         "The AI server GPU box refused its token. Replace the token under AI providers, AI servers."
     )
+
+
+async def test_a_server_without_speech_to_text_keeps_the_current_one(
+    client: httpx.AsyncClient, owner: Account, gateway: FakeGateway
+) -> None:
+    cloud = await _cloud_models(client, owner)
+    before = (await client.get("/api/v1/ai/models", headers=owner.headers)).json()
+    assert before["stt"]["connection_id"] == cloud["deepgram"]
+    del gateway.services["whisper"]
+    del gateway.services["live_stt"]
+    server = await _registered(client, owner, live_stt_secret=None, deepgram_key=None)
+    r = await client.post(f"/api/v1/ai/servers/{server['id']}/use", headers=owner.headers, json={})
+    assert r.status_code == 200, r.text
+    selection = r.json()
+    assert selection["llm"]["connection_id"] == _ids(server)["llm"]
+    assert selection["tts"]["connection_id"] == _ids(server)["voice"]
+    assert selection["stt"] == before["stt"], "speech-to-text stays where it was"
+    assert (await _audit("ai_server.used"))[-1].changes["speech_to_text"] == "kept"
+
+
+async def test_the_expressive_voice_is_managed_through_the_same_gateway(
+    client: httpx.AsyncClient, owner: Account, gateway: FakeGateway
+) -> None:
+    server = await _registered(client, owner)
+    voice = _ids(server)["voice"]
+    r = await client.get(f"/api/v1/ai/connections/{voice}/sound-tags", headers=owner.headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["expressive"] is True
+    assert r.json()["tags"] == ["laugh", "chuckle", "sigh", "gasp"]
+    r = await client.get(f"/api/v1/ai/connections/{voice}/voices", headers=owner.headers)
+    assert r.status_code == 200, r.text
+    assert [v["id"] for v in r.json()["voices"]] == ["default"]
+    asked = [r for r in gateway.requests if r.url.path.startswith("/voice/")]
+    assert {r.url.path for r in asked} >= {"/voice/v1/audio/sound-tags", "/voice/v1/voices"}
+    assert {r.headers["authorization"] for r in asked} == {f"Bearer {TOKEN}"}
 
 
 # ---------------------------------------------------------------- who may do what

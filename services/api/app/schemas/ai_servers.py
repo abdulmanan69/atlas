@@ -11,7 +11,7 @@ from pydantic import Field, SecretStr, field_validator
 from app.schemas.common import APIModel
 
 AiServerStatus = Literal["ok", "degraded", "down", "unchecked"]
-AiService = Literal["llm", "whisper", "tts", "live_stt"]
+AiService = Literal["llm", "whisper", "tts", "voice", "live_stt"]
 ServiceState = Literal["up", "loading", "down", "not_offered"]
 
 
@@ -149,6 +149,14 @@ class AiServerUse(APIModel):
         le=10000,
         description="Switch to the fallback when the server has given no output this long",
     )
+    voice: Literal["expressive", "pocket"] | None = Field(
+        default=None,
+        description=(
+            "Which voice server to use when this server runs both: the expressive voice "
+            "(laughs and sighs; needs a GPU) or Pocket TTS. Default: the expressive voice "
+            "when it has a connection, else Pocket TTS"
+        ),
+    )
 
     @field_validator("llm_model", "fallback_llm_connection_id", "fallback_llm_model")
     @classmethod
@@ -179,6 +187,13 @@ class AiServerService(APIModel):
     cloning: str | None = Field(default=None, description="Pocket TTS voice cloning state")
     sessions: int | None = None
     max_sessions: int | None = None
+    device: str | None = Field(
+        default=None, description="Where the expressive voice runs: cuda or cpu"
+    )
+    sound_tags: list[str] | None = Field(
+        default=None,
+        description="Sounds the expressive voice performs when a reply carries them as tags",
+    )
     connection_id: str | None = Field(
         default=None, description="The connection ATLAS created for it, if any"
     )

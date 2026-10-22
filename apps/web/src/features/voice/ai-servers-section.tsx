@@ -70,7 +70,7 @@ export function AiServersCard({ canEdit }: { canEdit: boolean }) {
         <EmptyState
           icon={<Server />}
           title="No AI servers yet"
-          description="Register a models host once with its address and token. ATLAS checks it and adds its language model, Whisper, Pocket TTS and live speech-to-text as connections."
+          description="Register a models host once with its address and token. ATLAS checks it and adds its language model, Whisper, Pocket TTS, expressive voice and live speech-to-text as connections."
           action={canEdit ? <Button onClick={() => setAdding(true)}>Add AI server</Button> : null}
           className="py-10"
         />
@@ -352,16 +352,19 @@ function UseServerDialog({ server, onClose }: { server: AiServer; onClose: () =>
   const models = llm?.models ?? [];
   const liveAvailable = Boolean(serviceOf(server, "live_stt")?.connection_id);
   const sttAvailable = liveAvailable || Boolean(serviceOf(server, "whisper")?.connection_id);
+  const expressiveAvailable = Boolean(serviceOf(server, "voice")?.connection_id);
+  const pocketAvailable = Boolean(serviceOf(server, "tts")?.connection_id);
   const missing = [
     llm?.connection_id ? null : "language model",
     sttAvailable ? null : "speech-to-text",
-    serviceOf(server, "tts")?.connection_id ? null : "Pocket TTS",
+    expressiveAvailable || pocketAvailable ? null : "a voice",
   ].filter(Boolean);
   const own = new Set(server.services.map((s) => s.connection_id).filter(Boolean));
   const fallbacks = connectionsFor("llm", catalog.data, connections.data).filter((c) => !own.has(c.id) && !c.hosted_trial);
 
   const [model, setModel] = useState(models[0] ?? "");
   const [useLive, setUseLive] = useState(liveAvailable);
+  const [voice, setVoice] = useState<"expressive" | "pocket">(expressiveAvailable ? "expressive" : "pocket");
   const [fallbackId, setFallbackId] = useState("");
   const [fallbackModel, setFallbackModel] = useState("");
   const [delay, setDelay] = useState<number>(DEFAULT_FALLBACK_MS);
@@ -376,6 +379,7 @@ function UseServerDialog({ server, onClose }: { server: AiServer; onClose: () =>
           body: {
             llm_model: model.trim() || null,
             use_live_stt: liveAvailable && useLive,
+            voice: expressiveAvailable && pocketAvailable ? voice : null,
             fallback_llm_connection_id: fallbackId || null,
             fallback_llm_model: fallbackId ? fallbackModel.trim() || null : null,
             fallback_after_ms: delay,
@@ -395,7 +399,7 @@ function UseServerDialog({ server, onClose }: { server: AiServer; onClose: () =>
       open
       onOpenChange={(o) => !o && onClose()}
       title={`Use ${server.name} for this organization`}
-      description="New calls use this server's language model, speech-to-text and Pocket TTS. Agents with their own models keep them."
+      description="New calls use this server's language model, speech-to-text and voice. Agents with their own models keep them."
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
@@ -438,6 +442,14 @@ function UseServerDialog({ server, onClose }: { server: AiServer; onClose: () =>
               </label>
               <p className="pl-6 text-[12px] text-muted">Recognises the caller's words while they speak. Off: Whisper, which transcribes after the caller stops.</p>
             </div>
+          ) : null}
+          {expressiveAvailable && pocketAvailable ? (
+            <Field label="Voice" hint="The expressive voice laughs, sighs and gasps where it fits; Pocket TTS is lighter and runs on a CPU.">
+              <Select value={voice} onValueChange={(v) => setVoice(v as "expressive" | "pocket")}>
+                <SelectItem value="expressive">Expressive voice</SelectItem>
+                <SelectItem value="pocket">Pocket TTS</SelectItem>
+              </Select>
+            </Field>
           ) : null}
           <Field label="Fallback language model" hint="Answers a turn when this server gives no output in time or fails. Agents with their own language model do not use it." error={fieldError(use.error, "fallback_llm_connection_id")}>
             <Select value={fallbackId} onValueChange={setFallbackId} allowEmpty emptyLabel="None">

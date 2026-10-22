@@ -67,16 +67,22 @@ from app.services.runtime_accounts import runtime_client
 
 log = logging.getLogger(__name__)
 
-SERVICES: tuple[AiService, ...] = ("llm", "whisper", "tts", "live_stt")
+SERVICES: tuple[AiService, ...] = ("llm", "whisper", "tts", "voice", "live_stt")
 TITLES: dict[AiService, str] = {
     "llm": "Language model",
     "whisper": "Whisper",
     "tts": "Pocket TTS",  # "Pocket" in the name: voice cloning and the presets look for it
+    "voice": "Expressive voice",  # "expressive" in the name: voice cloning looks for it
     "live_stt": "Live speech",
 }
 # The OpenAI-compatible model servers, and where each one is behind the gateway.
-OPENAI_SERVICES: tuple[AiService, ...] = ("llm", "whisper", "tts")
-PATHS: dict[str, str] = {"llm": "/llm/v1", "whisper": "/whisper/v1", "tts": "/tts/v1"}
+OPENAI_SERVICES: tuple[AiService, ...] = ("llm", "whisper", "tts", "voice")
+PATHS: dict[str, str] = {
+    "llm": "/llm/v1",
+    "whisper": "/whisper/v1",
+    "tts": "/tts/v1",
+    "voice": "/voice/v1",
+}
 # The gateway gives each model server 3 seconds and asks them all at once.
 HEALTH_TIMEOUT = httpx.Timeout(8.0, connect=4.0)
 MONITOR_CONCURRENCY = 8
@@ -84,6 +90,9 @@ MONITOR_CONCURRENCY = 8
 LLM_TEMPERATURE = 0.3
 POCKET_MODEL = "pocket-tts"
 DEFAULT_POCKET_VOICE = "alba"
+# The expressive voice server (infra/docker/expressive-tts): one built-in voice, "default".
+EXPRESSIVE_MODEL = "chatterbox-turbo"
+DEFAULT_EXPRESSIVE_VOICE = "default"
 MAX_TEXT = 200
 MAX_ITEMS = 100
 
@@ -187,10 +196,10 @@ def _clean_service(raw: Any) -> dict[str, Any]:
     for key in ("latency_ms", "voices", "sessions", "max_sessions"):
         if (number := _count(raw.get(key))) is not None:
             out[key] = number
-    for key in ("version", "error", "default_voice", "cloning", "language", "model"):
+    for key in ("version", "error", "default_voice", "cloning", "language", "model", "device"):
         if (text := _text(raw.get(key))) is not None:
             out[key] = text
-    for key in ("models", "loaded"):
+    for key in ("models", "loaded", "sound_tags"):
         if (names := _names(raw.get(key))) is not None:
             out[key] = names
     return out
@@ -309,6 +318,7 @@ def _ids(server: AiServer) -> dict[AiService, str | None]:
         "llm": server.llm_connection_id,
         "whisper": server.whisper_connection_id,
         "tts": server.tts_connection_id,
+        "voice": server.voice_connection_id,
         "live_stt": server.live_stt_connection_id,
     }
 
@@ -364,6 +374,8 @@ def _out(server: AiServer) -> AiServerOut:
                 cloning=raw.get("cloning"),
                 sessions=raw.get("sessions"),
                 max_sessions=raw.get("max_sessions"),
+                device=raw.get("device"),
+                sound_tags=raw.get("sound_tags"),
                 connection_id=ids[name],
             )
         )
@@ -843,6 +855,8 @@ async def _voice(
     current: ModelSelection,
     tts_connection_id: str,
     default: str,
+    *,
+    expressive: bool = False,
 ) -> str:
     """The organization's current voice when this server has it, else the server's default."""
     from app.services.voice_cloning import (  # imports this module
@@ -863,6 +877,8 @@ async def _voice(
             )
         )
         return voice if owner_connection == tts_connection_id else default
+    if expressive:
+        return default  # its built-in voice is its own; Pocket TTS names mean nothing to it
     connections = {c.id: c for c in await ai_settings.list_connections(db, ctx)}
     in_use = connections.get(current.tts.connection_id)
     # Built-in voices are the same on every Pocket TTS server (an expressive one has others).
@@ -877,15 +893,27 @@ async def use(
     server = await _get(db, ctx, server_id)
     present = await _present_ids(db, ctx, server)
     health = _health(server)
-    llm_id, tts_id = present["llm"], present["tts"]
+    llm_id = present["llm"]
     stt_id = (present["live_stt"] if data.use_live_stt else None) or present["whisper"]
+    current = await ai_settings.get_selection(db, ctx)
+    kept_stt: ServiceChoice | None = None
+    if stt_id is None and current.stt is not None:
+        # A server that runs only a language model and a voice: speech-to-text stays as it is.
+        kept_stt, stt_id = current.stt, current.stt.connection_id
+    # The expressive voice when the server has one (or as asked), Pocket TTS otherwise.
+    if data.voice == "pocket":
+        tts_id, expressive, voice_label = present["tts"], False, "Pocket TTS"
+    elif data.voice == "expressive" or present["voice"]:
+        tts_id, expressive, voice_label = present["voice"], True, "the expressive voice"
+    else:
+        tts_id, expressive, voice_label = present["tts"], False, "a voice"
     if not (llm_id and stt_id and tts_id):
         missing = [
             label
             for label, connection_id in (
                 ("language model", llm_id),
                 ("speech-to-text", stt_id),
-                ("Pocket TTS", tts_id),
+                (voice_label, tts_id),
             )
             if not connection_id
         ]
@@ -905,7 +933,9 @@ async def use(
             f"This server does not offer {model}. It offers: {', '.join(llm_models[:10])}.",
             details={"field": "llm_model"},
         )
-    if stt_id == present["live_stt"]:
+    if kept_stt is not None:
+        stt = kept_stt
+    elif stt_id == present["live_stt"]:
         stt = ServiceChoice(
             connection_id=stt_id, settings={"model": STREAMING_STT_MODEL, "language": "en"}
         )
@@ -914,15 +944,16 @@ async def use(
         stt = ServiceChoice(
             connection_id=stt_id, settings={"model": _pick(whisper_models, SELF_HOSTED_STT_MODEL)}
         )
-    current = await ai_settings.get_selection(db, ctx)
-    tts_health = health.get("tts") or {}
-    voice = await _voice(
-        db, ctx, current, tts_id, tts_health.get("default_voice") or DEFAULT_POCKET_VOICE
-    )
-    tts = ServiceChoice(
-        connection_id=tts_id,
-        settings={"model": _pick(tts_health.get("models") or [], POCKET_MODEL), "voice": voice},
-    )
+    if expressive:
+        tts_health = health.get("voice") or {}
+        default_voice = tts_health.get("default_voice") or DEFAULT_EXPRESSIVE_VOICE
+        tts_model = _pick(tts_health.get("models") or [], EXPRESSIVE_MODEL)
+    else:
+        tts_health = health.get("tts") or {}
+        default_voice = tts_health.get("default_voice") or DEFAULT_POCKET_VOICE
+        tts_model = _pick(tts_health.get("models") or [], POCKET_MODEL)
+    voice = await _voice(db, ctx, current, tts_id, default_voice, expressive=expressive)
+    tts = ServiceChoice(connection_id=tts_id, settings={"model": tts_model, "voice": voice})
     llm = ServiceChoice(
         connection_id=llm_id, settings={"model": model, "temperature": LLM_TEMPERATURE}
     )
@@ -969,7 +1000,14 @@ async def use(
         resource_id=server.id,
         changes={
             "llm_model": model,
-            "speech_to_text": "live_stt" if stt_id == present["live_stt"] else "whisper",
+            "speech_to_text": (
+                "kept"
+                if kept_stt is not None
+                else "live_stt"
+                if stt_id == present["live_stt"]
+                else "whisper"
+            ),
+            "voice_server": "voice" if expressive else "tts",
             "voice": voice,
             "fallback": (
                 {"connection_id": fallback.connection_id, "after_ms": fallback.after_ms}
@@ -1134,10 +1172,17 @@ class Gateway:
 
 
 async def gateway_for(
-    db: AsyncSession, org_id: uuid.UUID, connection_id: str, service: Literal["llm", "tts"]
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    connection_id: str,
+    service: Literal["llm", "tts", "voice"],
 ) -> Gateway | None:
     """The registered AI server behind a connection ATLAS created for it, if any."""
-    column = AiServer.llm_connection_id if service == "llm" else AiServer.tts_connection_id
+    column = {
+        "llm": AiServer.llm_connection_id,
+        "tts": AiServer.tts_connection_id,
+        "voice": AiServer.voice_connection_id,
+    }[service]
     server = await db.scalar(
         select(AiServer).where(AiServer.organization_id == org_id, column == connection_id)
     )

@@ -182,6 +182,7 @@ describe("AI servers", () => {
     expect(await bodyOf(calls, "POST", "/api/v1/ai/servers/s1/use")).toEqual({
       llm_model: "llama3.2:3b",
       use_live_stt: false,
+      voice: null,
       fallback_llm_connection_id: "c-openai",
       fallback_llm_model: null,
       fallback_after_ms: 2500,

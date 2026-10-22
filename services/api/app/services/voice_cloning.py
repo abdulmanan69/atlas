@@ -188,9 +188,10 @@ async def _registered_server(
     db: AsyncSession, org_id: uuid.UUID, conn: ConnectionOut
 ) -> ai_servers.Gateway | None:
     """The AI server behind a connection: one ATLAS created, or one at its address."""
-    gateway = await ai_servers.gateway_for(db, org_id, conn.id, "tts")
-    if gateway is not None:
-        return gateway
+    for service in ("tts", "voice"):
+        gateway = await ai_servers.gateway_for(db, org_id, conn.id, service)
+        if gateway is not None:
+            return gateway
     url = _normalised(str(conn.connection_settings.get("base_url") or ""))
     if not url:
         return None

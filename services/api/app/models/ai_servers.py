@@ -48,6 +48,7 @@ class AiServer(UUIDPrimaryKey, Timestamps, TenantScoped, Base):
     llm_connection_id: Mapped[str | None] = mapped_column(String(64))
     whisper_connection_id: Mapped[str | None] = mapped_column(String(64))
     tts_connection_id: Mapped[str | None] = mapped_column(String(64))
+    voice_connection_id: Mapped[str | None] = mapped_column(String(64))
     live_stt_connection_id: Mapped[str | None] = mapped_column(String(64))
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")

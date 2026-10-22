@@ -53,6 +53,10 @@ export function serviceSummary(s: AiServerService): string {
   if (s.state === "not_offered") return "Not offered by this server";
   const parts = [...(s.models ?? [])];
   if (s.service === "tts" && s.voices != null) parts.push(`${s.voices} voices`);
+  if (s.service === "voice") {
+    if (s.device) parts.push(s.device === "cuda" ? "GPU" : s.device);
+    if (s.sound_tags?.length) parts.push(s.sound_tags.map((t) => `[${t}]`).join(" "));
+  }
   if (s.service === "live_stt" && s.max_sessions != null) parts.push(`${s.sessions ?? 0} of ${s.max_sessions} calls`);
   return parts.join(" · ") || "No models listed";
 }

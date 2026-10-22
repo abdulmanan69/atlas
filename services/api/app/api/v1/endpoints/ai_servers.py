@@ -50,8 +50,9 @@ async def list_servers(ctx: AgentsManage, db: DB) -> list[AiServerOut]:
     description=(
         "Checks `GET {url}/health` with the token, then creates a model connection for each "
         "service the server reports as up: '<name> · Language model' (`{url}/llm/v1`), "
-        "'<name> · Whisper' (`{url}/whisper/v1`) and '<name> · Pocket TTS' (`{url}/tts/v1`), "
-        "self-hosted connections that send the token as their API key. Live speech-to-text "
+        "'<name> · Whisper' (`{url}/whisper/v1`), '<name> · Pocket TTS' (`{url}/tts/v1`) and "
+        "'<name> · Expressive voice' (`{url}/voice/v1`, a GPU server's voice that laughs and "
+        "sighs), self-hosted connections that send the token as their API key. Live speech-to-text "
         "becomes '<name> · Live speech', a Deepgram connection with the base URL "
         "`{url}/live-stt/<secret>`, when the server offers it and both `live_stt_secret` and "
         "`deepgram_key` are given: the voice service checks every Deepgram connection's key "
@@ -90,7 +91,7 @@ async def get_server(server_id: ServerId, ctx: AgentsManage, db: DB) -> AiServer
     summary="Check the server now",
     description=(
         "Asks the server's /health and stores its status, round-trip time and services. "
-        "A language model, Whisper or Pocket TTS that was down when the server was "
+        "A language model, Whisper or voice that was down when the server was "
         "registered gets its connection now if it is up. Servers are also checked every "
         "two minutes; a change of status is recorded in the audit log."
     ),
@@ -126,7 +127,9 @@ async def update_server(
         "Sets the organization's models to this server's connections: its language model "
         "(`llm_model`, default the first model it lists) at temperature 0.3, live "
         "speech-to-text when it has a live speech connection and `use_live_stt` is true "
-        "(otherwise Whisper), and Pocket TTS with the organization's current voice when this "
+        "(otherwise Whisper; a server without speech-to-text keeps the organization's current "
+        "one), and its expressive voice when it has one, else Pocket TTS "
+        "(`voice` chooses when it has both), with the organization's current voice when this "
         "server has it (otherwise the server's default voice). Knowledge search is kept. "
         "With `fallback_llm_connection_id`, another language model answers a turn when this "
         "server has given no output after `fallback_after_ms` (default 2500) or fails; without "

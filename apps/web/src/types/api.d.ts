@@ -753,7 +753,7 @@ export interface paths {
         put?: never;
         /**
          * Register an AI server and create its model connections
-         * @description Checks `GET {url}/health` with the token, then creates a model connection for each service the server reports as up: '<name> · Language model' (`{url}/llm/v1`), '<name> · Whisper' (`{url}/whisper/v1`) and '<name> · Pocket TTS' (`{url}/tts/v1`), self-hosted connections that send the token as their API key. Live speech-to-text becomes '<name> · Live speech', a Deepgram connection with the base URL `{url}/live-stt/<secret>`, when the server offers it and both `live_stt_secret` and `deepgram_key` are given: the voice service checks every Deepgram connection's key with Deepgram's cloud when the connection is saved, whatever its address, so a real Deepgram key is needed once; no audio goes to Deepgram. `setup` says, per service, which connection was created or why none was. The address must use https, unless the operator allows private model addresses (ATLAS_ALLOW_PRIVATE_MODEL_URLS) and the server is on a private network. The token, the live speech-to-text secret and the Deepgram key are never returned, logged or recorded in the audit log.
+         * @description Checks `GET {url}/health` with the token, then creates a model connection for each service the server reports as up: '<name> · Language model' (`{url}/llm/v1`), '<name> · Whisper' (`{url}/whisper/v1`), '<name> · Pocket TTS' (`{url}/tts/v1`) and '<name> · Expressive voice' (`{url}/voice/v1`, a GPU server's voice that laughs and sighs), self-hosted connections that send the token as their API key. Live speech-to-text becomes '<name> · Live speech', a Deepgram connection with the base URL `{url}/live-stt/<secret>`, when the server offers it and both `live_stt_secret` and `deepgram_key` are given: the voice service checks every Deepgram connection's key with Deepgram's cloud when the connection is saved, whatever its address, so a real Deepgram key is needed once; no audio goes to Deepgram. `setup` says, per service, which connection was created or why none was. The address must use https, unless the operator allows private model addresses (ATLAS_ALLOW_PRIVATE_MODEL_URLS) and the server is on a private network. The token, the live speech-to-text secret and the Deepgram key are never returned, logged or recorded in the audit log.
          */
         post: operations["register_server_api_v1_ai_servers_post"];
         delete?: never;
@@ -798,7 +798,7 @@ export interface paths {
         put?: never;
         /**
          * Check the server now
-         * @description Asks the server's /health and stores its status, round-trip time and services. A language model, Whisper or Pocket TTS that was down when the server was registered gets its connection now if it is up. Servers are also checked every two minutes; a change of status is recorded in the audit log.
+         * @description Asks the server's /health and stores its status, round-trip time and services. A language model, Whisper or voice that was down when the server was registered gets its connection now if it is up. Servers are also checked every two minutes; a change of status is recorded in the audit log.
          */
         post: operations["check_server_api_v1_ai_servers__server_id__check_post"];
         delete?: never;
@@ -818,7 +818,7 @@ export interface paths {
         put?: never;
         /**
          * Use this server for the organization's calls
-         * @description Sets the organization's models to this server's connections: its language model (`llm_model`, default the first model it lists) at temperature 0.3, live speech-to-text when it has a live speech connection and `use_live_stt` is true (otherwise Whisper), and Pocket TTS with the organization's current voice when this server has it (otherwise the server's default voice). Knowledge search is kept. With `fallback_llm_connection_id`, another language model answers a turn when this server has given no output after `fallback_after_ms` (default 2500) or fails; without it, any fallback is removed. Agents with their own models keep them; an agent with its own language model does not use the fallback.
+         * @description Sets the organization's models to this server's connections: its language model (`llm_model`, default the first model it lists) at temperature 0.3, live speech-to-text when it has a live speech connection and `use_live_stt` is true (otherwise Whisper), and its expressive voice when it has one, else Pocket TTS (`voice` chooses when it has both), with the organization's current voice when this server has it (otherwise the server's default voice). Knowledge search is kept. With `fallback_llm_connection_id`, another language model answers a turn when this server has given no output after `fallback_after_ms` (default 2500) or fails; without it, any fallback is removed. Agents with their own models keep them; an agent with its own language model does not use the fallback.
          */
         post: operations["use_server_api_v1_ai_servers__server_id__use_post"];
         delete?: never;
@@ -2895,6 +2895,11 @@ export interface components {
             /** Default Voice */
             default_voice?: string | null;
             /**
+             * Device
+             * @description Where the expressive voice runs: cuda or cpu
+             */
+            device?: string | null;
+            /**
              * Error
              * @description timeout, refused, unreachable, HTTP <code> or invalid response
              */
@@ -2914,9 +2919,14 @@ export interface components {
              * Service
              * @enum {string}
              */
-            service: "llm" | "whisper" | "tts" | "live_stt";
+            service: "llm" | "whisper" | "tts" | "voice" | "live_stt";
             /** Sessions */
             sessions?: number | null;
+            /**
+             * Sound Tags
+             * @description Sounds the expressive voice performs when a reply carries them as tags
+             */
+            sound_tags?: string[] | null;
             /**
              * State
              * @description 'not_offered': the server does not run it; 'loading': starting its model
@@ -2949,7 +2959,7 @@ export interface components {
              * Service
              * @enum {string}
              */
-            service: "llm" | "whisper" | "tts" | "live_stt";
+            service: "llm" | "whisper" | "tts" | "voice" | "live_stt";
         };
         /** AiServerUpdate */
         AiServerUpdate: {
@@ -3000,6 +3010,11 @@ export interface components {
              * @default true
              */
             use_live_stt?: boolean;
+            /**
+             * Voice
+             * @description Which voice server to use when this server runs both: the expressive voice (laughs and sighs; needs a GPU) or Pocket TTS. Default: the expressive voice when it has a connection, else Pocket TTS
+             */
+            voice?: ("expressive" | "pocket") | null;
         };
         /**
          * AmbientSettings
