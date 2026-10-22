@@ -234,6 +234,7 @@ def unpack(name):
 
 
 def uv_path():
+    """Installed once, before the installs run side by side (two pip runs at once collide)."""
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "uv"], check=True)
     return shutil.which("uv") or os.path.join(os.path.dirname(sys.executable), "uv")
 
@@ -270,7 +271,7 @@ def install_voice():
         srv = unpack("voice")
         venv = os.path.join(WORK, "voice", "venv")
         py = os.path.join(venv, "bin", "python")
-        uv = uv_path()
+        uv = setup["uv"]
         env = dict(os.environ, UV_HTTP_TIMEOUT="600", UV_LINK_MODE="copy")
         subprocess.run([uv, "venv", "-q", venv, "--python", sys.executable, "--seed"], check=True, env=env)
         subprocess.run([uv, "pip", "install", "-q", "--python", py, "--no-deps", "-r",
@@ -304,7 +305,7 @@ def install_stt():
         srv = unpack("stt")
         venv = os.path.join(WORK, "stt", "venv")
         py = os.path.join(venv, "bin", "python")
-        uv = uv_path()
+        uv = setup["uv"]
         env = dict(os.environ, UV_HTTP_TIMEOUT="600", UV_LINK_MODE="copy")
         subprocess.run([uv, "venv", "-q", "-p", "3.12", venv], check=True, env=env)
         subprocess.run([uv, "pip", "install", "-q", "-p", py, "-r", os.path.join(srv, "requirements.gpu.txt")],
@@ -337,6 +338,8 @@ print("GPU:", gpu or "none", flush=True)
 if not gpu:
     fail("no GPU in this session (accelerator not granted)")
 installs = []
+if VOICE or STT:
+    setup["uv"] = uv_path()
 if VOICE:
     installs.append(threading.Thread(target=install_voice, daemon=True))
 if STT:
