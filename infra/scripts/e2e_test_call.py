@@ -554,10 +554,17 @@ class AgentListener:
         segs = [s for s in self.segments if s["start"] >= t]
         if self.cur is not None and self.cur["start"] >= t:
             segs.append(self.cur)
-        elif not segs and self.cur is not None and self._mark == t and self._mark_hit is not None:
-            # Faint sound before t ran straight into the reply: the reply starts where the
-            # first voiced frame after t was heard.
-            segs.append({**self.cur, "start": self._mark_hit})
+        if self._mark == t and self._mark_hit is not None:
+            # Faint sound before t (the ambience, the tail of a sound cue) ran straight into
+            # the reply, open or already closed: the reply starts where the first voiced
+            # frame after t was heard.
+            candidates = list(self.segments) + ([self.cur] if self.cur is not None else [])
+            straddler = next(
+                (s for s in candidates if s["start"] < t <= s["last_voiced"] and s["last_voiced"] >= self._mark_hit),
+                None,
+            )
+            if straddler is not None:
+                segs.insert(0, {**straddler, "start": self._mark_hit})
         return segs
 
     def overlapping(self, t0: float, t1: float) -> bool:

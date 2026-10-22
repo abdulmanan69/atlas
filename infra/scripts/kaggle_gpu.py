@@ -295,7 +295,11 @@ def stt_env():
     return clean_env(VIRTUAL_ENV=venv, PATH=os.path.join(venv, "bin") + os.pathsep + os.environ.get("PATH", ""),
                      LD_LIBRARY_PATH=":".join(libs + [os.environ.get("LD_LIBRARY_PATH", "")]),
                      STT_MODEL_DIR=os.path.join(WORK, "stt", "models"), STT_MODEL="parakeet-0.6b-v3",
-                     STT_PROVIDER="cuda", STT_MAX_SESSIONS="8", PORT=str(STT_PORT), LOG_LEVEL="INFO")
+                     STT_PROVIDER="cuda", STT_MAX_SESSIONS="8", PORT=str(STT_PORT), LOG_LEVEL="INFO",
+                     # Words the model is unsure of are dropped (the image's default for this model
+                     # is 0): in test calls it heard "Yeah." in the silence after some lines, which
+                     # held the caller's turn open for seconds.
+                     STT_MIN_CONFIDENCE="0.5")
 
 
 def install_stt():
