@@ -49,7 +49,7 @@ KERNEL_SLUG = "atlas-gpu-llm"
 CONNECTION_NAME = "GPU test (Kaggle)"
 DEMO_EMAIL = "demo@example.com"
 DEMO_ORG_NAME = "Demo Realty (demo data)"
-DEFAULT_MODELS = ["qwen2.5:7b", "qwen2.5:1.5b"]
+DEFAULT_MODELS = ["qwen3:8b", "qwen2.5:7b"]
 URL_LINE = re.compile(r"ATLAS_GPU_URL=(https://[a-z0-9-]+\.trycloudflare\.com)")
 FAILED_LINE = re.compile(r"ATLAS_GPU_FAILED: ([^\"\\]*)")
 
@@ -96,6 +96,16 @@ async def handle(req):
         return web.json_response({"error": "not found"}, status=404)
     served["requests"] += 1
     body = await req.read()
+    # qwen3 thinks before answering unless asked not to, and the voice service cannot send
+    # that field: add it here for chat requests to qwen3 models.
+    if req.path.endswith("/chat/completions") and body:
+        try:
+            payload = json.loads(body)
+            if str(payload.get("model", "")).startswith("qwen3") and "reasoning_effort" not in payload:
+                payload["reasoning_effort"] = "none"
+                body = json.dumps(payload).encode()
+        except ValueError:
+            pass
     headers = {k: v for k, v in req.headers.items() if k.lower() not in DROP}
     async with req.app["s"].request(req.method, UP + req.path_qs, data=body, headers=headers) as up:
         resp = web.StreamResponse(
@@ -411,6 +421,10 @@ def connect(state: dict[str, Any], api_base: str, password: str, model: str) -> 
         if previous and previous.get("connection_id") == conn["id"]:
             previous = None  # left over from an earlier session that was not stopped
     selection["llm"] = {"connection_id": conn["id"], "settings": {"model": model, "temperature": 0.3}}
+    if previous and previous.get("connection_id") and previous["connection_id"] != conn["id"]:
+        # If the Kaggle session ends or stalls, the model chosen before answers instead.
+        selection["llm_fallback"] = {"connection_id": previous["connection_id"],
+                                     "settings": previous.get("settings") or {}, "after_ms": 3000, "on_error": True}
     atlas.call("PUT", "/ai/models", selection)
     state["connected"][api_base] = {"connection_id": conn["id"], "previous_llm": previous, "model": model}
     save_state(state)
@@ -424,6 +438,7 @@ def disconnect(api_base: str, info: dict[str, Any], password: str) -> None:
     selection = atlas.call("GET", "/ai/models")
     if info.get("previous_llm"):
         selection["llm"] = info["previous_llm"]
+        selection["llm_fallback"] = None  # it pointed at the model that is now the main one again
         atlas.call("PUT", "/ai/models", selection)
         say(f"{api_base}: language model put back")
     elif (selection.get("llm") or {}).get("connection_id") == info["connection_id"]:
