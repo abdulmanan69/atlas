@@ -43,6 +43,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app as server  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+# Voices get their kept phrases in the background only in the test that checks it.
+server.PHRASE_CACHE_ANY_VOICE = False
+
 
 class FakeModel:
     """Stands in for TTSModel: records prompts and returns a small, real-shaped state."""
@@ -422,6 +425,33 @@ class PhraseCacheTest(unittest.TestCase):
         stats = self.client.get("/v1/audio/phrase-cache").json()
         self.assertEqual((stats["hits"], stats["misses"], stats["entries"]), (1, 1, 1))
         self.assertNotIn("sure", json.dumps(stats).lower())
+
+    def test_emoji_are_not_read_out(self) -> None:
+        self.assertEqual(server.strip_sound_cues("Have a great day! 🚗💨"), "Have a great day!")
+        self.assertEqual(server.strip_sound_cues("Done ✅ thanks"), "Done thanks")
+        self.assertEqual(server.strip_sound_cues("No emoji here."), "No emoji here.")
+
+    def test_a_new_voice_gets_the_kept_phrases_in_the_background(self) -> None:
+        saved = (server.PHRASE_CACHE_ANY_VOICE, server.CACHED_PHRASES, set(server._phrase_voices_made))
+        try:
+            server.PHRASE_CACHE_ANY_VOICE = True
+            server.CACHED_PHRASES = ["Oh nice!"]
+            server._phrase_voices_made.clear()
+            self.assertEqual(self.speak("Hello there.", voice="marius").status_code, 200)
+            for thread in server._phrase_threads:
+                thread.join(timeout=5)
+            r = self.speak("Oh nice, a Civic!", voice="marius")
+            self.assertEqual(r.headers["x-phrase-cache"], "opener")
+            self.assertIn("marius", server._phrase_voices_made)
+            calls = self.model.calls
+            self.speak("Second request.", voice="marius")  # no second batch for the same voice
+            for thread in server._phrase_threads:
+                thread.join(timeout=5)
+            self.assertEqual(self.model.calls, calls + 1)
+        finally:
+            server.PHRASE_CACHE_ANY_VOICE, server.CACHED_PHRASES = saved[0], saved[1]
+            server._phrase_voices_made.clear()
+            server._phrase_voices_made.update(saved[2])
 
     def test_sound_cues_are_removed_not_read_out(self) -> None:
         cases = {

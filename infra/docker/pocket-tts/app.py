@@ -237,10 +237,12 @@ MAX_METADATA_BYTES = 16 * 1024
 # every reply with one of these, so its first words come from memory instead of the model.
 # The list also holds the openers qwen2.5:1.5b picks on its own most often ("Perfect.",
 # "Of course.", "You're welcome.", "Certainly.", "Absolutely."), seen in test calls.
+# Friendly agents vary their reactions ("Oh nice!", "Ha, fair enough."), so those are kept too.
 DEFAULT_CACHED_PHRASES = (
     "Got it.", "Okay.", "Sure.", "Great.", "Alright.", "Perfect.", "Of course.", "I see.",
     "Understood.", "That makes sense.", "No problem.", "Thanks.", "You're welcome.",
-    "Certainly.", "Absolutely.",
+    "Certainly.", "Absolutely.", "Oh nice!", "Oh great!", "Love that.", "Ha, fair enough.",
+    "Gotcha.", "Oh, great choice!", "Awesome.", "Nice!", "Cool.", "Sounds good.", "Oh, wow!",
 )
 _phrases_env = os.environ.get("POCKET_TTS_PHRASE_CACHE")
 CACHED_PHRASES: list[str] = (
@@ -255,6 +257,9 @@ PHRASE_CACHE_VOICES: list[str] = (
     else [DEFAULT_VOICE]
 )
 PHRASE_CACHE_MAX_CHARS = int(os.environ.get("POCKET_TTS_PHRASE_CACHE_MAX_CHARS", "32"))
+# Any other voice (a cloned one too) gets the same phrases made in the background the first
+# time it speaks, so its replies also open from memory; "false" = only the voices above.
+PHRASE_CACHE_ANY_VOICE = os.environ.get("POCKET_TTS_PHRASE_CACHE_ANY_VOICE", "true").lower() != "false"
 PHRASE_CACHE_BYTES = int(float(os.environ.get("POCKET_TTS_PHRASE_CACHE_MB", "16")) * 1024 * 1024)
 
 _model: TTSModel | None = None
@@ -799,8 +804,16 @@ _SOUND_CUE = re.compile(
 _SPACE_BEFORE_MARK = re.compile(r"\s+([,.!?;:])")
 
 
+# Emoji and pictographs a language model may add (a car or a smiley after "Have a great day!"): nothing to say.
+_EMOJI = re.compile(
+    "[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u200D\uFE0F]+"
+)
+
+
 def strip_sound_cues(text: str) -> str:
-    """The text without sound cues such as "[laugh]", which this voice would read out."""
+    """The text without sound cues such as "[laugh]" and emoji, which this voice would read out."""
+    if _EMOJI.search(text):
+        text = " ".join(_EMOJI.sub(" ", text).split())
     if "[" not in text:
         return text
     stripped, count = _SOUND_CUE.subn(" ", text)
@@ -1021,12 +1034,39 @@ def _phrase_voices() -> list[str]:
     return voices
 
 
+# Voices whose phrases are made (or being made); see ensure_phrases.
+_phrase_voices_made: set[str] = set()
+_phrase_threads: list[threading.Thread] = []
+
+
+def ensure_phrases(voice: str) -> None:
+    """Make the kept phrases for a voice the first time it speaks (in the background: each
+    phrase waits for the synthesis lock like a request, so live speech keeps its turn)."""
+    if not PHRASE_CACHE_ANY_VOICE or not CACHED_PHRASES or voice in _phrase_voices_made:
+        return
+    _phrase_voices_made.add(voice)
+    cache = _phrase_cache
+
+    def make() -> None:
+        try:
+            prewarm_phrases(CACHED_PHRASES, [voice], cache)
+        except Exception:  # a voice deleted meanwhile, or the model reloading
+            logger.warning("Kept phrases for a voice could not be made", exc_info=True)
+            _phrase_voices_made.discard(voice)
+
+    thread = threading.Thread(target=make, daemon=True)
+    _phrase_threads.append(thread)
+    thread.start()
+
+
 def rebuild_phrase_cache() -> None:
     """Make the startup phrases again with the current weights, then use that cache (the old
     one answers meanwhile; one phrase at a time waits for the synthesis lock like a request)."""
     global _phrase_cache
     fresh = PhraseCache(PHRASE_CACHE_BYTES, PHRASE_CACHE_MAX_CHARS)
-    prewarm_phrases(CACHED_PHRASES, _phrase_voices(), fresh)
+    voices = _phrase_voices()
+    voices += [v for v in sorted(_phrase_voices_made) if v not in voices and (v in ALLOWED_VOICES or v in _custom_voices)]
+    prewarm_phrases(CACHED_PHRASES, voices, fresh)
     _phrase_cache = fresh
 
 
@@ -1101,6 +1141,7 @@ async def lifespan(_: FastAPI):
         for _ in _pcm_chunks("Hello there.", DEFAULT_VOICE, threading.Event()):
             pass
     prewarm_phrases(CACHED_PHRASES, _phrase_voices())
+    _phrase_voices_made.update(_phrase_voices())
     logger.info(
         "Pocket TTS ready in %.1fs (language=%s, torch threads=%d)",
         time.perf_counter() - started, LANGUAGE, torch.get_num_threads(),
@@ -1379,6 +1420,7 @@ async def speech(
         raise HTTPException(status_code=400, detail="Input text is empty")
     text = strip_sound_cues(body.input.strip())
     media_type = "audio/wav" if body.response_format == "wav" else "audio/pcm"
+    ensure_phrases(voice)
     if not text:
         # Only sound cues ("[laugh]"): nothing this voice can say.
         async def nothing() -> AsyncIterator[bytes]:
