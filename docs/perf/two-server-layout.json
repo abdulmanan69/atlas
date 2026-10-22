@@ -1,0 +1,38 @@
+{
+ "measured": "2026-10-22",
+ "layout": "app + voice service on the dev PC (Lahore, Pakistan) | models on the Oracle server (us-ashburn-1) behind the AI gateway, registered as an AI server (ADR 0007)",
+ "how": "infra/scripts/e2e_test_call.py, 3 calls x 4 caller lines, local voice service; STT live (Parakeet 110M), qwen2.5:1.5b temperature 0.3, Pocket TTS, all through https://ai.<ip>.sslip.io; fallback language model on the PC after 2500 ms (not triggered)",
+ "runs_passed": "3/3",
+ "gateway_health_round_trip_ms": 784,
+ "reply_heard_ms": {
+  "p50": 4104,
+  "min": 3501,
+  "max": 5557,
+  "n": 12
+ },
+ "voice_service_response_ms": {
+  "p50": 3908,
+  "min": 3294,
+  "max": 5335,
+  "n": 12
+ },
+ "stt_first_byte_ms": {
+  "p50": 679,
+  "min": 604,
+  "max": 859,
+  "n": 12
+ },
+ "llm_first_byte_ms": {
+  "p50": 1662,
+  "min": 1353,
+  "max": 2377,
+  "n": 12
+ },
+ "tts_first_byte_ms": {
+  "p50": 994,
+  "min": 904,
+  "max": 1220,
+  "n": 12
+ },
+ "same_stack_on_one_server_reply_heard_p50_ms": 1939
+}
