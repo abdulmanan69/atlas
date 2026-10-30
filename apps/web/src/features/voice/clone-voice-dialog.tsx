@@ -1,7 +1,9 @@
 /**
- * "Clone a voice" for Pocket TTS connections: name, a 5-30 s sample (upload or record),
- * and the speaker's permission. When voice cloning is not on for the server yet, the dialog
- * first shows the step that turns it on (owners), then the form.
+ * "Clone a voice" for Pocket TTS connections: name, a 5-75 s sample (upload or record),
+ * and the speaker's permission. As soon as a sample is ready the API measures it (clipping,
+ * noise, silence, level) and the findings are shown: a problem blocks the clone, warnings
+ * don't. When voice cloning is not on for the server yet, the dialog first shows the step
+ * that turns it on (owners), then the form.
  */
 import { useMutation } from "@tanstack/react-query";
 import { CloudUpload, FileAudio, Loader2, Pause, Play, ShieldCheck, X } from "lucide-react";
@@ -14,7 +16,16 @@ import { Field, FormError } from "@/components/ui/form";
 import { Checkbox, Input, Skeleton } from "@/components/ui/primitives";
 import { Segmented } from "@/components/ui/segmented";
 import { useInvalidate } from "@/features/queries";
-import { CONSENT_ATTESTATION, cloneVoice, cloningUnavailable, type PocketVoice } from "@/features/voice/voice-cloning";
+import {
+  CONSENT_ATTESTATION,
+  checkVoiceSample,
+  cloneVoice,
+  cloningUnavailable,
+  refusedFindings,
+  type PocketVoice,
+  type QualityFinding,
+  type SampleCheck,
+} from "@/features/voice/voice-cloning";
 import { VoiceCloningSetup } from "@/features/voice/voice-cloning-setup";
 import {
   formatSeconds,
@@ -22,16 +33,22 @@ import {
   SAMPLE_ACCEPT,
   toVoiceSample,
   validateClone,
+  validateDuration,
   validateSampleFile,
   type CloneErrors,
   type VoiceSample,
 } from "@/features/voice/voice-sample";
-import { errorMessage } from "@/lib/api";
+import { ApiError, errorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const VoiceRecorder = lazy(() => import("@/features/voice/voice-recorder"));
 
 type Source = "upload" | "record";
+
+/** The API's look at the sample: not asked yet, in progress, its findings, or not reachable. */
+type Check = { state: "idle" } | { state: "checking" } | { state: "done"; result: SampleCheck } | { state: "failed" };
+
+const CHECK_FAILED = "The recording couldn't be checked right now. You can still clone it; the server checks it again.";
 
 export function CloneVoiceDialog({
   open,
@@ -54,6 +71,8 @@ export function CloneVoiceDialog({
   const [sample, setSample] = useState<VoiceSample | null>(null);
   const [sampleError, setSampleError] = useState<string | null>(null);
   const [preparing, setPreparing] = useState(false);
+  const [check, setCheck] = useState<Check>({ state: "idle" });
+  const checkRun = useRef(0); // a later sample makes an earlier check's answer stale
   const [consent, setConsent] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
@@ -80,13 +99,48 @@ export function CloneVoiceDialog({
   }, [resetCreate, invalidate, connectionId]);
   const errors: CloneErrors = submitted ? validateClone({ name, consent, sample }) : {};
   const sampleProblem = sampleError ?? errors.sample;
+  const blocked = check.state === "done" && check.result.findings.some((f) => f.level === "problem");
+  const refused = refusedFindings(create.error);
+
+  const clearSample = () => {
+    checkRun.current += 1;
+    setSample(null);
+    setSampleError(null);
+    setCheck({ state: "idle" });
+  };
+
+  const runCheck = async (audio: Blob, filename: string) => {
+    const run = ++checkRun.current;
+    setCheck({ state: "checking" });
+    try {
+      const result = await checkVoiceSample(connectionId, audio, filename);
+      if (run === checkRun.current) setCheck({ state: "done", result });
+    } catch (e) {
+      if (run !== checkRun.current) return;
+      if (e instanceof ApiError && e.status < 500) {
+        // Unreadable, too short or too long: the clone would be refused the same way.
+        setSample(null);
+        setSampleError(e.message);
+        setCheck({ state: "idle" });
+      } else {
+        setCheck({ state: "failed" });
+      }
+    }
+  };
 
   const loadBlob = async (blob: Blob, from: VoiceSample["source"], label: string) => {
     setPreparing(true);
     setSampleError(null);
+    setCheck({ state: "idle" });
     create.reset();
     try {
-      setSample(await toVoiceSample(blob, from, label));
+      const prepared = await toVoiceSample(blob, from, label);
+      setSample(prepared);
+      // An uploaded file goes as it is, so the API sees its rate, channels and format; a
+      // recording goes as the WAV that would be cloned.
+      if (validateDuration(prepared.seconds) === null) {
+        void runCheck(from === "upload" ? blob : prepared.wav, from === "upload" ? label : "recording.wav");
+      }
     } catch (e) {
       setSample(null);
       setSampleError(e instanceof Error ? e.message : "The sample couldn't be read.");
@@ -99,7 +153,7 @@ export function CloneVoiceDialog({
     if (!file) return;
     const problem = validateSampleFile(file);
     if (problem) {
-      setSample(null);
+      clearSample();
       setSampleError(problem);
       return;
     }
@@ -108,7 +162,7 @@ export function CloneVoiceDialog({
 
   const submit = () => {
     setSubmitted(true);
-    if (preparing || sampleError) return;
+    if (preparing || sampleError || check.state === "checking" || blocked) return;
     if (Object.keys(validateClone({ name, consent, sample })).length) return;
     create.mutate();
   };
@@ -128,7 +182,7 @@ export function CloneVoiceDialog({
             <Button onClick={() => onOpenChange(false)} disabled={create.isPending}>
               Cancel
             </Button>
-            <Button variant="primary" onClick={submit} loading={create.isPending} disabled={preparing}>
+            <Button variant="primary" onClick={submit} loading={create.isPending} disabled={preparing || check.state === "checking" || blocked}>
               {create.isPending ? "Cloning…" : "Clone voice"}
             </Button>
           </>
@@ -140,6 +194,7 @@ export function CloneVoiceDialog({
       ) : (
         <div className="flex flex-col gap-4">
           {create.error ? <FormError message={errorMessage(create.error)} /> : null}
+          {refused ? <QualityReport findings={refused} /> : null}
           <Field label="Name" required error={errors.name} hint="Shown in voice pickers, for example “Sarah (front desk)”.">
             <Input value={name} maxLength={MAX_NAME_CHARS + 20} onChange={(e) => setName(e.target.value)} placeholder="Voice name" autoComplete="off" />
           </Field>
@@ -172,21 +227,35 @@ export function CloneVoiceDialog({
                 <Loader2 className="size-3.5 animate-spin" aria-hidden /> Preparing the sample…
               </p>
             ) : sample ? (
-              <SamplePreview
-                sample={sample}
-                onRemove={() => {
-                  setSample(null);
-                  setSampleError(null);
-                }}
-              />
+              <SamplePreview sample={sample} onRemove={clearSample} />
+            ) : null}
+            {check.state === "checking" ? (
+              <p role="status" className="flex items-center gap-2 text-[12.5px] text-muted">
+                <Loader2 className="size-3.5 animate-spin" aria-hidden /> Checking the recording…
+              </p>
+            ) : check.state === "done" ? (
+              <QualityReport score={check.result.score} findings={check.result.findings} />
+            ) : check.state === "failed" ? (
+              <p role="status" className="text-[12px] text-muted">
+                {CHECK_FAILED}
+              </p>
             ) : null}
             {sampleProblem ? (
               <p role="alert" className="text-[12px] text-danger">
                 {sampleProblem}
               </p>
             ) : (
-              <p className="text-[12px] text-muted">5 to 30 seconds of one person speaking clearly, without music or other voices. WAV, MP3, M4A, OGG, WebM or FLAC, up to 10 MB.</p>
+              <p className="text-[12px] text-muted">5 to 75 seconds of one person speaking. WAV, MP3, M4A, OGG, WebM or FLAC, up to 10 MB.</p>
             )}
+            <div className="rounded-md bg-surface-2/50 px-3 py-2 text-[12px] text-muted">
+              <p className="font-medium text-ink-2">What makes a good recording</p>
+              <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                <li>One person, close to the microphone, in a quiet room: no music, no other voices.</li>
+                <li>A steady level that never clips, and 10 to 20 seconds of speech without long pauses.</li>
+                <li>Room echo and a flat, read-aloud delivery carry into the clone; natural speech works best.</li>
+                <li>The original file where there is one (WAV or FLAC, 16 kHz or more). Up to 75 seconds: the clearest 10 to 15 are used.</li>
+              </ul>
+            </div>
           </div>
 
           <div className={cn("flex flex-col gap-3 rounded-lg border px-3 py-3", errors.consent ? "border-danger/40 bg-danger-soft/40" : "border-line bg-surface-2/50")}>
@@ -212,6 +281,50 @@ export function CloneVoiceDialog({
         </div>
       )}
     </Dialog>
+  );
+}
+
+const DOT: Record<QualityFinding["level"], string> = { ok: "bg-success", warning: "bg-warn", problem: "bg-danger" };
+const LEVEL: Record<QualityFinding["level"], string> = { ok: "Note", warning: "Warning", problem: "Problem" };
+
+/** The API's findings about the sample, a dot per level; the score when it was a check. */
+function QualityReport({ score, findings }: { score?: number; findings: QualityFinding[] }) {
+  const problem = findings.some((f) => f.level === "problem");
+  return (
+    <div role="group" aria-label="Recording quality" className="flex flex-col gap-1.5 rounded-md border border-line bg-surface px-3 py-2">
+      <div className="flex items-center justify-between gap-3 text-[12.5px]">
+        <span className="font-medium text-ink-2">Recording quality</span>
+        {score !== undefined ? (
+          <span className="font-mono text-[12px] text-muted" aria-label={`Score ${score} out of 100`}>
+            {score}/100
+          </span>
+        ) : null}
+      </div>
+      {findings.length === 0 ? (
+        <p className="flex items-center gap-2 text-[12.5px] text-ink-2">
+          <Dot level="ok" /> Nothing to report: a clean recording.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {findings.map((f) => (
+            <li key={f.code} className="flex items-start gap-2 text-[12.5px] text-ink-2">
+              <Dot level={f.level} />
+              <span>{f.message}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {problem ? <p className="text-[12px] text-danger">Fix the problems above and add the recording again.</p> : null}
+    </div>
+  );
+}
+
+function Dot({ level }: { level: QualityFinding["level"] }) {
+  return (
+    <span className="mt-[5px] flex shrink-0 items-center">
+      <span className={cn("size-2 rounded-full", DOT[level])} aria-hidden />
+      <span className="sr-only">{LEVEL[level]}:</span>
+    </span>
   );
 }
 
@@ -252,7 +365,7 @@ function UploadArea({ onFile, disabled }: { onFile: (file: File | null) => void;
       >
         <CloudUpload className="size-5 text-muted" aria-hidden />
         <span className="text-[13px] text-ink-2">Drop a file here or click to choose</span>
-        <span className="text-[12px] text-muted">WAV, MP3, M4A, OGG, WebM or FLAC · 5 to 30 seconds · up to 10 MB</span>
+        <span className="text-[12px] text-muted">WAV, MP3, M4A, OGG, WebM or FLAC · 5 to 75 seconds · up to 10 MB</span>
       </div>
       <input
         ref={input}

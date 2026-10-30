@@ -2,15 +2,17 @@
 
 Every upload (WAV included) is decoded with FFmpeg through PyAV, downmixed to mono and
 resampled to 24 kHz 16-bit PCM WAV, the model's own rate, so the Pocket TTS server gets one
-well-formed format whatever the caller sent and the 5 to 30 second rule is checked here,
-before anything is forwarded.
+well-formed format whatever the caller sent and the 5 to 75 second rule is checked here,
+before anything is forwarded (voice_quality.py then picks the 5 to 15 s to clone from).
 
 Decoding runs in a short-lived child process: FFmpeg parses untrusted bytes, and a crash,
 hang or memory blow-up there must not take an API worker (and every tenant's requests on
 it) down. PyAV 19.0.1, for one, aborts the process on audio with a custom channel order
 (PyAV issue 2444). The child gets the bytes on stdin, none of the API's environment, and a
 time limit; it picks the demuxer from the file's first bytes (never FFmpeg's probing),
-decodes only allowed codecs, and stops as soon as the audio is longer than 30 seconds.
+decodes only allowed codecs, and stops as soon as the audio is longer than 75 seconds. It
+answers with one line about the upload (sample rate, channels, codec: the quality findings
+in voice_quality.py need what the WAV no longer shows), then the WAV.
 
 This file is also that child (`python -I voice_samples.py <demuxer>`), so it imports only
 the standard library at module level and PyAV only inside the decoder: the API process
@@ -31,15 +33,16 @@ import threading
 import wave
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger(__name__)
 
 TARGET_RATE = 24_000  # Pocket TTS's model rate, so the server does not resample again
 MIN_SECONDS = 5.0
-MAX_SECONDS = 30.0
+MAX_SECONDS = 75.0  # an upload; the voice server gets the best 5 to 15 s of it
 MAX_CHANNELS = 8
 MIN_RATE, MAX_RATE = 8_000, 192_000
-# Decoded frames; 30 s of the smallest real frames (2.5 ms Opus) is 12,000.
+# Decoded frames; 75 s of the smallest real frames (2.5 ms Opus) is 30,000.
 MAX_FRAMES = 100_000
 DECODE_TIMEOUT_SECONDS = 30.0
 _DECODE_SLOTS = threading.BoundedSemaphore(2)  # child processes per API worker
@@ -77,6 +80,9 @@ class SampleError(Exception):
 class Sample:
     wav: bytes  # mono 16-bit PCM WAV at TARGET_RATE
     source_format: str  # the demuxer the upload was read with
+    source_rate: int  # the upload's sample rate, channel count and codec, for quality findings
+    source_channels: int
+    codec: str
 
 
 def sniff(data: bytes) -> str | None:
@@ -107,12 +113,18 @@ def sniff(data: bytes) -> str | None:
 
 
 async def normalize(data: bytes) -> Sample:
-    """Decode an upload in a child process to mono 16-bit 24 kHz WAV of 5 to 30 seconds."""
+    """Decode an upload in a child process to mono 16-bit 24 kHz WAV of 5 to 75 seconds."""
     demuxer = sniff(data)
     if demuxer is None:
         raise SampleError(415, UNSUPPORTED)
-    wav = await asyncio.to_thread(_run_child, data, demuxer)
-    return Sample(wav=wav, source_format=demuxer)
+    source, wav = await asyncio.to_thread(_run_child, data, demuxer)
+    return Sample(
+        wav=wav,
+        source_format=demuxer,
+        source_rate=source["rate"],
+        source_channels=source["channels"],
+        codec=source["codec"],
+    )
 
 
 def _child_argv(demuxer: str) -> list[str]:
@@ -120,7 +132,8 @@ def _child_argv(demuxer: str) -> list[str]:
     return [sys.executable, "-I", str(Path(__file__).resolve()), demuxer]
 
 
-def _run_child(data: bytes, demuxer: str) -> bytes:
+def _run_child(data: bytes, demuxer: str) -> tuple[dict[str, Any], bytes]:
+    """The child's description of the upload (rate, channels, codec) and the WAV."""
     env = {key: value for key in _CHILD_ENV if (value := os.environ.get(key))}
     with _DECODE_SLOTS:
         try:
@@ -136,8 +149,10 @@ def _run_child(data: bytes, demuxer: str) -> bytes:
         except subprocess.TimeoutExpired:  # the child is killed
             log.warning("voice_sample_decode_timeout", extra={"demuxer": demuxer})
             raise SampleError(415, UNREADABLE) from None
-    if done.returncode == 0 and _is_sample_wav(done.stdout):
-        return done.stdout
+    if done.returncode == 0:
+        header, _, wav = done.stdout.partition(b"\n")
+        if (source := _source(header)) and _is_sample_wav(wav):
+            return source, wav
     if done.returncode == _EXIT_REJECTED and (rejected := _rejection(done.stdout)):
         raise rejected
     # A crash (FFmpeg bug, out of memory) or an unexpected reply.
@@ -156,6 +171,18 @@ def _rejection(reply: bytes) -> SampleError | None:
     return SampleError(status, message[:300]) if status in (415, 422) else None
 
 
+def _source(header: bytes) -> dict[str, Any] | None:
+    """The child's first line: {"rate": 48000, "channels": 2, "codec": "opus"}."""
+    try:
+        body = json.loads(header)
+        rate, channels, codec = int(body["rate"]), int(body["channels"]), str(body["codec"])
+    except (ValueError, KeyError, TypeError):
+        return None
+    if not (MIN_RATE <= rate <= MAX_RATE and 1 <= channels <= MAX_CHANNELS and codec in CODECS):
+        return None
+    return {"rate": rate, "channels": channels, "codec": codec}
+
+
 def _is_sample_wav(wav: bytes) -> bool:
     frames = (len(wav) - 44) / 2
     return (
@@ -168,14 +195,18 @@ def _is_sample_wav(wav: bytes) -> bool:
 # ---------------------------------------------------------------- the child side
 
 
-def decode(data: bytes, demuxer: str) -> bytes:
-    """Decode, downmix and resample to mono 16-bit PCM WAV; SampleError when unusable."""
+def decode(data: bytes, demuxer: str) -> tuple[dict[str, Any], bytes]:
+    """Decode, downmix and resample to mono 16-bit PCM WAV; SampleError when unusable.
+
+    With the upload's sample rate, channel count and codec, which the WAV no longer shows.
+    """
     import av  # here only: the API process never loads FFmpeg
 
     if demuxer not in DEMUXERS:
         raise SampleError(415, UNSUPPORTED)
     pcm = bytearray()
     limit = int(MAX_SECONDS * TARGET_RATE) * 2
+    source: dict[str, Any] = {}
     try:
         with av.open(io.BytesIO(data), "r", format=demuxer) as container:
             if not container.streams.audio:
@@ -198,6 +229,8 @@ def decode(data: bytes, demuxer: str) -> bytes:
                         415,
                         f"Use a recording sampled at {MIN_RATE // 1000} to {MAX_RATE // 1000} kHz.",
                     )
+                if not source:  # the first frame's rate: the stream header may lack it
+                    source = {"rate": frame.sample_rate, "channels": channels, "codec": codec}
                 for out in resampler.resample(frame):
                     pcm += memoryview(out.planes[0])[: out.samples * 2]
                 if len(pcm) > limit:
@@ -223,7 +256,7 @@ def decode(data: bytes, demuxer: str) -> bytes:
         w.setsampwidth(2)
         w.setframerate(TARGET_RATE)
         w.writeframes(bytes(pcm))
-    return out_file.getvalue()
+    return source, out_file.getvalue()
 
 
 def main() -> int:
@@ -231,11 +264,12 @@ def main() -> int:
     # All of it before PyAV loads: the parent's write to stdin must never wait on decoding.
     data = sys.stdin.buffer.read()
     try:
-        wav = decode(data, demuxer)
+        source, wav = decode(data, demuxer)
     except SampleError as exc:
         sys.stdout.write(json.dumps({"status": exc.status, "message": exc.message}))
         return _EXIT_REJECTED
-    sys.stdout.buffer.write(wav)
+    # One line about the upload, then the WAV (binary: no newline translation on Windows).
+    sys.stdout.buffer.write(json.dumps(source).encode() + b"\n" + wav)
     return 0
 
 

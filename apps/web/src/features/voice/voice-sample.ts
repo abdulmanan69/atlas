@@ -1,11 +1,14 @@
 /**
  * Voice samples for Pocket TTS voice cloning: client-side checks, and conversion of any
  * sample (WAV, MP3, M4A, OGG, WebM, FLAC or a browser recording) to a small 24 kHz mono 16-bit WAV, the only
- * format the Pocket TTS server reads. The server re-checks everything.
+ * format the Pocket TTS server reads. The server re-checks everything, cuts the silence at the
+ * ends and, from a longer sample, picks the clearest 10 to 15 seconds (see `checkVoiceSample`).
  */
 
 export const MIN_SAMPLE_SECONDS = 5;
-export const MAX_SAMPLE_SECONDS = 30;
+export const MAX_SAMPLE_SECONDS = 75;
+/** A recording stops here: 10 to 20 seconds is the aim, and the clearest part is picked anyway. */
+export const MAX_RECORD_SECONDS = 30;
 export const MAX_SAMPLE_BYTES = 10 * 1024 * 1024;
 export const MAX_NAME_CHARS = 60;
 export const TARGET_RATE = 24000;
@@ -56,7 +59,7 @@ export function validateDuration(seconds: number): string | null {
     return `The sample is ${seconds.toFixed(1)} s long. Use at least ${MIN_SAMPLE_SECONDS} seconds of speech.`;
   }
   if (seconds > MAX_SAMPLE_SECONDS) {
-    return `The sample is ${seconds.toFixed(1)} s long. Use at most ${MAX_SAMPLE_SECONDS} seconds: trim it, or record a new one.`;
+    return `The sample is ${seconds.toFixed(1)} s long. Use at most ${MAX_SAMPLE_SECONDS} seconds: trim it to the clearest part, or record a new one.`;
   }
   return null;
 }

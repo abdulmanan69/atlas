@@ -183,6 +183,14 @@ def _names(value: Any) -> list[str] | None:
     return [v[:MAX_TEXT] for v in value if isinstance(v, str)][:MAX_ITEMS]
 
 
+def _capabilities(value: Any) -> dict[str, Any] | None:
+    """A voice server's capabilities as the gateway relays them, with only the known fields."""
+    from app.services.voice_design import clean_capabilities  # imports this module
+
+    caps = clean_capabilities(value)
+    return caps.model_dump(mode="json") if caps is not None else None
+
+
 def _clean_service(raw: Any) -> dict[str, Any]:
     """Only the fields the gateway documents, with bounded sizes."""
     if not isinstance(raw, dict):
@@ -202,6 +210,8 @@ def _clean_service(raw: Any) -> dict[str, Any]:
     for key in ("models", "loaded", "sound_tags"):
         if (names := _names(raw.get(key))) is not None:
             out[key] = names
+    if (caps := _capabilities(raw.get("capabilities"))) is not None:
+        out["capabilities"] = caps
     return out
 
 
@@ -376,6 +386,7 @@ def _out(server: AiServer) -> AiServerOut:
                 max_sessions=raw.get("max_sessions"),
                 device=raw.get("device"),
                 sound_tags=raw.get("sound_tags"),
+                capabilities=raw.get("capabilities"),
                 connection_id=ids[name],
             )
         )
@@ -860,6 +871,7 @@ async def _voice(
 ) -> str:
     """The organization's current voice when this server has it, else the server's default."""
     from app.services.voice_cloning import (  # imports this module
+        CUSTOM_PREFIXES,
         is_expressive_connection,
         is_pocket_connection,
     )
@@ -869,8 +881,8 @@ async def _voice(
     voice = current.tts.settings.get("voice")
     if not isinstance(voice, str) or not voice:
         return default
-    if voice.startswith("custom-"):
-        # Cloned voices live on one server: only the voice cloned on this one is here.
+    if voice.startswith(CUSTOM_PREFIXES):
+        # Cloned and designed voices live on one server: only the voice made on this one is here.
         owner_connection = await db.scalar(
             select(CustomVoice.connection_id).where(
                 CustomVoice.organization_id == ctx.org_id, CustomVoice.voice_id == voice

@@ -614,6 +614,26 @@ export interface paths {
         patch: operations["update_connection_api_v1_ai_connections__connection_id__patch"];
         trace?: never;
     };
+    "/api/v1/ai/connections/{connection_id}/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a voice connection's server can do
+         * @description Whether the server clones voices from a recording (`cloning`), designs them from a description (`design`), takes delivery instructions (`instruct`), which sounds its voices make and which languages it speaks, and how it streams speech. Asked of the server itself (`GET /v1/capabilities`); for an older server without that endpoint the answer is derived from what it has: `design` and `instruct` are false and `streaming` is `unknown`. The answer is kept for a minute.
+         */
+        get: operations["get_voice_capabilities_api_v1_ai_connections__connection_id__capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/ai/connections/{connection_id}/sound-tags": {
         parameters: {
             query?: never;
@@ -677,9 +697,49 @@ export interface paths {
         put?: never;
         /**
          * Clone a voice from a short sample of a speaker who gave permission
-         * @description Multipart upload: `name`, `audio` and `consent_attestation=true`. The sample may be WAV, MP3, M4A (AAC), OGG (Opus or Vorbis), WebM (Opus) or FLAC, at most 10 MB, and must be 5 to 30 seconds long; it is converted to mono 24 kHz WAV before it is sent to the server. Use a clear recording of one person speaking. Only clone the voice of a speaker who gave permission. Do not use a cloned voice to deceive anyone, for fraudulent calls, or to present generated speech as the real person. The sample is forwarded to the Pocket TTS server, which keeps only the computed voice; it is not stored by this platform. The consent attestation is recorded in the audit log.
+         * @description Multipart upload: `name`, `audio` and `consent_attestation=true`. The sample may be WAV, MP3, M4A (AAC), OGG (Opus or Vorbis), WebM (Opus) or FLAC, at most 10 MB, and must be 5 to 75 seconds long. It is converted to mono 24 kHz WAV, the silence at its ends is cut and, from an upload longer than 15 seconds, the 10 to 15 seconds with the most speech and no clipping are chosen; that part is measured (clipping, background noise, level, silence, DC offset, sample rate and channels) and is what the voice server receives. Each finding is a `problem` (heavy clipping, noise as loud as the voice, almost no speech), a `warning` (the clone may suffer) or `ok` (a note, for example which part of the upload is used). A `problem` finding refuses the clone (422, the findings in `details.findings`); the others come back as `quality` with the created voice. `POST .../voices/check` runs the same measurement without cloning. Use a clear recording of one person speaking. Only clone the voice of a speaker who gave permission. Do not use a cloned voice to deceive anyone, for fraudulent calls, or to present generated speech as the real person. The sample is forwarded to the Pocket TTS server, which keeps only the computed voice; it is not stored by this platform. The consent attestation is recorded in the audit log.
          */
         post: operations["clone_voice_api_v1_ai_connections__connection_id__voices_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/connections/{connection_id}/voices/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check a recording before cloning a voice from it
+         * @description Multipart upload of `audio` alone. The sample may be WAV, MP3, M4A (AAC), OGG (Opus or Vorbis), WebM (Opus) or FLAC, at most 10 MB, and must be 5 to 75 seconds long. It is converted to mono 24 kHz WAV, the silence at its ends is cut and, from an upload longer than 15 seconds, the 10 to 15 seconds with the most speech and no clipping are chosen; that part is measured (clipping, background noise, level, silence, DC offset, sample rate and channels) and is what the voice server receives. Each finding is a `problem` (heavy clipping, noise as loud as the voice, almost no speech), a `warning` (the clone may suffer) or `ok` (a note, for example which part of the upload is used). Nothing is cloned, stored or sent to the voice server: the same upload to `POST .../voices` would be refused when a finding is a `problem`, and created with the `warning` and `ok` findings otherwise. `score` is 100 with nothing to report.
+         */
+        post: operations["check_voice_sample_api_v1_ai_connections__connection_id__voices_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/connections/{connection_id}/voices/design": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Design a new voice from a description
+         * @description Makes a voice from plain words (`description`, 10 to 300 characters: who is speaking and how), on a server whose capabilities say `design`; the voice design server does, Pocket TTS and the expressive voice do not (422). No recording and no speaker are involved. `language` must be one of the server's `languages` when it lists any. The voice belongs to this organization like a cloned one: it appears in `GET .../voices` with `designed: true`, can be chosen as a voice setting, and is deleted with `DELETE .../voices/{voice_id}`. `GET .../voices/{voice_id}/sample` plays the server's preview of it. Who designed which voice is recorded in the audit log; the description's text is kept by the server only.
+         */
+        post: operations["design_voice_api_v1_ai_connections__connection_id__voices_design_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -697,10 +757,30 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * Delete a cloned voice
+         * Delete a cloned or designed voice
          * @description Refused while the organization's models or an agent use the voice.
          */
         delete: operations["delete_cloned_voice_api_v1_ai_connections__connection_id__voices__voice_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/connections/{connection_id}/voices/{voice_id}/sample": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Play the server's preview of one of this organization's voices
+         * @description Streams the short recording the voice server made when the voice was designed (a few seconds of WAV). Only the organization that made the voice can play it.
+         */
+        get: operations["voice_sample_api_v1_ai_connections__connection_id__voices__voice_id__sample_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -818,7 +898,7 @@ export interface paths {
         put?: never;
         /**
          * Use this server for the organization's calls
-         * @description Sets the organization's models to this server's connections: its language model (`llm_model`, default the first model it lists) at temperature 0.3, live speech-to-text when it has a live speech connection and `use_live_stt` is true (otherwise Whisper), and its expressive voice when it has one, else Pocket TTS (`voice` chooses when it has both), with the organization's current voice when this server has it (otherwise the server's default voice). Knowledge search is kept. With `fallback_llm_connection_id`, another language model answers a turn when this server has given no output after `fallback_after_ms` (default 2500) or fails; without it, any fallback is removed. Agents with their own models keep them; an agent with its own language model does not use the fallback.
+         * @description Sets the organization's models to this server's connections: its language model (`llm_model`, default the first model it lists) at temperature 0.3, live speech-to-text when it has a live speech connection and `use_live_stt` is true (otherwise Whisper; a server without speech-to-text keeps the organization's current one), and its expressive voice when it has one, else Pocket TTS (`voice` chooses when it has both), with the organization's current voice when this server has it (otherwise the server's default voice). Knowledge search is kept. With `fallback_llm_connection_id`, another language model answers a turn when this server has given no output after `fallback_after_ms` (default 2500) or fails; without it, any fallback is removed. Agents with their own models keep them; an agent with its own language model does not use the fallback.
          */
         post: operations["use_server_api_v1_ai_servers__server_id__use_post"];
         delete?: never;
@@ -2882,6 +2962,8 @@ export interface components {
          * @description One model server behind the gateway, as the last check found it.
          */
         AiServerService: {
+            /** @description What the voice server can do (voice design, delivery instructions, languages), when the gateway reports it */
+            capabilities?: components["schemas"]["VoiceCapabilities"] | null;
             /**
              * Cloning
              * @description Pocket TTS voice cloning state
@@ -3152,12 +3234,21 @@ export interface components {
              */
             signup_enabled: boolean;
         };
+        /** Body_check_voice_sample_api_v1_ai_connections__connection_id__voices_check_post */
+        Body_check_voice_sample_api_v1_ai_connections__connection_id__voices_check_post: {
+            /**
+             * Audio
+             * Format: binary
+             * @description WAV, MP3, M4A, OGG, WebM or FLAC; 5 to 75 seconds, at most 10 MB
+             */
+            audio: string;
+        };
         /** Body_clone_voice_api_v1_ai_connections__connection_id__voices_post */
         Body_clone_voice_api_v1_ai_connections__connection_id__voices_post: {
             /**
              * Audio
              * Format: binary
-             * @description WAV, MP3, M4A, OGG, WebM or FLAC; 5 to 30 seconds, at most 10 MB
+             * @description WAV, MP3, M4A, OGG, WebM or FLAC; 5 to 75 seconds, at most 10 MB
              */
             audio: string;
             /**
@@ -5513,6 +5604,17 @@ export interface components {
              */
             default?: boolean;
             /**
+             * Description
+             * @description The description a designed voice was made from
+             */
+            description?: string | null;
+            /**
+             * Designed
+             * @description True for voices this organization designed from a description
+             * @default false
+             */
+            designed?: boolean;
+            /**
              * Id
              * @description The value to use as the voice setting
              */
@@ -5524,6 +5626,8 @@ export interface components {
             license?: string | null;
             /** Name */
             name: string;
+            /** @description How good the reference recording was, for a voice just cloned (`warning` and `ok` findings only: a `problem` refuses the clone). Not in voice lists. */
+            quality?: components["schemas"]["SampleQuality"] | null;
             /** Sample Seconds */
             sample_seconds?: number | null;
         };
@@ -5759,6 +5863,25 @@ export interface components {
          * @enum {string}
          */
         QualificationStatus: "unknown" | "qualified" | "unqualified";
+        /** QualityFinding */
+        QualityFinding: {
+            /**
+             * Code
+             * @description A stable name for what was found: `clipping`, `silent`, `noise`, `little_speech`, `quiet`, `uneven_level`, `silence_start`, `silence_end`, `long_pause`, `speech_ratio`, `short`, `dc_offset`, `low_sample_rate`, `stereo`, `compressed` or `window` (which part of a longer upload is used)
+             */
+            code: string;
+            /**
+             * Level
+             * @description `problem`: the recording is refused for cloning. `warning`: the clone may suffer, but the voice is created. `ok`: a note, nothing to do.
+             * @enum {string}
+             */
+            level: "ok" | "warning" | "problem";
+            /**
+             * Message
+             * @description What was found and what to do about it
+             */
+            message: string;
+        };
         /** ReadinessResponse */
         ReadinessResponse: {
             /** Components */
@@ -5772,6 +5895,19 @@ export interface components {
             status: "ok" | "degraded" | "down";
             /** Version */
             version: string;
+        };
+        /** ReferenceSeconds */
+        ReferenceSeconds: {
+            /**
+             * Max
+             * @description Longest sample voice cloning accepts
+             */
+            max: number;
+            /**
+             * Min
+             * @description Shortest sample voice cloning accepts
+             */
+            min: number;
         };
         /** ResponseLatency */
         ResponseLatency: {
@@ -5804,6 +5940,47 @@ export interface components {
          * @enum {string}
          */
         Role: "owner" | "admin" | "manager" | "agent" | "viewer";
+        /** SampleCheck */
+        SampleCheck: {
+            /**
+             * Findings
+             * @description Most serious first; empty for a recording with nothing to report
+             */
+            findings: components["schemas"]["QualityFinding"][];
+            /**
+             * Score
+             * @description Overall mark for the part of the recording that is cloned from: 100 with nothing to report; each warning takes 12 points off, each problem 35
+             */
+            score: number;
+            /**
+             * Seconds
+             * @description Length of the part that is cloned from: the upload without the silence at its ends, or from a longer upload the 10 to 15 seconds with the most speech
+             */
+            seconds: number;
+            /**
+             * Start
+             * @description Where that part starts, in seconds into the upload
+             */
+            start: number;
+            /**
+             * Upload Seconds
+             * @description Length of the whole upload
+             */
+            upload_seconds: number;
+        };
+        /** SampleQuality */
+        SampleQuality: {
+            /**
+             * Findings
+             * @description Most serious first; empty for a recording with nothing to report
+             */
+            findings: components["schemas"]["QualityFinding"][];
+            /**
+             * Score
+             * @description Overall mark for the part of the recording that is cloned from: 100 with nothing to report; each warning takes 12 points off, each problem 35
+             */
+            score: number;
+        };
         /** SearchHit */
         SearchHit: {
             /** Chunk Index */
@@ -6261,6 +6438,52 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /**
+         * VoiceCapabilities
+         * @description What a voice server can do, as it states at GET /v1/capabilities; derived for an
+         *     older server without that endpoint (then `design` and `instruct` are false and
+         *     `streaming` is unknown).
+         */
+        VoiceCapabilities: {
+            /**
+             * Cloning
+             * @description Clones a voice from a recording of a consenting speaker
+             */
+            cloning: boolean;
+            /**
+             * Design
+             * @description Designs a new voice from a written description
+             */
+            design: boolean;
+            /**
+             * Instruct
+             * @description Takes delivery instructions (tone, pace) along with the words to say
+             */
+            instruct: boolean;
+            /**
+             * Languages
+             * @description Languages it speaks, as the server names them
+             */
+            languages: string[];
+            /**
+             * Model
+             * @description The server's model, as it names it
+             */
+            model?: string | null;
+            /** @description Sample length voice cloning accepts */
+            reference_seconds?: components["schemas"]["ReferenceSeconds"] | null;
+            /**
+             * Sound Tags
+             * @description Sounds its voices make for cues in square brackets, such as [laugh]
+             */
+            sound_tags: string[];
+            /**
+             * Streaming
+             * @description How it delivers speech: `sentence` by sentence, in `chunk`s, `none` (the whole reply at once) or `unknown` (an older server)
+             * @enum {string}
+             */
+            streaming: "sentence" | "chunk" | "none" | "unknown";
+        };
         /** VoiceCloningEnable */
         VoiceCloningEnable: {
             /**
@@ -6304,6 +6527,34 @@ export interface components {
              * @description Where the server's Hugging Face token comes from: `environment` (set by whoever runs the server; it cannot be turned off here), `saved` (given through this API) or null (no token).
              */
             token_source?: ("environment" | "saved") | null;
+        };
+        /** VoiceDesignCreate */
+        VoiceDesignCreate: {
+            /**
+             * Description
+             * @description The voice in plain words, 10 to 300 characters: who is speaking and how, for example age, gender, accent, warmth, pace. Not a real person's name.
+             */
+            description: string;
+            /**
+             * Language
+             * @description One of the server's `languages` (GET .../capabilities); its default when empty
+             */
+            language?: string | null;
+            /**
+             * Name
+             * @description Shown in voice pickers
+             */
+            name: string;
+            /**
+             * Sample Text
+             * @description What the preview says; the server's own line when empty
+             */
+            sample_text?: string | null;
+            /**
+             * Seed
+             * @description Makes the design repeatable: the same description and seed give the same voice
+             */
+            seed?: number | null;
         };
         /** VoiceOption */
         VoiceOption: {
@@ -9389,6 +9640,73 @@ export interface operations {
             };
         };
     };
+    get_voice_capabilities_api_v1_ai_connections__connection_id__capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceCapabilities"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Voice server unreachable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     get_sound_tags_api_v1_ai_connections__connection_id__sound_tags_get: {
         parameters: {
             query?: never;
@@ -9831,7 +10149,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation failed, for example a sample shorter than 5 or longer than 30 seconds */
+            /** @description Validation failed: a sample shorter than 5 or longer than 75 seconds, or a recording with a `problem` finding (`details.score` and `details.findings`) */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -9850,6 +10168,166 @@ export interface operations {
                 };
             };
             /** @description Pocket TTS server unreachable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    check_voice_sample_api_v1_ai_connections__connection_id__voices_check_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_check_voice_sample_api_v1_ai_connections__connection_id__voices_check_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SampleCheck"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Sample larger than the limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Sample is not in a supported audio format, or could not be read */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A sample shorter than 5 or longer than 75 seconds (findings about a readable sample are answered with 200) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    design_voice_api_v1_ai_connections__connection_id__voices_design_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VoiceDesignCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PocketVoice"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found in this organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed, or this server cannot design voices */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The server is busy making another voice */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Voice server unreachable */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -9908,6 +10386,74 @@ export interface operations {
             };
             /** @description Validation failed */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    voice_sample_api_v1_ai_connections__connection_id__voices__voice_id__sample_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+                voice_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "audio/wav": unknown;
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not this organization's voice, or it has no preview */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Voice server unreachable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

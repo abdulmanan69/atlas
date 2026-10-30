@@ -2,7 +2,8 @@
 
 An expressive voice server (Chatterbox-Turbo, infra/docker/expressive-tts) performs cues
 such as `[laugh]` in the text as real sounds, drops bracketed text it does not know, and
-lists its cues at GET {base}/audio/sound-tags (`voice_cloning.sound_tags`). Every
+lists its cues in its capabilities (GET {base}/capabilities) or, on an older server, at
+GET {base}/audio/sound-tags (`voice_design.sound_tags` asks in that order). Every
 published agent gets exactly one rule about cues, after its own global rules
 (`workflow_builder.global_rules_text`):
 
@@ -30,7 +31,7 @@ from app.api.v1.deps import TenantContext
 from app.core.exceptions import NotFoundError
 from app.schemas.voice import AgentConfig, ServiceChoice
 from app.schemas.voice_cloning import SoundTags
-from app.services import ai_settings, voice_cloning
+from app.services import ai_settings, voice_design
 
 log = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ async def agent_sound_tags(
     conn = next((c for c in connections if c.id == choice.connection_id), None)
     if conn is None:
         return ()
-    return await voice_cloning.sound_tags(db, org_id, conn)
+    return await voice_design.sound_tags(db, org_id, conn)
 
 
 async def agent_sound_rule(db: AsyncSession, org_id: uuid.UUID, cfg: AgentConfig) -> str:
@@ -112,6 +113,6 @@ async def connection_sound_tags(
     """Whether a voice connection is expressive, and the sounds it makes."""
     for conn in await ai_settings.list_connections(db, ctx):
         if conn.id == connection_id:
-            tags = list(await voice_cloning.sound_tags(db, ctx.org_id, conn))
+            tags = list(await voice_design.sound_tags(db, ctx.org_id, conn))
             return SoundTags(expressive=bool(tags), tags=tags, prompt_tags=prompt_tags(tags))
     raise NotFoundError("Connection not found")

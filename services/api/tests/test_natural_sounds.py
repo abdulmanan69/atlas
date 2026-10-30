@@ -27,7 +27,7 @@ from app.integrations.voice_runtime.workflow_builder import (
 )
 from app.models.ai_servers import AiServer
 from app.schemas.voice import AgentConfig
-from app.services import natural_sounds, voice_cloning
+from app.services import natural_sounds, voice_cloning, voice_design
 from app.services.agents import TEMPLATES
 from app.services.flows import compose_prompt
 from app.services.llm_warmup import build_warmup_body, first_request_prompt
@@ -139,9 +139,13 @@ class FakeVoiceServers:
         self.tags: list[Any] = list(SERVER_TAGS)
         self.tag_requests: list[httpx.Request] = []
         self.fail: httpx.Response | Exception | None = None
+        # Answered at GET /v1/capabilities when set (a newer server); 404 otherwise.
+        self.capabilities: dict[str, Any] | None = None
 
     def expressive(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path.removeprefix("/voice")
+        if path == "/v1/capabilities" and self.capabilities is not None:
+            return httpx.Response(200, json=self.capabilities)
         if path == "/v1/audio/sound-tags":
             self.tag_requests.append(request)
             if isinstance(self.fail, Exception):
@@ -170,8 +174,10 @@ class FakeVoiceServers:
 @pytest.fixture(autouse=True)
 def _fresh_answers() -> Iterator[None]:
     voice_cloning.reset_sound_tags_cache()
+    voice_design.reset_capabilities_cache()
     yield
     voice_cloning.reset_sound_tags_cache()
+    voice_design.reset_capabilities_cache()
 
 
 @pytest.fixture
@@ -434,6 +440,44 @@ async def test_publishing_tells_the_agent_which_sounds_it_may_make(
     assert r.status_code == 200, r.text
     assert (await client.post(f"{url}/publish", headers=owner.headers, json={})).status_code == 200
     assert _global_rules(runtime) == f"{cfg['global_rules']}\n\n{EXPECTED_CUE_RULE}"
+
+
+async def test_a_newer_server_states_its_sounds_in_its_capabilities(
+    client: httpx.AsyncClient, owner: Account, runtime: FakeRuntime, servers: FakeVoiceServers
+) -> None:
+    servers.capabilities = {
+        "model": "chatterbox-turbo",
+        "cloning": True,
+        "design": False,
+        "instruct": False,
+        "sound_tags": ["[laugh]", "[sigh]", "[cough]"],
+        "languages": ["en"],
+        "streaming": "sentence",
+    }
+    expressive = await _connection(
+        client, owner, "Expressive voice", "http://expressive-tts:8000/v1"
+    )
+    assert await _tags(client, owner, expressive) == {
+        "expressive": True,
+        "tags": ["laugh", "sigh", "cough"],
+        "prompt_tags": ["laugh", "sigh"],
+    }
+    assert servers.tag_requests == [], "the sound tags are not asked for separately"
+
+    # Published agents are told the same sounds.
+    await _models(client, owner, expressive)
+    r = await client.post("/api/v1/agents", headers=owner.headers, json={"name": "Qualifier"})
+    assert r.status_code == 201, r.text
+    url = f"/api/v1/agents/{r.json()['id']}"
+    assert (await client.post(f"{url}/publish", headers=owner.headers, json={})).status_code == 200
+    assert _global_rules(runtime) == cue_rule(["laugh", "sigh"])
+    assert servers.tag_requests == []
+
+    # An older server (no capabilities) is still asked the old way.
+    voice_design.reset_capabilities_cache()
+    servers.capabilities = None
+    assert (await _tags(client, owner, expressive))["tags"] == TAGS
+    assert len(servers.tag_requests) == 1
 
 
 async def test_an_unreachable_voice_server_never_blocks_publishing(

@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator
 
 from app.schemas.common import APIModel
+from app.schemas.voice_cloning import VoiceCapabilities
 
 AiServerStatus = Literal["ok", "degraded", "down", "unchecked"]
 AiService = Literal["llm", "whisper", "tts", "voice", "live_stt"]
@@ -193,6 +194,13 @@ class AiServerService(APIModel):
     sound_tags: list[str] | None = Field(
         default=None,
         description="Sounds the expressive voice performs when a reply carries them as tags",
+    )
+    capabilities: VoiceCapabilities | None = Field(
+        default=None,
+        description=(
+            "What the voice server can do (voice design, delivery instructions, languages), "
+            "when the gateway reports it"
+        ),
     )
     connection_id: str | None = Field(
         default=None, description="The connection ATLAS created for it, if any"

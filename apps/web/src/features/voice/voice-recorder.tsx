@@ -6,7 +6,7 @@ import { Mic, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { formatSeconds, MAX_SAMPLE_SECONDS, MIN_SAMPLE_SECONDS } from "@/features/voice/voice-sample";
+import { formatSeconds, MAX_RECORD_SECONDS, MIN_SAMPLE_SECONDS } from "@/features/voice/voice-sample";
 import { cn } from "@/lib/utils";
 
 const SCRIPT =
@@ -79,7 +79,7 @@ export default function VoiceRecorder({ onRecorded, disabled }: { onRecorded: (b
       timer.current = window.setInterval(() => {
         const s = (performance.now() - startedAt.current) / 1000;
         setElapsed(s);
-        if (s >= MAX_SAMPLE_SECONDS) stop();
+        if (s >= MAX_RECORD_SECONDS) stop();
       }, 200);
     } catch (e) {
       cleanup();
@@ -94,7 +94,7 @@ export default function VoiceRecorder({ onRecorded, disabled }: { onRecorded: (b
   }
 
   const recording = state === "recording";
-  const pct = Math.min(100, (elapsed / MAX_SAMPLE_SECONDS) * 100);
+  const pct = Math.min(100, (elapsed / MAX_RECORD_SECONDS) * 100);
   const enough = elapsed >= MIN_SAMPLE_SECONDS;
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-line bg-surface-2/50 p-3">
@@ -118,15 +118,15 @@ export default function VoiceRecorder({ onRecorded, disabled }: { onRecorded: (b
             role="progressbar"
             aria-label="Recording length"
             aria-valuemin={0}
-            aria-valuemax={MAX_SAMPLE_SECONDS}
+            aria-valuemax={MAX_RECORD_SECONDS}
             aria-valuenow={Math.round(elapsed)}
           >
             <div className={cn("h-full rounded-full transition-[width]", enough ? "bg-success" : "bg-accent")} style={{ width: `${pct}%` }} />
-            <span className="absolute inset-y-0 w-px bg-ink/30" style={{ left: `${(MIN_SAMPLE_SECONDS / MAX_SAMPLE_SECONDS) * 100}%` }} aria-hidden />
+            <span className="absolute inset-y-0 w-px bg-ink/30" style={{ left: `${(MIN_SAMPLE_SECONDS / MAX_RECORD_SECONDS) * 100}%` }} aria-hidden />
           </div>
           <span className="font-mono text-[11.5px] text-muted" aria-live="polite">
             {recording ? <span className="mr-1.5 inline-block size-2 animate-pulse rounded-full bg-danger align-middle" aria-hidden /> : null}
-            {formatSeconds(elapsed)} / {formatSeconds(MAX_SAMPLE_SECONDS)}
+            {formatSeconds(elapsed)} / {formatSeconds(MAX_RECORD_SECONDS)}
             {recording && !enough ? ` · keep going, at least ${MIN_SAMPLE_SECONDS} s` : ""}
           </span>
         </div>

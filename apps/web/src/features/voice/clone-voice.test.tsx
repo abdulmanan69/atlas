@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 
@@ -21,6 +21,19 @@ vi.mock("@/features/voice/voice-sample", async (importOriginal) => {
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const SETUP = "Voice cloning needs the gated weights: accept the terms at https://huggingface.co/kyutai/pocket-tts and set HF_TOKEN.";
+const CHECK = "POST /api/v1/ai/connections/c1/voices/check";
+const CLEAN = { score: 100, findings: [], seconds: 6, start: 0, upload_seconds: 6 };
+const CLIPPED = {
+  score: 41,
+  seconds: 5.9,
+  start: 0,
+  upload_seconds: 6,
+  findings: [
+    { level: "problem", code: "clipping", message: "The recording clips in 2.1 % of samples: lower the input gain or move back from the microphone, and record again." },
+    { level: "warning", code: "short", message: "Short (5.9 s): 10 to 20 seconds of speech gives a better clone." },
+    { level: "ok", code: "stereo", message: "Stereo: the two channels were mixed to one." },
+  ],
+};
 
 function renderWithProviders(ui: React.ReactElement) {
   return render(
@@ -74,7 +87,7 @@ function signInAs(role: "owner" | "admin") {
 }
 
 describe("clone form validation", () => {
-  it("requires a name, a 5-30 s sample and the speaker's permission", () => {
+  it("requires a name, a 5-75 s sample and the speaker's permission", () => {
     expect(validateClone({ name: " ", consent: false, sample: null })).toEqual({
       name: "Give the voice a name.",
       sample: "Add a voice sample: upload a file or record one.",
@@ -82,8 +95,9 @@ describe("clone form validation", () => {
     });
     expect(validateClone({ name: "x".repeat(61), consent: true, sample: sample(6) }).name).toMatch(/at most 60/);
     expect(validateClone({ name: "Sam", consent: true, sample: sample(4.9) }).sample).toMatch(/at least 5 seconds/);
-    expect(validateClone({ name: "Sam", consent: true, sample: sample(30.5) }).sample).toMatch(/at most 30 seconds/);
+    expect(validateClone({ name: "Sam", consent: true, sample: sample(75.5) }).sample).toMatch(/at most 75 seconds/);
     expect(validateClone({ name: "Sam", consent: true, sample: sample(6) })).toEqual({});
+    expect(validateClone({ name: "Sam", consent: true, sample: sample(40) })).toEqual({});
   });
 
   it("accepts WAV, MP3, M4A, OGG, WebM and FLAC files up to 10 MB", () => {
@@ -143,9 +157,11 @@ describe("CloneVoiceDialog", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("uploads a WAV with the consent attestation and selects the new voice", async () => {
-    const fetchMock = vi.fn(async (_req: Request) => json(201, { id: "custom-sam-0123456789abcdef", name: "Sam", cloned: true, sample_seconds: 6 }));
-    vi.stubGlobal("fetch", fetchMock);
+  it("checks the file as chosen, then uploads a WAV with the consent attestation and selects the new voice", async () => {
+    const calls = route({
+      [CHECK]: () => json(200, CLEAN),
+      "POST /api/v1/ai/connections/c1/voices": () => json(201, { id: "custom-sam-0123456789abcdef", name: "Sam", cloned: true, sample_seconds: 6, quality: CLEAN }),
+    });
     // jsdom's FormData is not readable back from a Request: record what is appended instead.
     const append = vi.spyOn(FormData.prototype, "append");
     const onCreated = vi.fn();
@@ -153,25 +169,97 @@ describe("CloneVoiceDialog", () => {
     await userEvent.type(screen.getByPlaceholderText("Voice name"), "Sam");
     await userEvent.upload(screen.getByTestId("voice-sample-input"), new File(["mp3"], "sam.mp3", { type: "audio/mpeg" }));
     expect(await screen.findByText("sam.mp3")).toBeInTheDocument();
+    // The original file is checked (its rate, channels and format matter), not the WAV.
+    expect(await screen.findByText("Nothing to report: a clean recording.")).toBeInTheDocument();
+    expect(screen.getByText("100/100")).toBeInTheDocument();
+    expect(calls.map((r) => `${r.method} ${new URL(r.url).pathname}`)).toEqual([CHECK]);
+    const [field, checked, filename] = append.mock.calls[0]!;
+    expect([field, (checked as File).type, filename]).toEqual(["audio", "audio/mpeg", "sam.mp3"]);
     await userEvent.click(screen.getByRole("button", { name: "Clone voice" }));
     expect(screen.getByText(/Confirm that the speaker gave permission/)).toBeInTheDocument();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(1);
 
     await userEvent.click(screen.getByRole("checkbox", { name: "I have the speaker's permission to clone their voice." }));
     await userEvent.click(screen.getByRole("button", { name: "Clone voice" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(expect.objectContaining({ id: "custom-sam-0123456789abcdef" })));
-    const req = fetchMock.mock.calls[0]![0];
+    const req = calls[1]!;
     expect(req.method).toBe("POST");
     expect(new URL(req.url).pathname).toBe("/api/v1/ai/connections/c1/voices");
-    const fields = Object.fromEntries(append.mock.calls.map(([k, v]) => [k, v]));
+    const fields = Object.fromEntries(append.mock.calls.slice(1).map(([k, v]) => [k, v]));
     expect(fields.name).toBe("Sam");
     expect(fields.consent_attestation).toBe("true");
     expect((fields.audio as Blob).type).toBe("audio/wav");
     append.mockRestore();
   });
 
+  it("blocks cloning on a problem finding and shows the warnings and notes", async () => {
+    let reply = CLIPPED;
+    const calls = route({
+      [CHECK]: () => json(200, reply),
+      "POST /api/v1/ai/connections/c1/voices": () => json(201, { id: "custom-sam-0123456789abcdef", name: "Sam", cloned: true }),
+    });
+    renderWithProviders(<CloneVoiceDialog open onOpenChange={() => undefined} connectionId="c1" available />);
+    await userEvent.type(screen.getByPlaceholderText("Voice name"), "Sam");
+    await userEvent.click(screen.getByRole("checkbox", { name: "I have the speaker's permission to clone their voice." }));
+    await userEvent.upload(screen.getByTestId("voice-sample-input"), new File(["wav"], "loud.wav", { type: "audio/wav" }));
+    const report = await screen.findByRole("group", { name: "Recording quality" });
+    expect(within(report).getByText("41/100")).toBeInTheDocument();
+    expect(within(report).getByText(/The recording clips in 2.1 % of samples/)).toBeInTheDocument();
+    expect(within(report).getByText(/Short \(5.9 s\)/)).toBeInTheDocument();
+    expect(within(report).getByText("Stereo: the two channels were mixed to one.")).toBeInTheDocument();
+    expect(within(report).getAllByText(/^(Problem|Warning|Note):$/).map((e) => e.textContent)).toEqual(["Problem:", "Warning:", "Note:"]);
+    expect(within(report).getByText("Fix the problems above and add the recording again.")).toBeInTheDocument();
+    const clone = screen.getByRole("button", { name: "Clone voice" });
+    expect(clone).toBeDisabled();
+    await userEvent.click(clone);
+    expect(calls.filter((r) => new URL(r.url).pathname.endsWith("/voices"))).toHaveLength(0);
+
+    // Warnings alone do not block.
+    reply = { ...CLIPPED, score: 88, findings: CLIPPED.findings.slice(1) };
+    await userEvent.upload(screen.getByTestId("voice-sample-input"), new File(["wav"], "better.wav", { type: "audio/wav" }));
+    expect(await screen.findByText("88/100")).toBeInTheDocument();
+    expect(screen.queryByText(/The recording clips/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clone voice" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Clone voice" }));
+    await waitFor(() => expect(calls.filter((r) => new URL(r.url).pathname.endsWith("/voices"))).toHaveLength(1));
+  });
+
+  it("lets the clone go ahead when the check itself fails, and shows a refused clone's findings", async () => {
+    route({
+      [CHECK]: () => json(503, { error: { code: "integration_unavailable", message: "The voice server did not answer in time.", details: null } }),
+      "POST /api/v1/ai/connections/c1/voices": () =>
+        json(422, {
+          error: {
+            code: "validation_failed",
+            message: "Background noise is almost as loud as the voice (estimated 4 dB below it): record in a quieter place, closer to the microphone.",
+            details: { field: "audio", score: 53, findings: [{ level: "problem", code: "noise", message: "Background noise is almost as loud as the voice (estimated 4 dB below it): record in a quieter place, closer to the microphone." }, { level: "warning", code: "short", message: "Short (6 s): 10 to 20 seconds of speech gives a better clone." }] },
+          },
+        }),
+    });
+    renderWithProviders(<CloneVoiceDialog open onOpenChange={() => undefined} connectionId="c1" available />);
+    await userEvent.type(screen.getByPlaceholderText("Voice name"), "Sam");
+    await userEvent.click(screen.getByRole("checkbox", { name: "I have the speaker's permission to clone their voice." }));
+    await userEvent.upload(screen.getByTestId("voice-sample-input"), new File(["wav"], "sam.wav", { type: "audio/wav" }));
+    expect(await screen.findByText(/couldn't be checked right now/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clone voice" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Clone voice" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Background noise is almost as loud/);
+    const report = screen.getByRole("group", { name: "Recording quality" });
+    expect(within(report).getByText(/Short \(6 s\)/)).toBeInTheDocument();
+    expect(within(report).queryByText(/\/100/)).not.toBeInTheDocument();
+  });
+
+  it("treats a check the API refuses outright as a bad sample", async () => {
+    route({ [CHECK]: () => json(415, { error: { code: "unsupported_media_type", message: "Could not read this audio. Upload a WAV, MP3, M4A (AAC), OGG (Opus or Vorbis), WebM (Opus) or FLAC file.", details: null } }) });
+    renderWithProviders(<CloneVoiceDialog open onOpenChange={() => undefined} connectionId="c1" available />);
+    await userEvent.upload(screen.getByTestId("voice-sample-input"), new File(["wav"], "odd.wav", { type: "audio/wav" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Could not read this audio/);
+    expect(screen.queryByText("odd.wav")).not.toBeInTheDocument();
+  });
+
   it("goes back to turning voice cloning on when the server answers 501", async () => {
     route({
+      [CHECK]: () => json(200, CLEAN),
       "POST /api/v1/ai/connections/c1/voices": () => json(501, { error: { code: "voice_cloning_unavailable", message: SETUP, details: { setup_url: TERMS } } }),
       "GET /api/v1/ai/connections/c1/voice-cloning": () => json(200, status("off")),
     });

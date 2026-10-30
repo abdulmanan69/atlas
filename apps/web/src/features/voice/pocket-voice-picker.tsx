@@ -1,11 +1,12 @@
 /**
- * Voice setting for Pocket TTS and expressive voice connections: built-in voices plus this
- * organization's cloned voices (badged "Cloned"), "Clone a voice" for owners and admins, delete
- * with confirmation, and whether voice cloning is on (owners can turn it off). Voices of an
- * expressive server are badged with the sounds they make ("Laughs, sighs").
+ * Voice setting for Pocket TTS, expressive and voice design connections: built-in voices
+ * plus this organization's own (badged "Cloned" or "Designed"), "Clone a voice" and, when
+ * the server can, "Design a voice" for owners and admins, delete with confirmation, and
+ * whether voice cloning is on (owners can turn it off). Voices of an expressive server are
+ * badged with the sounds they make ("Laughs, sighs").
  */
 import { useMutation } from "@tanstack/react-query";
-import { Mic, Trash2 } from "lucide-react";
+import { Mic, Sparkles, Trash2 } from "lucide-react";
 import { useId, useState } from "react";
 import { toast } from "sonner";
 
@@ -16,9 +17,14 @@ import { Badge, Input, Label } from "@/components/ui/primitives";
 import { soundSummary } from "@/features/calls/sound-cues";
 import { useInvalidate } from "@/features/queries";
 import { CloneVoiceDialog } from "@/features/voice/clone-voice-dialog";
-import { deleteVoice, disableCloning, usePocketVoices, type PocketVoice } from "@/features/voice/voice-cloning";
+import { DesignVoiceDialog } from "@/features/voice/design-voice-dialog";
+import { deleteVoice, disableCloning, isCustomVoice, usePocketVoices, useVoiceCapabilities, type PocketVoice } from "@/features/voice/voice-cloning";
 import { errorMessage } from "@/lib/api";
 import { useHasRole } from "@/lib/session";
+
+function OwnBadge({ voice }: { voice: PocketVoice }) {
+  return <Badge tone="accent">{voice.designed ? "Designed" : "Cloned"}</Badge>;
+}
 
 export function PocketVoicePicker({
   label,
@@ -37,10 +43,12 @@ export function PocketVoicePicker({
 }) {
   const id = useId();
   const voices = usePocketVoices(connectionId);
+  const capabilities = useVoiceCapabilities(connectionId);
   const canManage = useHasRole("admin") && !disabled;
   const isOwner = useHasRole("owner") && !disabled;
   const invalidate = useInvalidate();
   const [cloning, setCloning] = useState(false);
+  const [designing, setDesigning] = useState(false);
   const [removing, setRemoving] = useState<PocketVoice | null>(null);
   const [turningOff, setTurningOff] = useState(false);
 
@@ -78,14 +86,16 @@ export function PocketVoicePicker({
   const options: ComboboxOption[] = list.map((v) => ({
     value: v.id,
     label: v.name,
-    keywords: [v.id, v.cloned ? "cloned" : "built-in", ...(sounds.length ? ["expressive", ...sounds] : [])],
-    description: v.cloned
-      ? `Cloned${v.sample_seconds ? ` from a ${Math.round(v.sample_seconds)} s sample` : ""}`
-      : [v.default ? "Default" : null, v.license ? `Recording ${v.license}` : null].filter(Boolean).join(" · ") || undefined,
-    trailing: v.cloned ? (
+    keywords: [v.id, v.designed ? "designed" : v.cloned ? "cloned" : "built-in", ...(sounds.length ? ["expressive", ...sounds] : [])],
+    description: v.designed
+      ? v.description || "Designed from a description"
+      : v.cloned
+        ? `Cloned${v.sample_seconds ? ` from a ${Math.round(v.sample_seconds)} s sample` : ""}`
+        : [v.default ? "Default" : null, v.license ? `Recording ${v.license}` : null].filter(Boolean).join(" · ") || undefined,
+    trailing: isCustomVoice(v) ? (
       <span className="flex items-center gap-1">
         {expressive}
-        <Badge tone="accent">Cloned</Badge>
+        <OwnBadge voice={v} />
         {canManage ? (
           <Button
             type="button"
@@ -114,9 +124,16 @@ export function PocketVoicePicker({
           {label}
         </Label>
         {canManage && voices.data ? (
-          <Button type="button" size="sm" variant="ghost" onClick={() => setCloning(true)}>
-            <Mic /> Clone a voice
-          </Button>
+          <span className="flex items-center gap-1">
+            {capabilities.data?.design ? (
+              <Button type="button" size="sm" variant="ghost" onClick={() => setDesigning(true)}>
+                <Sparkles /> Design a voice
+              </Button>
+            ) : null}
+            <Button type="button" size="sm" variant="ghost" onClick={() => setCloning(true)}>
+              <Mic /> Clone a voice
+            </Button>
+          </span>
         ) : null}
       </div>
       {voices.isError ? (
@@ -144,7 +161,7 @@ export function PocketVoicePicker({
             <>
               Selected: {selected.name}
               {expressive}
-              {selected.cloned ? <Badge tone="accent">Cloned</Badge> : null}
+              {isCustomVoice(selected) ? <OwnBadge voice={selected} /> : null}
             </>
           ) : (
             "Built-in voices are cleared for commercial use. Cloned voices need the speaker's permission."
@@ -176,6 +193,15 @@ export function PocketVoicePicker({
           onCreated={(v) => onChange(v.id)}
         />
       ) : null}
+      {designing && capabilities.data ? (
+        <DesignVoiceDialog
+          open
+          onOpenChange={(o) => !o && setDesigning(false)}
+          connectionId={connectionId}
+          capabilities={capabilities.data}
+          onCreated={(v) => onChange(v.id)}
+        />
+      ) : null}
       <ConfirmDialog
         open={turningOff}
         onOpenChange={(o) => !o && setTurningOff(false)}
@@ -189,7 +215,7 @@ export function PocketVoicePicker({
         open={removing !== null}
         onOpenChange={(o) => !o && setRemoving(null)}
         title={`Delete the voice “${removing?.name ?? ""}”?`}
-        description="Agents can no longer speak with it. This can't be undone; cloning it again needs a new sample. Voices in use by the models or an agent can't be deleted."
+        description={`Agents can no longer speak with it. This can't be undone; ${removing?.designed ? "it would have to be designed again" : "cloning it again needs a new sample"}. Voices in use by the models or an agent can't be deleted.`}
         confirmLabel="Delete voice"
         loading={remove.isPending}
         onConfirm={() => removing && remove.mutate(removing)}

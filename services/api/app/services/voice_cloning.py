@@ -5,8 +5,10 @@ sample of a speaker who gave permission. ATLAS:
 
 - requires an explicit consent attestation and records it in the audit log (who, when,
   which voice, the attestation; never the audio);
-- checks size, format and length before anything is forwarded (WAV, MP3, M4A, OGG, WebM
-  and FLAC are decoded to WAV by voice_samples.py); the sample is not stored here;
+- checks size, format, length and recording quality before anything is forwarded (WAV, MP3,
+  M4A, OGG, WebM and FLAC are decoded to WAV by voice_samples.py; voice_quality.py measures
+  clipping, noise, silence and level, refuses a bad reference and reports warnings with
+  the voice, or alone through the check endpoint); the sample is not stored here;
 - records which organization owns each voice (`custom_voices`), because the server keeps
   every cloned voice in one shared store. Voice ids carry a random 64-bit suffix, and an
   organization only ever sees, selects or deletes its own.
@@ -26,11 +28,14 @@ expressive voice at {url}/voice/v1).
 The expressive voice server (Chatterbox-Turbo, infra/docker/expressive-tts) has the same
 voice and cloning API, so everything here works for it too: its connections are named by
 "expressive" or "chatterbox" (or answer GET {base}/audio/sound-tags, see `sound_tags`), and
-ATLAS reaches it at ATLAS_EXPRESSIVE_TTS_URL when set.
+ATLAS reaches it at ATLAS_EXPRESSIVE_TTS_URL when set. So does the voice design server
+(voice_design.py), which also designs voices from a description; what any of them can do
+is asked at GET {base}/capabilities (`voice_design.capabilities`).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -70,10 +75,12 @@ from app.schemas.voice_cloning import (
     CloningState,
     PocketVoice,
     PocketVoiceList,
+    SampleCheck,
+    SampleQuality,
     VoiceCloningEnable,
     VoiceCloningStatus,
 )
-from app.services import ai_servers, ai_settings, audit, voice_samples
+from app.services import ai_servers, ai_settings, audit, voice_quality, voice_samples
 
 log = logging.getLogger(__name__)
 
@@ -82,8 +89,14 @@ log = logging.getLogger(__name__)
 # gateway). The expressive voice server has the same voice API (/voice/v1 behind a gateway).
 POCKET_HINTS = ("local-tts", "pocket", "/tts/v1")
 EXPRESSIVE_HINTS = ("expressive", "chatterbox", "/voice/v1")
+# The voice design server (voice_design.py) has the same voice API; /design/v1 behind a gateway.
+DESIGN_HINTS = ("voice-design", "voice design", "qwen", "/design/v1")
 SETUP_URL = "https://huggingface.co/kyutai/pocket-tts"
 VOICE_ID = re.compile(r"^custom-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{16}$")
+# A voice designed from a description (voice_design.py): the same store, its own prefix.
+DESIGN_ID = re.compile(r"^design-[a-z0-9]+(?:-[a-z0-9]+)*$")
+# Voices an organization owns: cloned or designed, both recorded in `custom_voices`.
+CUSTOM_PREFIXES = ("custom-", "design-")
 # Anything in a server reply that looks like a Hugging Face token.
 HF_TOKEN = re.compile(r"hf_[A-Za-z0-9_-]{16,}")
 TERMS_URL = re.compile(r"https://huggingface\.co/[A-Za-z0-9_.\-/]{1,150}")
@@ -146,21 +159,34 @@ def is_expressive_connection(conn: ConnectionOut) -> bool:
     return _self_hosted_voice(conn) and any(h in _haystack(conn) for h in EXPRESSIVE_HINTS)
 
 
+def is_design_connection(conn: ConnectionOut) -> bool:
+    """Named as the voice design server (by name or address; its capabilities say so too)."""
+    return _self_hosted_voice(conn) and any(h in _haystack(conn) for h in DESIGN_HINTS)
+
+
 def is_pocket_connection(conn: ConnectionOut) -> bool:
-    """A voice server with the Pocket TTS voice API: Pocket TTS or the expressive server."""
+    """A voice server with the Pocket TTS voice API: Pocket TTS, the expressive server or
+    the voice design server."""
     if not _self_hosted_voice(conn):
         return False
     haystack = _haystack(conn)
-    return any(h in haystack for h in (*POCKET_HINTS, *EXPRESSIVE_HINTS))
+    return any(h in haystack for h in (*POCKET_HINTS, *EXPRESSIVE_HINTS, *DESIGN_HINTS))
 
 
 async def _pocket_connection(
     db: AsyncSession, ctx: TenantContext, connection_id: str
 ) -> ConnectionOut:
+    from app.services import voice_design  # imports this module
+
     for conn in await ai_settings.list_connections(db, ctx):
         if conn.id == connection_id:
-            # Not named as either server: an expressive server is still known by its answer.
-            if is_pocket_connection(conn) or await sound_tags(db, ctx.org_id, conn):
+            # Not named as either server: an expressive server is still known by its answer,
+            # and any newer voice server by its capabilities.
+            if (
+                is_pocket_connection(conn)
+                or await sound_tags(db, ctx.org_id, conn)
+                or await voice_design.server_capabilities(db, ctx.org_id, conn) is not None
+            ):
                 return conn
             raise ValidationFailedError(NOT_POCKET)
     raise NotFoundError("Connection not found")
@@ -233,6 +259,8 @@ class _Local:
 
 def _local(conn: ConnectionOut) -> _Local | None:
     settings = get_settings()
+    if is_design_connection(conn):
+        return None  # the voice design server: only its own address, or its AI server's
     if is_expressive_connection(conn):
         return _Local(
             "ATLAS_EXPRESSIVE_TTS_URL",
@@ -501,13 +529,52 @@ async def read_sample(file: UploadFile) -> bytes:
 
 
 async def prepare_sample(data: bytes) -> voice_samples.Sample:
-    """Any accepted audio format, as mono 16-bit 24 kHz WAV of 5 to 30 seconds."""
+    """Any accepted audio format, as mono 16-bit 24 kHz WAV of 5 to 75 seconds."""
     try:
         return await voice_samples.normalize(data)
     except voice_samples.SampleError as exc:
         if exc.status == 415:
             raise UnsupportedSampleError(exc.message) from None
         raise ValidationFailedError(exc.message, details={"field": "audio"}) from None
+
+
+async def assess_sample(sample: voice_samples.Sample) -> voice_quality.Reference:
+    """The part of the recording to clone from and its findings (measured in a worker thread)."""
+    return await asyncio.to_thread(voice_quality.assess, sample)
+
+
+def _check(reference: voice_quality.Reference) -> SampleCheck:
+    return SampleCheck(
+        score=reference.quality.score,
+        findings=reference.quality.findings,
+        seconds=reference.seconds,
+        start=reference.start,
+        upload_seconds=reference.upload_seconds,
+    )
+
+
+def _require_usable(reference: voice_quality.Reference) -> SampleQuality:
+    """Refuse a recording with a `problem` finding; the rest come back with the voice."""
+    quality = reference.quality
+    problems = [f.message for f in quality.findings if f.level == "problem"]
+    if problems:
+        raise ValidationFailedError(
+            " ".join(problems),
+            details={
+                "field": "audio",
+                "score": quality.score,
+                "findings": [f.model_dump() for f in quality.findings],
+            },
+        )
+    return quality
+
+
+async def check_sample(
+    db: AsyncSession, ctx: TenantContext, connection_id: str, audio: UploadFile
+) -> SampleCheck:
+    """Measure a recording as the clone would, without cloning or reaching the server."""
+    await _pocket_connection(db, ctx, connection_id)
+    return _check(await assess_sample(await prepare_sample(await read_sample(audio))))
 
 
 # ---------------------------------------------------------------- reads
@@ -571,6 +638,10 @@ async def list_voices(db: AsyncSession, ctx: TenantContext, connection_id: str) 
             row = owned.get(str(raw.get("id")))
             if row is not None:  # other organizations' voices are never shown
                 voices.append(_cloned(row, _sample_seconds(raw)))
+        elif raw.get("type") == "designed":
+            row = owned.get(str(raw.get("id")))
+            if row is not None:
+                voices.append(_designed(row, raw))
         elif voice := _builtin(raw):
             voices.append(voice)
     return PocketVoiceList(
@@ -608,7 +679,9 @@ def _data(response: httpx.Response) -> list[dict[str, Any]]:
     return [d for d in data[:MAX_LISTED] if isinstance(d, dict)] if isinstance(data, list) else []
 
 
-def _cloned(row: CustomVoice, sample_seconds: float | None) -> PocketVoice:
+def _cloned(
+    row: CustomVoice, sample_seconds: float | None, quality: SampleQuality | None = None
+) -> PocketVoice:
     return PocketVoice(
         id=row.voice_id,
         name=row.name,
@@ -616,6 +689,21 @@ def _cloned(row: CustomVoice, sample_seconds: float | None) -> PocketVoice:
         created_at=row.created_at,
         created_by=row.created_by,
         sample_seconds=sample_seconds,
+        quality=quality,
+    )
+
+
+def _designed(row: CustomVoice, raw: dict[str, Any]) -> PocketVoice:
+    """A voice designed from a description (voice_design.py), as the server lists it."""
+    description = raw.get("description")
+    return PocketVoice(
+        id=row.voice_id,
+        name=row.name,
+        cloned=False,
+        designed=True,
+        description=description[:300] if isinstance(description, str) and description else None,
+        created_at=row.created_at,
+        created_by=row.created_by,
     )
 
 
@@ -637,6 +725,8 @@ async def create_voice(
     conn = await _pocket_connection(db, ctx, connection_id)
     data = await read_sample(audio)
     sample = await prepare_sample(data)
+    reference = await assess_sample(sample)
+    quality = _require_usable(reference)
     server = await _server(db, ctx.org_id, conn)
     now = datetime.now(UTC)
     # Kept by the server with the voice, so the store itself shows the attestation's source.
@@ -650,7 +740,7 @@ async def create_voice(
         "/voices",
         read_seconds=get_settings().local_tts_timeout_seconds,
         data={"name": clean, "consent": "true", "consent_statement": statement},
-        files={"audio": ("sample.wav", sample.wav, "audio/wav")},
+        files={"audio": ("sample.wav", reference.wav, "audio/wav")},
     )
     if response.status_code == 404:
         raise VoiceCloningUnavailableError(OLD_SERVER, details={"setup_url": SETUP_URL})
@@ -695,11 +785,12 @@ async def create_voice(
             "sample_seconds": seconds,
             "sample_bytes": len(data),
             "sample_format": sample.source_format,
+            "sample_quality": quality.score,
         },
         ip=ctx.meta.ip,
         user_agent=ctx.meta.user_agent,
     )
-    return _cloned(row, seconds)
+    return _cloned(row, seconds, quality)
 
 
 async def _delete_on_server(server: PocketServer, voice_id: str, *, quiet: bool = False) -> None:
@@ -746,7 +837,7 @@ async def _in_use(db: AsyncSession, ctx: TenantContext, voice_id: str) -> str | 
 async def delete_voice(
     db: AsyncSession, ctx: TenantContext, connection_id: str, voice_id: str
 ) -> None:
-    if not VOICE_ID.match(voice_id):
+    if not (VOICE_ID.match(voice_id) or DESIGN_ID.match(voice_id)):
         raise NotFoundError("Voice not found")
     row = await db.scalar(
         select(CustomVoice).where(
@@ -772,7 +863,12 @@ async def delete_voice(
         actor_user_id=ctx.user_id,
         resource_type="custom_voice",
         resource_id=voice_id,
-        changes={"voice_id": voice_id, "name": row.name, "connection_id": connection_id},
+        changes={
+            "voice_id": voice_id,
+            "name": row.name,
+            "connection_id": connection_id,
+            "kind": "designed" if voice_id.startswith("design-") else "cloned",
+        },
         ip=ctx.meta.ip,
         user_agent=ctx.meta.user_agent,
     )
@@ -917,11 +1013,12 @@ async def disable_cloning(db: AsyncSession, ctx: TenantContext, connection_id: s
 
 
 async def assert_voice_owned(db: AsyncSession, org_id: uuid.UUID, voice: object) -> None:
-    """A cloned voice id may only be selected by the organization that created it."""
-    if not isinstance(voice, str) or not voice.startswith("custom-"):
+    """A cloned or designed voice id may only be selected by the organization that made it."""
+    if not isinstance(voice, str) or not voice.startswith(CUSTOM_PREFIXES):
         return
     owner = await db.scalar(
         select(CustomVoice.organization_id).where(CustomVoice.voice_id == voice)
     )
     if owner != org_id:
-        raise ValidationFailedError("Unknown cloned voice. Choose a voice from the list.")
+        kind = "designed" if voice.startswith("design-") else "cloned"
+        raise ValidationFailedError(f"Unknown {kind} voice. Choose a voice from the list.")

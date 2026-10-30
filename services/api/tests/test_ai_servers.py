@@ -79,6 +79,16 @@ HEALTH: dict[str, dict[str, Any]] = {
         "cloning": "on",
         "device": "cuda",
         "sound_tags": ["laugh", "chuckle", "sigh", "gasp"],
+        "capabilities": {
+            "model": "chatterbox-turbo",
+            "cloning": True,
+            "design": False,
+            "instruct": True,
+            "sound_tags": ["laugh", "chuckle", "sigh", "gasp"],
+            "languages": ["en"],
+            "streaming": "sentence",
+            "reference_seconds": {"min": 5, "max": 30},
+        },
     },
     "live_stt": {
         "up": True,
@@ -147,6 +157,8 @@ class FakeGateway:
             return self._json(200, {"state": "on", "terms_url": None, "token_source": "saved"})
         if path == "/voice/v1/audio/sound-tags":
             return self._json(200, {"tags": ["laugh", "chuckle", "sigh", "gasp"]})
+        if path == "/voice/v1/capabilities" and "capabilities" in self.services["voice"]:
+            return self._json(200, self.services["voice"]["capabilities"])
         return self._json(404, {"error": "not_found"})
 
     def paths(self) -> list[str]:
@@ -782,6 +794,54 @@ async def test_the_expressive_voice_is_managed_through_the_same_gateway(
     assert {r.headers["authorization"] for r in asked} == {f"Bearer {TOKEN}"}
 
 
+async def test_the_voice_servers_capabilities_are_reported_and_asked_through_the_gateway(
+    client: httpx.AsyncClient, owner: Account, gateway: FakeGateway
+) -> None:
+    stated = HEALTH["voice"]["capabilities"]
+    # Relayed by the gateway's health report, with only the known fields.
+    gateway.services["voice"]["capabilities"] = stated | {"streaming": "firehose", "x": 1}
+    server = await _registered(client, owner)
+    services = {s["service"]: s for s in server["services"]}
+    assert services["voice"]["capabilities"] == stated | {"streaming": "unknown"}
+    assert services["tts"]["capabilities"] is None
+
+    # Asked of the server itself through the gateway, with the token.
+    voice = _ids(server)["voice"]
+    r = await client.get(f"/api/v1/ai/connections/{voice}/capabilities", headers=owner.headers)
+    assert r.status_code == 200, r.text
+    assert r.json() == stated | {"streaming": "unknown"}
+    asked = [r for r in gateway.requests if r.url.path == "/voice/v1/capabilities"]
+    assert len(asked) == 1 and asked[0].headers["authorization"] == f"Bearer {TOKEN}"
+
+    # A health report that does not carry them (an older voice server) leaves them out.
+    del gateway.services["voice"]["capabilities"]
+    r = await client.post(f"/api/v1/ai/servers/{server['id']}/check", headers=owner.headers)
+    assert r.status_code == 200, r.text
+    assert next(s for s in r.json()["services"] if s["service"] == "voice")["capabilities"] is None
+    # Pocket TTS has no such endpoint: derived from what it has, through the gateway too.
+    tts = _ids(server)["tts"]
+    r = await client.get(f"/api/v1/ai/connections/{tts}/capabilities", headers=owner.headers)
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "model": None,
+        "cloning": True,
+        "design": False,
+        "instruct": False,
+        "sound_tags": [],
+        "languages": [],
+        "streaming": "unknown",
+        "reference_seconds": None,
+    }
+    pocket = [r.url.path for r in gateway.requests if r.url.path.startswith("/tts/")]
+    assert pocket[-3:] == ["/tts/v1/capabilities", "/tts/v1/cloning", "/tts/v1/audio/sound-tags"]
+    r = await client.post(
+        f"/api/v1/ai/connections/{tts}/voices/design",
+        headers=owner.headers,
+        json={"name": "Maeve", "description": "A warm, unhurried woman in her forties."},
+    )
+    assert r.status_code == 422 and "cannot design" in r.json()["error"]["message"]
+
+
 # ---------------------------------------------------------------- who may do what
 
 
@@ -907,3 +967,26 @@ async def test_secrets_are_never_logged_audited_stored_or_returned(
                 assert secret not in rows, table.name
         stored = await db.scalar(select(AiServer))
         assert stored is not None and stored.token_encrypted and stored.live_stt_secret_encrypted
+
+
+async def test_monitor_marks_a_server_whose_token_cannot_be_read_as_down(
+    client: httpx.AsyncClient, owner: Account, gateway: FakeGateway
+) -> None:
+    server = await _registered(client, owner)
+    async with get_sessionmaker()() as db:
+        row = await db.get(AiServer, uuid.UUID(server["id"]))
+        assert row is not None
+        row.token_encrypted = "not-a-token-this-platform-key-can-read"
+        await db.commit()
+    health_checks = sum(1 for r in gateway.requests if r.url.path == "/health")
+
+    assert await ai_servers.check_all() == {"checked": 1, "changed": 1}
+    assert await ai_servers.check_all() == {"checked": 1, "changed": 0}
+    shown = (await client.get(f"/api/v1/ai/servers/{server['id']}", headers=owner.headers)).json()
+    assert shown["status"] == "down" and "Replace the token" in shown["last_error"]
+    llm = next(s for s in shown["services"] if s["service"] == "llm")
+    assert llm["up"] is False and llm["models"] == ["qwen2.5:1.5b", "llama3.2:3b"]
+    # Nothing was sent to the server without a token to send.
+    assert sum(1 for r in gateway.requests if r.url.path == "/health") == health_checks
+    (change,) = await _audit("ai_server.status_changed")
+    assert (change.changes["from"], change.changes["to"]) == ("ok", "down")

@@ -32,6 +32,7 @@ from app.models.voice_cloning import CustomVoice
 from app.services import voice_cloning, voice_samples
 from tests.conftest import Account, invite_and_join, signup
 from tests.fake_runtime import VALID_KEY, FakeRuntime
+from tests.test_voice_quality import speech_wav
 
 TTS = "https://tts.test/v1"
 TERMS = "https://huggingface.co/kyutai/pocket-tts"
@@ -42,30 +43,37 @@ UNAVAILABLE = (
 HF_TOKEN = "hf_" + "Zq8wR3tY" * 4 + "kP"  # the shape of a real token, never a real one
 
 
-def wav(seconds: float = 6.0, rate: int = 16000) -> bytes:
+def wav(seconds: float = 8.0, rate: int = 16000) -> bytes:
+    """A 200 Hz tone on for 0.8 s of every second: speech-like enough for the quality check."""
+    tone = [
+        int(8000 * math.sin(2 * math.pi * 200 * i / rate)) if i < 0.8 * rate else 0
+        for i in range(rate)
+    ]
+    second = struct.pack(f"<{rate}h", *tone)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(rate)
-        w.writeframes(b"\x10\x00\xf0\xff" * int(seconds * rate / 2))
+        w.writeframes((second * math.ceil(seconds))[: int(seconds * rate) * 2])
     return buf.getvalue()
 
 
 def encode(
     fmt: str, codec: str, seconds: float, *, rate: int = 48000, layout: str = "mono"
 ) -> bytes:
-    """A 200 Hz tone encoded in memory with PyAV, in 20 ms frames."""
+    """A 200 Hz tone (on for 0.8 s of every second) encoded in memory with PyAV, in 20 ms frames."""
     channels = len(av.AudioLayout(layout).channels)
     step = rate // 50
     tone = [int(8000 * math.sin(2 * math.pi * 200 * i / rate)) for i in range(step)]
     block = struct.pack(f"<{step * channels}h", *(s for s in tone for _ in range(channels)))
+    silence = bytes(len(block))
     buf = io.BytesIO()
     with av.open(buf, "w", format=fmt) as container:
         stream = container.add_stream(codec, rate=rate, layout=layout)
         for pts in range(0, int(seconds * rate), step):
             frame = av.AudioFrame(format="s16", layout=layout, samples=step)
-            frame.planes[0].update(block)
+            frame.planes[0].update(block if pts % rate < 0.8 * rate else silence)
             frame.sample_rate, frame.pts, frame.time_base = rate, pts, Fraction(1, rate)
             for packet in stream.encode(frame):
                 container.mux(packet)
@@ -306,9 +314,10 @@ async def test_clone_list_select_and_delete_with_audit(
     voice = r.json()
     assert voice["cloned"] is True and voice["name"] == "Sam Example"
     assert re.fullmatch(r"custom-sam-example-[0-9a-f]{16}", voice["id"])
+    assert voice["quality"] == {"score": 100, "findings": []}
     sent = pocket.posts[0]
     # A 16 kHz WAV is normalized like any other upload: mono 16-bit at the model's 24 kHz.
-    assert wav_info(sent["audio"]) == (1, 24000, 2, 6.0)
+    assert wav_info(sent["audio"]) == (1, 24000, 2, 8.0)
     assert owner.user_id.encode() in sent["consent_statement"]
     assert b"permission to clone their voice" in sent["consent_statement"]
 
@@ -320,7 +329,7 @@ async def test_clone_list_select_and_delete_with_audit(
         "I have the speaker's permission to clone their voice."
     )
     assert str(logs[0].actor_user_id) == owner.user_id
-    assert changes["sample_format"] == "wav"
+    assert changes["sample_format"] == "wav" and changes["sample_quality"] == 100
     assert "RIFF" not in str(changes), "the audio is never recorded"
 
     listed = (
@@ -494,7 +503,7 @@ async def test_common_audio_formats_reach_the_server_as_24khz_mono_wav(
 NOISE = bytes((i * 151 + 7) % 256 for i in range(4096))
 
 
-async def test_samples_must_be_5_to_30_seconds_of_readable_audio(
+async def test_samples_must_be_5_to_75_seconds_of_readable_audio(
     client: httpx.AsyncClient, owner: Account, pocket: FakePocket
 ) -> None:
     conn = await _connection(client, owner)
@@ -502,12 +511,12 @@ async def test_samples_must_be_5_to_30_seconds_of_readable_audio(
     r = await _clone(client, owner, conn, audio=short, filename="short.flac")
     assert r.status_code == 422
     error = r.json()["error"]
-    assert error["message"] == "The sample is 3.0 s long: it must be between 5 and 30 seconds."
+    assert error["message"] == "The sample is 3.0 s long: it must be between 5 and 75 seconds."
     assert error["details"] == {"field": "audio"}
-    long = encode("flac", "flac", 31.0, rate=8000)
+    long = encode("flac", "flac", 76.0, rate=8000)
     r = await _clone(client, owner, conn, audio=long, filename="long.flac")
     assert r.status_code == 422
-    assert "longer than 30 seconds" in r.json()["error"]["message"]
+    assert "longer than 75 seconds" in r.json()["error"]["message"]
 
     r = await _clone(client, owner, conn, audio=b"This is not audio. " * 200, filename="x.mp3")
     assert r.status_code == 415
@@ -565,6 +574,147 @@ def test_sniffing_picks_the_demuxer_from_the_content() -> None:
     assert sniff(tag + b"\xff\xfb\x90\x00") == "mp3"
     assert sniff(b"<html>" + NOISE) is None
     assert sniff(b"") is None
+
+
+# ---------------------------------------------------------------- recording quality
+
+
+async def _check(
+    client: httpx.AsyncClient,
+    acct: Account,
+    conn: str,
+    audio: bytes,
+    *,
+    filename: str = "sam.wav",
+) -> httpx.Response:
+    return await client.post(
+        f"/api/v1/ai/connections/{conn}/voices/check",
+        headers=acct.headers,
+        files={"audio": (filename, audio, "application/octet-stream")},
+    )
+
+
+async def test_a_recording_is_checked_without_cloning(
+    client: httpx.AsyncClient, owner: Account, pocket: FakePocket
+) -> None:
+    conn = await _connection(client, owner)
+    r = await _check(client, owner, conn, speech_wav(10.0, rate=44100, channels=2))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["score"] == 100
+    assert body["findings"] == [
+        {"level": "ok", "code": "stereo", "message": "Stereo: the two channels were mixed to one."}
+    ]
+    assert body["start"] == 0.0 and body["upload_seconds"] == pytest.approx(10.0, abs=0.05)
+    assert body["seconds"] == pytest.approx(9.9, abs=0.1), "the last pause is cut, but a pad"
+    # A long upload: the clearest 15 s are what the voice server would get.
+    long = speech_wav(40.0, rate=16000, lead=3.0)
+    r = await _check(client, owner, conn, long, filename="long.wav")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["start"] == pytest.approx(2.8, abs=0.05)
+    assert body["seconds"] == pytest.approx(15.0, abs=0.05)
+    assert body["upload_seconds"] == pytest.approx(40.0, abs=0.05)
+    assert [f["code"] for f in body["findings"]] == ["window"]
+    assert body["findings"][0]["message"] == ("Using 15 s from 2.8 s to 17.8 s, the clearest part.")
+    # Problems are reported, not refused, here; the other rules are the clone's.
+    r = await _check(client, owner, conn, speech_wav(10.0, rate=16000, gain=20))
+    assert r.status_code == 200, r.text
+    assert (r.json()["findings"][0]["level"], r.json()["findings"][0]["code"]) == (
+        "problem",
+        "clipping",
+    )
+    short = encode("flac", "flac", 3.0, rate=16000)
+    r = await _check(client, owner, conn, short, filename="short.flac")
+    assert r.status_code == 422 and "3.0 s long" in r.json()["error"]["message"]
+    assert (await _check(client, owner, conn, b"RIFF" + NOISE)).status_code == 415
+    assert pocket.posts == [], "nothing reached the Pocket TTS server"
+    async with get_sessionmaker()() as db:
+        assert (await db.scalars(select(CustomVoice))).all() == []
+    assert await _audit("ai.voice_cloned") == []
+
+    # The same roles and connections as cloning.
+    manager = await invite_and_join(client, owner, "mgr@example.com", "manager")
+    assert (await _check(client, manager, conn, wav())).status_code == 403
+    other = await signup(client, "other@example.com", org="Other Co")
+    assert (await _check(client, other, conn, wav())).status_code == 404
+    speech = await _connection(client, owner, name="Local speech (Whisper)")
+    r = await _check(client, owner, speech, wav())
+    assert r.status_code == 422 and "Pocket TTS" in r.json()["error"]["message"]
+
+
+async def test_a_bad_recording_is_refused_with_its_findings(
+    client: httpx.AsyncClient, owner: Account, pocket: FakePocket
+) -> None:
+    conn = await _connection(client, owner)
+    r = await _clone(client, owner, conn, audio=speech_wav(10.0, rate=16000, gain=20))
+    assert r.status_code == 422, r.text
+    error = r.json()["error"]
+    assert error["code"] == "validation_failed"
+    assert error["message"].startswith("The recording clips in ")
+    assert error["message"].endswith(
+        "lower the input gain or move back from the microphone, and record again."
+    )
+    assert error["details"]["field"] == "audio"
+    assert error["details"]["score"] <= 100 - 35
+    [clipping] = [f for f in error["details"]["findings"] if f["code"] == "clipping"]
+    assert clipping["level"] == "problem"
+    noisy = speech_wav(10.0, rate=16000, noise=0.15)
+    r = await _clone(client, owner, conn, audio=noisy, filename="noisy.wav")
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["message"].startswith("Background noise is almost as loud")
+    silent = speech_wav(10.0, rate=16000, level=0.0)
+    r = await _clone(client, owner, conn, audio=silent, filename="silent.wav")
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["message"].startswith("The recording is silent")
+    assert pocket.posts == [], "nothing reached the Pocket TTS server"
+    assert await _audit("ai.voice_cloned") == []
+    async with get_sessionmaker()() as db:
+        assert (await db.scalars(select(CustomVoice))).all() == []
+
+
+async def test_warnings_come_back_with_the_voice_and_the_server_gets_the_best_part(
+    client: httpx.AsyncClient, owner: Account, pocket: FakePocket
+) -> None:
+    conn = await _connection(client, owner)
+    ends = speech_wav(13.0, rate=16000, lead=4.0, tail=3.0, noise=0.03)
+    r = await _clone(client, owner, conn, audio=ends, filename="ends.wav")
+    assert r.status_code == 201, r.text
+    quality = r.json()["quality"]
+    findings = {f["code"]: f for f in quality["findings"]}
+    assert findings["noise"]["level"] == "warning"
+    assert findings["short"]["level"] == "warning"
+    assert findings["window"] == {
+        "level": "ok",
+        "code": "window",
+        "message": "Using 6.1 s from 3.8 s to 9.9 s: the silence before and after it was cut.",
+    }
+    assert quality["score"] == 100 - 12 * (len(findings) - 1)
+    # The server got the trimmed part only, at 24 kHz mono.
+    channels, rate, width, seconds = wav_info(pocket.posts[-1]["audio"])
+    assert (channels, rate, width) == (1, 24000, 2)
+    assert seconds == pytest.approx(6.1, abs=0.05)
+    [entry] = await _audit("ai.voice_cloned")
+    assert entry.changes["sample_quality"] == quality["score"]
+
+    # A long upload: the 15 s with the most speech, named in the findings.
+    long = speech_wav(40.0, rate=16000, lead=3.0)
+    r = await _clone(client, owner, conn, audio=long, filename="long.wav")
+    assert r.status_code == 201, r.text
+    assert r.json()["quality"] == {
+        "score": 100,
+        "findings": [
+            {
+                "level": "ok",
+                "code": "window",
+                "message": "Using 15 s from 2.8 s to 17.8 s, the clearest part.",
+            }
+        ],
+    }
+    assert wav_info(pocket.posts[-1]["audio"])[3] == pytest.approx(15.0, abs=0.05)
+    # Voice lists never carry the findings.
+    listed = await _voices(client, owner, conn)
+    assert all(v["quality"] is None for v in listed["voices"])
 
 
 # ---------------------------------------------------------------- turning cloning on and off

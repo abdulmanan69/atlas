@@ -729,6 +729,17 @@ clone their voice"; ATLAS refuses the request without it and writes the attestat
 audit log (`ai.voice_cloned`: who, when, voice id and name, the attestation; never the
 audio). Only owners and admins can clone or delete voices.
 
+**The recording.** 5 to 75 seconds of one person speaking, as WAV, MP3, M4A, OGG, WebM or
+FLAC (up to 10 MB). ATLAS cuts the silence at the ends and, from anything longer than
+15 seconds, uses the 10 to 15 seconds with the most speech and no clipping; only that part
+reaches the voice server. Before cloning it measures that part (clipping, background
+noise, level, pauses, DC offset, sample rate, channels) and shows what it found: a
+*problem* (heavy clipping, noise as loud as the voice, almost no speech, silence) refuses
+the clone, a *warning* (short, quiet, uneven level, a long pause, noise, 8 kHz audio) is
+shown with the created voice. The form checks the file as soon as it is chosen
+(`POST /api/v1/ai/connections/{id}/voices/check`), and the API's answer to a clone carries
+the same `quality` (a score out of 100 and the findings).
+
 **Turn it on (no restart).**
 
 1. Sign in at Hugging Face and accept the terms of
