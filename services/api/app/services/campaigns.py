@@ -209,14 +209,17 @@ async def list_campaigns(
     )
 
 
-async def get_campaign(db: AsyncSession, ctx: TenantContext, campaign_id: uuid.UUID) -> Campaign:
-    campaign = (
-        await db.execute(
-            select(Campaign).where(
-                Campaign.id == campaign_id, Campaign.organization_id == ctx.org_id
-            )
-        )
-    ).scalar_one_or_none()
+async def get_campaign(
+    db: AsyncSession, ctx: TenantContext, campaign_id: uuid.UUID, *, for_update: bool = False
+) -> Campaign:
+    """The campaign, or 404. `for_update` row-locks it so two lifecycle requests at
+    once (a double-clicked Start, a pause racing the scheduler) take turns."""
+    stmt = select(Campaign).where(
+        Campaign.id == campaign_id, Campaign.organization_id == ctx.org_id
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    campaign = (await db.execute(stmt)).scalar_one_or_none()
     if campaign is None:
         raise NotFoundError("Campaign not found")
     return campaign
@@ -484,7 +487,7 @@ async def pause_for_error(db: AsyncSession, campaign: Campaign, reason: str) -> 
 
 async def start(db: AsyncSession, ctx: TenantContext, campaign_id: uuid.UUID) -> Campaign:
     """Validate, snapshot the audience and run (or schedule). Idempotent once started."""
-    campaign = await get_campaign(db, ctx, campaign_id)
+    campaign = await get_campaign(db, ctx, campaign_id, for_update=True)
     if campaign.status in (CampaignStatus.RUNNING, CampaignStatus.SCHEDULED):
         return campaign
     if campaign.status == CampaignStatus.PAUSED:
@@ -533,7 +536,7 @@ async def start(db: AsyncSession, ctx: TenantContext, campaign_id: uuid.UUID) ->
 
 
 async def pause(db: AsyncSession, ctx: TenantContext, campaign_id: uuid.UUID) -> Campaign:
-    campaign = await get_campaign(db, ctx, campaign_id)
+    campaign = await get_campaign(db, ctx, campaign_id, for_update=True)
     transition(campaign, CampaignStatus.PAUSED)
     await _audit(db, ctx, campaign, "campaign.paused")
     await db.flush()
@@ -542,7 +545,7 @@ async def pause(db: AsyncSession, ctx: TenantContext, campaign_id: uuid.UUID) ->
 
 
 async def resume(db: AsyncSession, ctx: TenantContext, campaign_id: uuid.UUID) -> Campaign:
-    campaign = await get_campaign(db, ctx, campaign_id)
+    campaign = await get_campaign(db, ctx, campaign_id, for_update=True)
     if campaign.status != CampaignStatus.PAUSED:
         raise InvalidStateTransitionError("Only a paused campaign can be resumed")
     now = utcnow()
@@ -568,7 +571,7 @@ async def resume(db: AsyncSession, ctx: TenantContext, campaign_id: uuid.UUID) -
 
 async def cancel(db: AsyncSession, ctx: TenantContext, campaign_id: uuid.UUID) -> Campaign:
     """Stop dispatching; calls already in progress run to completion and are recorded."""
-    campaign = await get_campaign(db, ctx, campaign_id)
+    campaign = await get_campaign(db, ctx, campaign_id, for_update=True)
     transition(campaign, CampaignStatus.CANCELED)
     campaign.finished_at = utcnow()
     campaign.backoff_until = None

@@ -841,3 +841,64 @@ def test_worker_discovers_webhook_jobs() -> None:
     assert {"fan_out_outbox", "deliver_pending", "purge_webhook_history"} <= names
     cron_names = {c.name for c in WorkerSettings.cron_jobs}
     assert {"cron:fan_out_outbox", "cron:deliver_pending"} <= cron_names
+
+
+async def test_slow_and_unresolvable_endpoints_fail_only_their_own_delivery(
+    client: httpx.AsyncClient,
+    owner: Account,
+    hooks: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slow = await make_webhook(client, owner, ("lead.created",), url="https://slow.example.com/h")
+    broken = await make_webhook(
+        client, owner, ("lead.created",), url="https://broken.example.com/h"
+    )
+    fine = await make_webhook(client, owner, ("lead.created",))
+    slow_route = hooks.post("https://slow.example.com/h").mock(
+        side_effect=httpx.ReadTimeout("stalled")
+    )
+    fine_route = hooks.post(HOOK_URL).mock(return_value=httpx.Response(200))
+
+    async def resolve(host: str, port: int) -> list[IPv4Address | IPv6Address]:
+        if host == "broken.example.com":
+            raise OSError("resolver exploded")
+        return [PUBLIC_IP]
+
+    monkeypatch.setattr(webhooks, "_resolve_host", resolve)
+    await make_lead(client, owner)
+    clock = now()
+    await fan_out(get_sessionmaker(), now=clock)
+    assert await deliver_due(get_sessionmaker(), now=clock) == 3
+    assert fine_route.call_count == 1 and slow_route.call_count == 1
+    (ok,) = await db_deliveries(fine["id"])
+    assert ok.status == DeliveryStatus.DELIVERED
+    (timed_out,) = await db_deliveries(slow["id"])
+    assert timed_out.status == DeliveryStatus.FAILED and timed_out.attempts == 1
+    assert timed_out.last_status_code is None and "ReadTimeout" in (timed_out.last_error or "")
+    assert timed_out.next_attempt_at is not None and timed_out.next_attempt_at > clock
+    (unresolved,) = await db_deliveries(broken["id"])
+    assert unresolved.status == DeliveryStatus.FAILED
+    assert "could not be checked" in (unresolved.last_error or "")
+
+    # The retry is the same event (same id in the header and the body) so a receiver
+    # that saw the first attempt can deduplicate it.
+    slow_route.mock(return_value=httpx.Response(200))
+    assert await deliver_due(get_sessionmaker(), now=clock + timedelta(hours=1)) == 2
+    (timed_out,) = await db_deliveries(slow["id"])
+    assert timed_out.status == DeliveryStatus.DELIVERED and timed_out.attempts == 2
+    first, second = (c.request for c in slow_route.calls)
+    assert first.headers["x-atlas-event-id"] == second.headers["x-atlas-event-id"]
+    assert first.headers["x-atlas-delivery-id"] == second.headers["x-atlas-delivery-id"]
+    assert json.loads(first.content)["id"] == json.loads(second.content)["id"]
+
+
+def test_delivery_lease_outlasts_the_slowest_batch() -> None:
+    from app.workers import outbound_webhooks as worker
+
+    rounds = -(-worker.DELIVERY_BATCH // worker.DELIVERY_CONCURRENCY)
+    # Connecting and reading each get the request timeout; a dead endpoint takes both.
+    assert rounds * get_settings().webhook_timeout_seconds * 2 <= worker.LEASE_SECONDS
+    deliver = next(c for c in worker.CRON_JOBS if c.name == "cron:deliver_pending")
+    assert deliver.timeout_s is not None and deliver.timeout_s <= worker.LEASE_SECONDS, (
+        "a job never outlives its lease"
+    )

@@ -265,3 +265,39 @@ async def test_crm_overview_metrics(client: httpx.AsyncClient, owner: Account) -
     assert o["by_source"] == [{"source": "web_form", "count": 2}]
     assert sum(d["count"] for d in o["daily_new_leads"]) == 2
     assert {s["key"]: s["count"] for s in o["by_stage"]}["converted"] == 1
+
+
+async def test_task_rules_for_archived_leads_repeat_completion_and_past_due_dates(
+    client: httpx.AsyncClient, owner: Account
+) -> None:
+    lead = (await _create(client, owner)).json()
+    gone = (await _create(client, owner, phone="+442079460700")).json()
+    assert (
+        await client.delete(f"/api/v1/leads/{gone['id']}", headers=owner.headers)
+    ).status_code == 204
+    r = await client.post(
+        "/api/v1/tasks", headers=owner.headers, json={"title": "Call back", "lead_id": gone["id"]}
+    )
+    assert r.status_code == 404, "no follow-ups for an archived lead"
+
+    # A callback in the past is simply overdue; a second one with the same title is the
+    # person's choice (nothing here invents or merges follow-ups).
+    body = {"title": "Call back", "lead_id": lead["id"], "due_at": "2000-01-01T09:00:00Z"}
+    first = (await client.post("/api/v1/tasks", headers=owner.headers, json=body)).json()
+    second = (await client.post("/api/v1/tasks", headers=owner.headers, json=body)).json()
+    assert first["id"] != second["id"] and first["due_at"].startswith("2000-01-01")
+    overview = (await client.get("/api/v1/analytics/crm-overview", headers=owner.headers)).json()
+    assert (overview["open_tasks"], overview["overdue_tasks"]) == (2, 2)
+
+    url = f"/api/v1/tasks/{first['id']}"
+    done = (await client.patch(url, headers=owner.headers, json={"status": "done"})).json()
+    again = (await client.patch(url, headers=owner.headers, json={"status": "done"})).json()
+    assert done["completed_at"] == again["completed_at"], "completing twice is one completion"
+    reopened = (await client.patch(url, headers=owner.headers, json={"status": "open"})).json()
+    assert reopened["completed_at"] is None
+    timeline = (
+        await client.get(f"/api/v1/leads/{lead['id']}/activities", headers=owner.headers)
+    ).json()
+    summaries = [a["summary"] for a in timeline["items"]]
+    assert summaries.count("Task completed: Call back") == 1
+    assert summaries.count("Task created: Call back") == 2

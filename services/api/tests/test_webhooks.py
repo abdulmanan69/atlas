@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import uuid
 from collections.abc import Iterator
@@ -15,14 +16,16 @@ from app.core.redis import get_redis
 from app.db.session import get_sessionmaker
 from app.integrations.voice_runtime.webhooks import DELIVERY_ID_HEADER
 from app.integrations.voice_runtime.workflow_builder import WEBHOOK_SECRET_HEADER
-from app.models.calls import Call, CallEvent
+from app.models.calls import Call, CallEvent, CallState
 from app.models.crm import Activity, Lead
 from app.models.developer import OutboxEvent
 from app.models.webhooks import WebhookEvent, WebhookEventStatus
 from app.services import jobs
 from app.services import webhooks as webhook_service
+from app.workers import campaigns as campaign_worker
 from app.workers.calls import process_runtime_run
 from tests.calls_support import (
+    PHONE,
     CallsRuntime,
     create_lead,
     enable_live_calls,
@@ -33,7 +36,7 @@ from tests.calls_support import (
     webhook_secret,
     workflow_id,
 )
-from tests.conftest import Account
+from tests.conftest import Account, signup
 
 
 @pytest.fixture
@@ -359,3 +362,245 @@ async def test_runtime_outage_during_inline_processing_is_recorded(
     runtime.down = False
     detail = (await client.get(f"/api/v1/calls/{call['id']}", headers=owner.headers)).json()
     assert detail["state"] == "dialing"
+
+
+@pytest.mark.usefixtures("live_calls")
+async def test_events_are_scoped_to_the_organization_that_owns_the_call(
+    client: httpx.AsyncClient, owner: Account, runtime: CallsRuntime
+) -> None:
+    call, run_id = await _live_call(client, owner, runtime)
+    other = await signup(client, "b@example.com", "Tenant B")
+    await published_agent(client, other)
+    mine, theirs = [o for o in runtime.orgs.values() if o.workflows]
+    payload = {
+        "atlas_call_id": call["id"],
+        "workflow_run_id": str(run_id),
+        "workflow_id": str(workflow_id(theirs)),
+    }
+    # The other tenant's secret does not open this call, and naming their agent in the
+    # body does not move the event to them: the call's own organization decides.
+    r = await client.post(URL, headers=_headers(webhook_secret(theirs)), json=payload)
+    assert r.status_code == 401 and r.json()["error"]["code"] == "unauthenticated"
+    assert await _event_rows() == []
+    ok = await client.post(URL, headers=_headers(webhook_secret(mine)), json=payload)
+    assert ok.status_code == 202, ok.text
+    (event,) = await _event_rows()
+    assert str(event.organization_id) == owner.org_id and event.call_id == uuid.UUID(call["id"])
+    assert (await client.get("/api/v1/calls", headers=other.headers)).json()["total"] == 0
+
+
+@pytest.mark.usefixtures("live_calls", "queue_down")
+async def test_replayed_and_out_of_order_deliveries_change_nothing_twice(
+    client: httpx.AsyncClient, owner: Account, runtime: CallsRuntime
+) -> None:
+    call, run_id = await _live_call(client, owner, runtime)
+    org = runtime_org(runtime)
+    secret = webhook_secret(org)
+    payload = {"atlas_call_id": call["id"], "workflow_run_id": str(run_id)}
+    # A delivery while the run is still going: the call is in progress, not finished.
+    r = await client.post(URL, headers=_headers(secret), json=payload)
+    assert r.status_code == 202 and r.json()["status"] == "processed"
+    detail = (await client.get(f"/api/v1/calls/{call['id']}", headers=owner.headers)).json()
+    assert detail["state"] == "in_progress" and detail["ended_at"] is None
+
+    runtime.finish(run_id, disposition="qualified")
+    r = await client.post(URL, headers=_headers(secret), json=payload)
+    assert r.json()["status"] == "processed"
+    # Replays: a fresh delivery id, and the inbound-style body that names only the run.
+    by_run = {
+        "atlas_call_id": "",
+        "workflow_run_id": str(run_id),
+        "workflow_id": str(workflow_id(org)),
+    }
+    for body in (payload, by_run, payload):
+        r = await client.post(URL, headers=_headers(secret), json=body)
+        assert r.status_code == 202 and r.json()["status"] == "processed"
+
+    detail = (await client.get(f"/api/v1/calls/{call['id']}", headers=owner.headers)).json()
+    assert detail["state"] == "completed" and detail["outcome"] == "qualified"
+    events = (await client.get(f"/api/v1/calls/{call['id']}/events", headers=owner.headers)).json()
+    assert [e["type"] for e in events] == [
+        "created",
+        "state_changed",
+        "state_changed",
+        "state_changed",
+        "result_applied",
+    ]
+    assert [e["data"]["to"] for e in events if e["type"] == "state_changed"] == [
+        "dialing",
+        "in_progress",
+        "completed",
+    ]
+    timeline = (
+        await client.get(f"/api/v1/leads/{call['lead_id']}/activities", headers=owner.headers)
+    ).json()
+    assert sum(1 for a in timeline["items"] if a["type"] == "call") == 1
+    async with get_sessionmaker()() as db:
+        outbox = (await db.execute(select(OutboxEvent).order_by(OutboxEvent.id))).scalars().all()
+    assert [e.event_type for e in outbox if e.event_type.startswith("call.")] == [
+        "call.started",
+        "call.completed",
+    ], "one start and one end, however many deliveries and re-fetches"
+    assert len(await _event_rows()) == 5
+
+
+@pytest.mark.usefixtures("live_calls", "queue_down")
+async def test_odd_result_fields_are_bounded_and_an_empty_result_is_not_a_success(
+    client: httpx.AsyncClient, owner: Account, runtime: CallsRuntime
+) -> None:
+    call, run_id = await _live_call(client, owner, runtime)
+    org = runtime_org(runtime)
+    secret = webhook_secret(org)
+    runtime.finish(
+        run_id,
+        disposition="qualifié · " + "x" * 100,
+        extracted="not a mapping",  # type: ignore[arg-type]
+    )
+    r = await client.post(URL, headers=_headers(secret), json={"atlas_call_id": call["id"]})
+    assert r.status_code == 202 and r.json()["status"] == "processed", r.text
+    detail = (await client.get(f"/api/v1/calls/{call['id']}", headers=owner.headers)).json()
+    assert detail["state"] == "completed" and detail["captured"] == {}
+    assert len(detail["outcome"]) == 64 and detail["outcome"].startswith("qualifié")
+    assert detail["opted_out"] is False
+
+    # Completed with nothing in it: no status, no outcome, no talk time.
+    lead = await create_lead(client, owner, phone="+14155550199")
+    second = await start_call(client, owner, lead["id"], call["agent_id"], live=True)
+    empty_run = max(runtime.runs)
+    runtime.finish(empty_run, disposition=None, call_status=None, duration=0)
+    r = await client.post(URL, headers=_headers(secret), json={"atlas_call_id": second["id"]})
+    assert r.status_code == 202 and r.json()["status"] == "processed", r.text
+    detail = (await client.get(f"/api/v1/calls/{second['id']}", headers=owner.headers)).json()
+    assert detail["state"] == "failed" and detail["error_code"] == "no_result"
+    assert detail["outcome"] is None and detail["ended_at"] is not None
+    person = (await client.get(f"/api/v1/leads/{lead['id']}", headers=owner.headers)).json()
+    assert person["last_contacted_at"] is None
+    timeline = (
+        await client.get(f"/api/v1/leads/{lead['id']}/activities", headers=owner.headers)
+    ).json()
+    assert "Call failed" in [a["summary"] for a in timeline["items"]]
+
+
+@pytest.mark.usefixtures("live_calls")
+async def test_simultaneous_inbound_calls_from_a_new_number_share_one_lead(
+    client: httpx.AsyncClient, owner: Account, runtime: CallsRuntime
+) -> None:
+    await published_agent(client, owner)
+    org = runtime_org(runtime)
+    wf = workflow_id(org)
+
+    def inbound_run() -> int:
+        rid = runtime.add_run(
+            org.id,
+            wf,
+            call_type="inbound",
+            initial_context={
+                "caller_number": "+14155550177",
+                "called_number": "+14155559999",
+                "direction": "inbound",
+            },
+        )
+        runtime.finish(rid, disposition="callback_requested")
+        return rid
+
+    def process(rid: int) -> Any:
+        return process_runtime_run({"job_try": 1}, owner.org_id, None, str(wf), str(rid))
+
+    # Two calls from the same new number, handled by two workers at the same time.
+    a, b = inbound_run(), inbound_run()
+    assert list(await asyncio.gather(process(a), process(b))) == ["processed", "processed"]
+    async with get_sessionmaker()() as db:
+        leads = (
+            (await db.execute(select(Lead).where(Lead.phone_e164 == "+14155550177")))
+            .scalars()
+            .all()
+        )
+        assert len(leads) == 1
+        calls = (await db.execute(select(Call).where(Call.lead_id == leads[0].id))).scalars().all()
+    assert len(calls) == 2 and {c.state for c in calls} == {CallState.COMPLETED}
+
+    # The same run delivered twice at once is one call.
+    c = inbound_run()
+    assert list(await asyncio.gather(process(c), process(c))) == ["processed", "processed"]
+    async with get_sessionmaker()() as db:
+        same_run = (
+            (await db.execute(select(Call).where(Call.runtime_run_id == str(c)))).scalars().all()
+        )
+    assert len(same_run) == 1 and same_run[0].lead_id == leads[0].id
+    by_lead = (await client.get(f"/api/v1/leads/{leads[0].id}/calls", headers=owner.headers)).json()
+    assert by_lead["total"] == 3
+
+
+@pytest.mark.usefixtures("live_calls", "queue_down")
+async def test_a_call_placed_but_never_recorded_is_recovered_from_its_result(
+    client: httpx.AsyncClient, owner: Account, runtime: CallsRuntime
+) -> None:
+    agent = await published_agent(client, owner)
+    lead = await create_lead(client, owner)
+    org = runtime_org(runtime)
+    wf = workflow_id(org)
+    secret = webhook_secret(org)
+    r = await client.post(
+        "/api/v1/campaigns",
+        headers=owner.headers,
+        json={"name": "Lost", "agent_id": agent["id"], "mode": "live", "lead_ids": [lead["id"]]},
+    )
+    assert r.status_code == 201, r.text
+    campaign = r.json()
+    r = await client.post(f"/api/v1/campaigns/{campaign['id']}/start", headers=owner.headers)
+    assert r.status_code == 200, r.text
+
+    # The dispatcher's transaction died after the voice service accepted this call: no
+    # record exists, but the run carries the ids the call was placed with.
+    lost_id = str(uuid.uuid4())
+    rid = runtime.add_run(
+        org.id,
+        wf,
+        initial_context={
+            "atlas_call_id": lost_id,
+            "atlas_lead_id": lead["id"],
+            "atlas_campaign_id": campaign["id"],
+            "phone_number": PHONE,
+            "direction": "outbound",
+        },
+    )
+    runtime.finish(rid, disposition="not_interested")
+    payload = {"atlas_call_id": lost_id, "workflow_run_id": str(rid), "workflow_id": str(wf)}
+    r = await client.post(URL, headers=_headers(secret), json=payload)
+    assert r.status_code == 202 and r.json()["status"] == "processed", r.text
+
+    detail = (await client.get(f"/api/v1/calls/{lost_id}", headers=owner.headers)).json()
+    assert detail["direction"] == "outbound" and detail["mode"] == "live"
+    assert detail["state"] == "completed" and detail["outcome"] == "not_interested"
+    assert detail["lead_id"] == lead["id"] and detail["campaign_id"] == campaign["id"]
+    events = (await client.get(f"/api/v1/calls/{lost_id}/events", headers=owner.headers)).json()
+    assert events[0]["type"] == "created" and events[0]["data"]["recovered"] is True
+    timeline = (
+        await client.get(f"/api/v1/leads/{lead['id']}/activities", headers=owner.headers)
+    ).json()
+    assert "Call completed · not_interested" in [a["summary"] for a in timeline["items"]]
+    # The campaign's row takes this call as its attempt instead of dialing again.
+    (item,) = (
+        await client.get(f"/api/v1/campaigns/{campaign['id']}/leads", headers=owner.headers)
+    ).json()["items"]
+    assert (item["status"], item["attempts"], item["last_call_id"]) == ("calling", 1, lost_id)
+    await campaign_worker.advance_campaign_leads({})
+    (item,) = (
+        await client.get(f"/api/v1/campaigns/{campaign['id']}/leads", headers=owner.headers)
+    ).json()["items"]
+    assert item["status"] == "completed" and item["last_outcome"] == "not_interested"
+
+    # A repeated delivery finds the recovered record; a run ATLAS never placed is ignored.
+    r = await client.post(URL, headers=_headers(secret), json=payload)
+    assert r.json()["status"] == "processed"
+    stray = runtime.add_run(org.id, wf, initial_context={"direction": "outbound"})
+    runtime.finish(stray)
+    r = await client.post(
+        URL,
+        headers=_headers(secret),
+        json={"atlas_call_id": "", "workflow_run_id": str(stray), "workflow_id": str(wf)},
+    )
+    assert r.status_code == 202 and r.json()["status"] == "processed"
+    assert (await client.get("/api/v1/calls", headers=owner.headers)).json()["total"] == 1
+    events = (await client.get(f"/api/v1/calls/{lost_id}/events", headers=owner.headers)).json()
+    assert [e["type"] for e in events].count("result_applied") == 1

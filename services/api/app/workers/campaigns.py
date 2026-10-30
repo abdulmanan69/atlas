@@ -34,6 +34,7 @@ from app.integrations.voice_runtime.client import RuntimeCapacityError
 from app.models.calls import TERMINAL_STATES, Call, CallMode, CallState
 from app.models.campaigns import (
     ACTIVE_STATUSES,
+    TERMINAL_STATUSES,
     Campaign,
     CampaignLead,
     CampaignLeadStatus,
@@ -46,12 +47,15 @@ from app.models.voice import Agent
 from app.schemas.campaigns import RetryPolicy
 from app.services import calls
 from app.services import campaigns as service
-from app.services.calls import CallNotAllowedError, CallRequest
+from app.services.calls import CallNotAllowedError, CallRequest, LeadBusyError
 
 log = logging.getLogger(__name__)
 
 DISPATCH_BATCH = 50
 CAPACITY_BACKOFF_SECONDS = 60
+# A lead already on another call (a person's, or another campaign's) is tried again
+# after this long; the attempt is not counted.
+BUSY_RETRY_SECONDS = 300
 SIMULATED_DELAY_SECONDS = (5, 20)
 # A lead stuck in `calling` this long with a non-terminal call is given up on; the
 # call record itself is left to the call core's reconciliation.
@@ -204,6 +208,13 @@ async def _dispatch_one(
     if live and not get_settings().live_calls_enabled:
         await service.pause_for_error(db, campaign, "Live calls are disabled on this deployment")
         return {"paused": 1}
+    if live and not agent.runtime_workflow_uuid:
+        # Every placement would fail the same way; park the campaign rather than burn
+        # through the audience as failed attempts.
+        await service.pause_for_error(
+            db, campaign, "The agent is not published to the voice service"
+        )
+        return {"paused": 1}
     org = await db.get(Organization, campaign.organization_id)
     org_tz = org.timezone if org else None
 
@@ -271,6 +282,10 @@ async def _dispatch_one(
             # Savepoint: a refused or failed placement leaves no half-written call row.
             async with db.begin_nested():
                 call = await calls.start_outbound_call(db, request, live=live)
+        except LeadBusyError:
+            item.next_attempt_at = now + timedelta(seconds=BUSY_RETRY_SECONDS)
+            result["deferred"] += 1
+            continue
         except CallNotAllowedError as exc:
             item.status = CampaignLeadStatus.SKIPPED
             item.skip_reason = service.skip_reason_for(lead) or exc.message[:200]
@@ -353,6 +368,12 @@ async def _advance_one(db: AsyncSession, campaign_id: uuid.UUID) -> dict[str, in
                 result["reconciled"] += 1
             continue
         _apply_result(item, call, policy, now)
+        if item.status == CampaignLeadStatus.PENDING and campaign.status in TERMINAL_STATUSES:
+            # A retriable result for a campaign that was canceled while the call ran:
+            # nothing will dial it again, so the row is closed like the rest.
+            item.status = CampaignLeadStatus.SKIPPED
+            item.skip_reason = service.SKIP_CANCELED
+            item.next_attempt_at = None
         result["reconciled"] += 1
 
     if campaign.status == CampaignStatus.RUNNING:

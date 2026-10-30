@@ -43,7 +43,10 @@ log = logging.getLogger(__name__)
 FAN_OUT_BATCH = 500
 DELIVERY_BATCH = 100
 DELIVERY_CONCURRENCY = 10
-LEASE_SECONDS = 60
+# A claimed delivery is left alone this long: as long as the job may run (its cron
+# timeout), which covers a whole batch of endpoints that each take the full request
+# timeout to answer. Shorter, and the next tick would send the same deliveries again.
+LEASE_SECONDS = 240
 OUTBOX_RETENTION = timedelta(days=7)
 DELIVERY_RETENTION = timedelta(days=30)
 

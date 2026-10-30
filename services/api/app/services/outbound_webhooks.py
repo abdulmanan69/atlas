@@ -150,6 +150,8 @@ async def send_event(
         await validate_webhook_url(url)
     except ValidationFailedError as exc:
         return DeliveryResult(False, None, 0, f"URL rejected by security policy: {exc.message}")
+    except Exception as exc:  # a resolver failure is this delivery's problem, not the batch's
+        return DeliveryResult(False, None, 0, f"URL could not be checked: {type(exc).__name__}")
     body = canonical_body(payload)
     timestamp = str(int(time.time()))
     headers = {

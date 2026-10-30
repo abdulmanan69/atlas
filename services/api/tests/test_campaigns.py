@@ -6,6 +6,7 @@ context. The fake voice runtime is only needed for the live path.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 from collections.abc import Iterator
@@ -15,7 +16,7 @@ from typing import Any
 import httpx
 import pytest
 import respx
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.config import get_settings
 from app.core.exceptions import InvalidStateTransitionError
@@ -30,10 +31,13 @@ from app.models.campaigns import (
     CampaignStatus,
     transition,
 )
+from app.models.developer import OutboxEvent
+from app.models.voice import Agent
 from app.services import calls as call_service
 from app.services import campaigns as campaign_service
 from app.services import events
 from app.workers import campaigns as worker
+from tests.calls_support import CallsRuntime, make_runtime
 from tests.conftest import Account, invite_and_join, signup
 from tests.fake_runtime import VALID_KEY, FakeRuntime
 
@@ -803,3 +807,290 @@ async def test_campaigns_are_tenant_isolated_and_role_gated(
     assert listing["total"] == 1 and listing["items"][0]["calling_hours"]["mon"] == [
         ["00:00", "24:00"]
     ]
+
+
+# ------------------------------------------------------------------ one call per lead
+
+
+async def test_a_lead_already_on_a_call_waits_its_turn(
+    client: httpx.AsyncClient,
+    owner: Account,
+    runtime: CallRuntime,
+    ctx: dict[str, Any],
+    scheduled: list[tuple[uuid.UUID, int]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = await _published_agent(client, owner)
+    [busy, free] = await _leads(client, owner, 2)
+    # A person's own call to the lead, still queued.
+    r = await client.post(
+        "/api/v1/calls", headers=owner.headers, json={"lead_id": busy, "agent_id": agent}
+    )
+    assert r.status_code == 201, r.text
+    manual_call = uuid.UUID(r.json()["id"])
+
+    campaign = await _started(client, owner, agent)
+    result = await worker.dispatch_campaigns(ctx)
+    assert result["dispatched"] == 1 and result["deferred"] == 1
+    assert [str(c.lead_id) for c in await _calls(campaign["id"])] == [free]
+    waiting = {i["lead_id"]: i for i in await _items(client, owner, campaign["id"])}[busy]
+    assert waiting["status"] == "pending" and waiting["attempts"] == 0, "no attempt was spent"
+    due = datetime.fromisoformat(waiting["next_attempt_at"])
+    assert timedelta(minutes=4) < due - datetime.now(UTC) <= timedelta(minutes=5)
+
+    # A second campaign over the same people finds both of them on a call.
+    second = await _started(client, owner, agent)
+    result = await worker.dispatch_campaigns(ctx)
+    assert result["dispatched"] == 0 and result["deferred"] == 2
+    assert await _calls(second["id"]) == []
+
+    # Once the person's call is over the lead is dialed, by one campaign at a time.
+    async with get_sessionmaker()() as db, db.begin():
+        await call_service.complete_simulated_call(db, manual_call)
+    freeze(monkeypatch, datetime.now(UTC) + timedelta(minutes=6))
+    result = await worker.dispatch_campaigns(ctx)
+    assert result["dispatched"] == 1 and result["deferred"] == 2
+    assert [str(c.lead_id) for c in await _calls(campaign["id"])] == [free, busy]
+    assert await _calls(second["id"]) == []
+
+
+async def test_a_retriable_result_after_cancellation_does_not_reopen_the_lead(
+    client: httpx.AsyncClient, owner: Account, runtime: CallRuntime, ctx: dict[str, Any]
+) -> None:
+    agent = await _published_agent(client, owner)
+    await _leads(client, owner, 2)
+    campaign = await _started(
+        client,
+        owner,
+        agent,
+        max_concurrency=1,
+        retry_policy={"max_attempts": 3, "retry_on": ["no_answer"]},
+    )
+    assert (await worker.dispatch_campaigns(ctx))["dispatched"] == 1
+    url = f"/api/v1/campaigns/{campaign['id']}"
+    assert (await client.post(f"{url}/cancel", headers=owner.headers)).json()[
+        "status"
+    ] == "canceled"
+    [call] = await _calls(campaign["id"])
+    await _finish_call(call.id, CallState.NO_ANSWER)
+    assert (await worker.advance_campaign_leads(ctx))["reconciled"] == 1
+
+    items = await _items(client, owner, campaign["id"])
+    assert [(i["status"], i["skip_reason"]) for i in items] == [
+        ("skipped", "campaign_canceled")
+    ] * 2
+    assert sorted(i["last_outcome"] or "" for i in items) == ["", "no_answer"]
+    assert all(i["next_attempt_at"] is None for i in items)
+    assert (await worker.dispatch_campaigns(ctx))["campaigns"] == 0
+    done = await _get(client, owner, campaign["id"])
+    assert done["status"] == "canceled" and done["stats"]["leads"] == {"skipped": 2}
+
+
+async def test_starting_twice_at_once_starts_once(
+    client: httpx.AsyncClient, owner: Account, runtime: CallRuntime
+) -> None:
+    agent = await _published_agent(client, owner)
+    await _leads(client, owner, 2)
+    campaign = await _campaign(client, owner, agent)
+    url = f"/api/v1/campaigns/{campaign['id']}/start"
+    first, second = await asyncio.gather(
+        client.post(url, headers=owner.headers), client.post(url, headers=owner.headers)
+    )
+    assert first.status_code == 200 and second.status_code == 200, (first.text, second.text)
+    assert first.json()["started_at"] == second.json()["started_at"]
+    async with get_sessionmaker()() as db:
+        started = (
+            await db.execute(
+                select(OutboxEvent).where(OutboxEvent.event_type == "campaign.started")
+            )
+        ).scalars()
+        audited = (
+            await db.execute(select(AuditLog).where(AuditLog.action == "campaign.started"))
+        ).scalars()
+        assert len(started.all()) == 1 and len(audited.all()) == 1
+    assert len(await _items(client, owner, campaign["id"])) == 2
+
+
+async def test_end_time_passing_mid_run_finishes_after_in_flight_calls(
+    client: httpx.AsyncClient, owner: Account, runtime: CallRuntime, ctx: dict[str, Any]
+) -> None:
+    agent = await _published_agent(client, owner)
+    await _leads(client, owner, 3)
+    campaign = await _started(
+        client, owner, agent, max_concurrency=1, retry_policy={"max_attempts": 1}
+    )
+    assert (await worker.dispatch_campaigns(ctx))["dispatched"] == 1
+    url = f"/api/v1/campaigns/{campaign['id']}"
+    r = await client.patch(
+        url,
+        headers=owner.headers,
+        json={"end_at": (datetime.now(UTC) - timedelta(minutes=1)).isoformat()},
+    )
+    assert r.status_code == 200, r.text
+    assert (await worker.dispatch_campaigns(ctx))["dispatched"] == 0
+    await worker.advance_campaign_leads(ctx)
+    assert (await _get(client, owner, campaign["id"]))["status"] == "running", "a call is on"
+    statuses = sorted(
+        (i["status"], i["skip_reason"] or "") for i in await _items(client, owner, campaign["id"])
+    )
+    assert statuses == [
+        ("calling", ""),
+        ("skipped", "campaign_window_ended"),
+        ("skipped", "campaign_window_ended"),
+    ]
+    [call] = await _calls(campaign["id"])
+    await _finish_call(call.id, CallState.COMPLETED, "qualified")
+    await worker.advance_campaign_leads(ctx)
+    done = await _get(client, owner, campaign["id"])
+    assert done["status"] == "completed"
+    assert done["stats"]["leads"] == {"completed": 1, "skipped": 2}
+    assert len(await _calls(campaign["id"])) == 1
+
+
+async def test_live_campaign_whose_agent_is_not_on_the_voice_service_is_parked(
+    client: httpx.AsyncClient,
+    owner: Account,
+    runtime: CallRuntime,
+    ctx: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(get_settings(), "live_calls_enabled", True)
+    agent = await _published_agent(client, owner)
+    await _leads(client, owner, 2)
+    campaign = await _started(client, owner, agent, mode="live")
+    async with get_sessionmaker()() as db, db.begin():
+        await db.execute(
+            update(Agent).where(Agent.id == uuid.UUID(agent)).values(runtime_workflow_uuid=None)
+        )
+    assert (await worker.dispatch_campaigns(ctx)).get("paused") == 1
+    parked = await _get(client, owner, campaign["id"])
+    assert parked["status"] == "paused" and "voice service" in parked["last_error"]
+    assert await _calls(campaign["id"]) == [] and runtime.triggered == []
+    assert all(
+        i["status"] == "pending" and i["attempts"] == 0
+        for i in await _items(client, owner, campaign["id"])
+    )
+
+
+# ------------------------------------------------------------------ results from the voice service
+
+
+@pytest.fixture
+def calls_runtime() -> Iterator[CallsRuntime]:
+    """The fuller fake (it keeps runs) for tests that need the voice service's results."""
+    yield from make_runtime()
+
+
+async def test_voicemail_busy_errors_and_cancellations_map_onto_the_campaign(
+    client: httpx.AsyncClient,
+    owner: Account,
+    calls_runtime: CallsRuntime,
+    ctx: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(get_settings(), "live_calls_enabled", True)
+    agent = await _published_agent(client, owner)
+    leads = await _leads(client, owner, 4)
+    campaign = await _started(client, owner, agent, mode="live")
+    assert (await worker.dispatch_campaigns(ctx))["dispatched"] == 4
+    calls = {str(c.lead_id): c for c in await _calls(campaign["id"])}
+    # How the voice service says each call ended, and the talk time it reports.
+    endings = {
+        leads[0]: ("voicemail_detected", 12.0),
+        leads[1]: ("busy", 0.0),
+        leads[2]: ("pipeline_error", 30.0),
+        leads[3]: ("system_cancelled", 0.0),
+    }
+    async with get_sessionmaker()() as db:
+        for lead_id, (status, duration) in endings.items():
+            call = calls[lead_id]
+            assert call.runtime_run_id is not None
+            calls_runtime.finish(
+                int(call.runtime_run_id), disposition=status, call_status=status, duration=duration
+            )
+            row = await db.get(Call, call.id)
+            assert row is not None
+            await call_service.sync_from_runtime(db, row)
+        await db.commit()
+    await worker.advance_campaign_leads(ctx)
+
+    by_lead = {i["lead_id"]: i for i in await _items(client, owner, campaign["id"])}
+    assert (by_lead[leads[0]]["status"], by_lead[leads[0]]["last_outcome"]) == (
+        "pending",
+        "voicemail_detected",
+    )
+    assert (by_lead[leads[1]]["status"], by_lead[leads[1]]["last_outcome"]) == ("pending", "busy")
+    assert by_lead[leads[2]]["status"] == "failed" and by_lead[leads[3]]["status"] == "failed"
+    states = {str(c.lead_id): c for c in await _calls(campaign["id"])}
+    assert states[leads[0]].state == CallState.NO_ANSWER
+    assert states[leads[1]].state == CallState.BUSY
+    assert states[leads[2]].state == CallState.FAILED
+    assert states[leads[2]].error_code == "runtime_error"
+    assert states[leads[3]].state == CallState.CANCELED
+    # Voicemail is not contact: the person is still to be reached.
+    person = (await client.get(f"/api/v1/leads/{leads[0]}", headers=owner.headers)).json()
+    assert person["last_contacted_at"] is None
+    progress = (
+        await client.get(f"/api/v1/campaigns/{campaign['id']}/progress", headers=owner.headers)
+    ).json()
+    assert progress["answer_rate"] == 0.0 and progress["status"] == "running"
+
+
+# ------------------------------------------------------------------ API keys
+
+
+async def test_api_keys_act_with_their_role_on_campaigns_and_calls(
+    client: httpx.AsyncClient,
+    owner: Account,
+    runtime: CallRuntime,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(get_settings(), "live_calls_enabled", True)
+    agent = await _published_agent(client, owner)
+    [lead] = await _leads(client, owner, 1)
+
+    async def key(role: str) -> dict[str, str]:
+        r = await client.post(
+            "/api/v1/developer/api-keys", headers=owner.headers, json={"name": role, "role": role}
+        )
+        assert r.status_code == 201, r.text
+        return {"X-API-Key": r.json()["key"]}
+
+    manager, viewer, admin = await key("manager"), await key("viewer"), await key("admin")
+    base = {"name": "Via key", "agent_id": agent, "calling_hours": ALL_DAY, "lead_ids": [lead]}
+    # A manager's key runs dry runs but, like a manager, cannot authorise real calls.
+    r = await client.post("/api/v1/campaigns", headers=manager, json=base)
+    assert r.status_code == 201, r.text
+    dry = r.json()
+    r = await client.post(f"/api/v1/campaigns/{dry['id']}/start", headers=manager)
+    assert r.status_code == 200, r.text
+    r = await client.post("/api/v1/campaigns", headers=manager, json={**base, "mode": "live"})
+    assert r.status_code == 201, r.text
+    live = r.json()
+    r = await client.post(f"/api/v1/campaigns/{live['id']}/start", headers=manager)
+    assert r.status_code == 403 and r.json()["error"]["code"] == "forbidden"
+    r = await client.post(
+        "/api/v1/calls", headers=manager, json={"lead_id": lead, "agent_id": agent, "live": True}
+    )
+    assert r.status_code == 403
+    assert runtime.triggered == []
+    # An admin's key may, and the audit trail names the key.
+    r = await client.post(f"/api/v1/campaigns/{live['id']}/start", headers=admin)
+    assert r.status_code == 200, r.text
+    async with get_sessionmaker()() as db:
+        authorised = (
+            await db.execute(select(AuditLog).where(AuditLog.action == "campaign.live_authorized"))
+        ).scalar_one()
+    assert authorised.changes["actor"]["type"] == "api_key"
+    assert str(authorised.actor_user_id) == owner.user_id
+    # A viewer's key reads and nothing more.
+    r = await client.get(f"/api/v1/campaigns/{dry['id']}/progress", headers=viewer)
+    assert r.status_code == 200
+    r = await client.post(f"/api/v1/campaigns/{dry['id']}/pause", headers=viewer)
+    assert r.status_code == 403
+    # Naming another organization does not move the key there.
+    other = await signup(client, "b@example.com", "Tenant B")
+    r = await client.get(
+        f"/api/v1/campaigns/{dry['id']}", headers={**manager, "X-Organization-Id": other.org_id}
+    )
+    assert r.status_code == 403

@@ -357,8 +357,10 @@ async def test_live_call_and_test_call_warm_a_self_hosted_model(
     agent = await published_agent(client, owner)
     lead = await create_lead(client, owner, company="Northwind")
 
-    # A hosted model: nothing is sent to any model server.
-    await start_call(client, owner, lead["id"], agent["id"], live=True)
+    # A hosted model: nothing is sent to any model server. (Its own lead: Hina's call
+    # below could not be placed while this one is still ringing.)
+    hosted = await create_lead(client, owner, phone="+14155550102")
+    await start_call(client, owner, hosted["id"], agent["id"], live=True)
     assert await _finish_warmups() == ["not_self_hosted"]
     assert warmup.requests == []
 

@@ -15,7 +15,7 @@ from app.core.redis import get_redis
 from app.db.session import get_sessionmaker
 from app.integrations.voice_runtime.simulated import SimulatedResult
 from app.models.audit import AuditLog
-from app.models.calls import Call, CallState
+from app.models.calls import Call, CallDirection, CallMode, CallState
 from app.models.developer import OutboxEvent
 from app.services import calls as call_service
 from app.workers.calls import complete_simulated_call, reconcile_calls
@@ -186,10 +186,11 @@ async def test_live_call_is_placed_through_the_runtime(
     assert await get_redis().exists(f"arq:job:simulated-call:{call['id']}") == 0
 
     runtime.capacity_full = True
+    another = await create_lead(client, owner, phone="+14155550101")
     r = await client.post(
         "/api/v1/calls",
         headers=owner.headers,
-        json={"lead_id": lead["id"], "agent_id": agent["id"], "live": True},
+        json={"lead_id": another["id"], "agent_id": agent["id"], "live": True},
     )
     assert r.status_code == 429 and r.json()["error"]["code"] == "voice_capacity_reached"
     assert (await client.get("/api/v1/calls", headers=owner.headers)).json()["total"] == 1
@@ -445,8 +446,9 @@ async def test_reconciliation_recovers_lost_results_and_closes_stale_calls(
         and late["error_code"] is None
     )
 
-    # Runtime unreachable: nothing is closed early.
-    extra = await start_call(client, owner, leads[2]["id"], agent["id"], live=True)
+    # Runtime unreachable: nothing is closed early. (A different lead: `fresh` is still
+    # on the line with leads[2], and one open call per lead is the rule.)
+    extra = await start_call(client, owner, leads[3]["id"], agent["id"], live=True)
     async with get_sessionmaker()() as db:
         await db.execute(
             update(Call)
@@ -469,3 +471,39 @@ async def test_schedule_helper_survives_queue_outage(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(jobs, "enqueue", _unavailable)
     assert await call_service.schedule_simulated_completion(uuid.uuid4()) is False
     assert CallState.FAILED in call_service.TERMINAL_STATES
+
+
+async def test_a_lead_on_an_open_call_is_not_called_again(
+    client: httpx.AsyncClient,
+    owner: Account,
+    runtime: CallsRuntime,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = await published_agent(client, owner)
+    lead = await create_lead(client, owner)
+    _simulate(monkeypatch)
+    first = await start_call(client, owner, lead["id"], agent["id"])
+    body = {"lead_id": lead["id"], "agent_id": agent["id"]}
+    r = await client.post("/api/v1/calls", headers=owner.headers, json=body)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "call_not_allowed"
+    assert "already on a call" in r.json()["error"]["message"]
+    assert (await client.get("/api/v1/calls", headers=owner.headers)).json()["total"] == 1
+    assert await complete_simulated_call({}, first["id"]) == "completed"
+    second = await client.post("/api/v1/calls", headers=owner.headers, json=body)
+    assert second.status_code == 201, second.text
+    assert await complete_simulated_call({}, second.json()["id"]) == "completed"
+
+    # A browser test session that borrowed the lead's details is not a call to the lead.
+    async with get_sessionmaker()() as db:
+        db.add(
+            Call(
+                organization_id=uuid.UUID(owner.org_id),
+                lead_id=uuid.UUID(lead["id"]),
+                agent_id=uuid.UUID(agent["id"]),
+                direction=CallDirection.INBOUND,
+                mode=CallMode.TEST,
+                state=CallState.IN_PROGRESS,
+            )
+        )
+        await db.commit()
+    assert (await client.post("/api/v1/calls", headers=owner.headers, json=body)).status_code == 201
