@@ -40,9 +40,10 @@ docker exec atlas-postgres-1 psql -U atlas -d atlas -qc "CREATE DATABASE \$DB" >
 # One run at a time: the dependencies volume must not be synced by two runs at once.
 exec 9>/tmp/atlas-dev-tests.lock
 flock 9
+# The deployed checkout's vendored runtime stands in for the repository root (one test reads it).
 docker run --rm --network atlas_default \
-  -v ~/atlas-dev/services/api:/src -v atlas-dev-venv:/src/.venv -v atlas-dev-uv:/root/.cache/uv \
-  -w /src -e UV_LINK_MODE=copy -e UV_PYTHON_DOWNLOADS=never -e PYTHONPATH=/src \
+  -v ~/atlas-dev:/repo -v ~/atlas/vendor:/repo/vendor:ro -v atlas-dev-venv-repo:/repo/services/api/.venv -v atlas-dev-uv:/root/.cache/uv \
+  -w /repo/services/api -e UV_LINK_MODE=copy -e UV_PYTHON_DOWNLOADS=never -e PYTHONPATH=/repo/services/api \
   -e ATLAS_TEST_DATABASE_URL="postgresql+asyncpg://atlas:\${PW}@postgres:5432/\$DB" \
   -e ATLAS_TEST_REDIS_URL="redis://redis:6379/\$RDB" \
   python:3.12.15-slim-bookworm sh -c 'pip install -q --root-user-action=ignore --disable-pip-version-check uv >/dev/null && uv sync -q --frozen --no-install-project && uv run --no-sync pytest -q -p no:cacheprovider '"$ARGS"
