@@ -76,6 +76,13 @@ uv run pytest -q         # needs the compose postgres + redis (uses db atlas_tes
 uv run alembic check     # models and migrations in sync
 ```
 
+On a slow PC, run the API tests on the Oracle server instead (one file or the whole suite;
+the first run installs the dependencies there):
+
+```bash
+bash infra/scripts/remote_api_tests.sh tests/test_campaigns.py
+```
+
 ## Documentation
 
 Brand assets (wordmark and mark as SVG and PNG, light and dark) live in `docs/brand/`. The web app renders the same geometry inline from `apps/web/src/components/brand.tsx`, filled with the current text colour.
