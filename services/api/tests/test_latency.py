@@ -511,7 +511,7 @@ async def test_latency_guide_is_honest(client: httpx.AsyncClient, owner: Account
     measured = [p for p in guide["providers"] if p["measured"]]
     assert [(p["model_hint"], p["measured_on"]) for p in measured] == [
         (ai_speed.STREAMING_STT_MODEL, None),
-        ("parakeet-en-0.6b-v3", "NVIDIA T4 GPU"),
+        ("nemotron-streaming-en", "NVIDIA T4 GPU"),
         ("qwen3:8b", "NVIDIA T4 GPU"),
         ("chatterbox-turbo", "NVIDIA T4 GPU"),
     ]
@@ -522,8 +522,8 @@ async def test_latency_guide_is_honest(client: httpx.AsyncClient, owner: Account
     # The figures from docs/perf/gpu-model-eval.md.
     gpu = {p["model_hint"]: p for p in measured[1:]}
     assert (
-        gpu["parakeet-en-0.6b-v3"]["typical_ms"] == 88
-        and "5 s of speech" in (gpu["parakeet-en-0.6b-v3"]["note"])
+        gpu["nemotron-streaming-en"]["typical_ms"] == 260
+        and "after the caller stops" in (gpu["nemotron-streaming-en"]["note"])
     )
     assert gpu["qwen3:8b"]["typical_ms"] == 118 and gpu["qwen3:8b"]["kind"] == "llm"
     expressive = gpu["chatterbox-turbo"]
@@ -684,7 +684,7 @@ def test_private_gpu_preset_uses_the_expressive_voice_server() -> None:
         )
 
     preset = next(p for p in ai_speed.PRESETS if p.id == "private_gpu")
-    assert preset.choices.stt.settings == {"model": "parakeet-en-0.6b-v3", "language": "en"}
+    assert preset.choices.stt.settings == {"model": "nemotron-streaming-en", "language": "en"}
     assert preset.choices.llm.settings == {"model": "qwen3:8b", "temperature": 0.3}
     assert preset.choices.tts.settings == {"model": "chatterbox-turbo"}
     assert set(preset.requires) == {"deepgram", "speaches"}
@@ -755,7 +755,7 @@ async def test_apply_private_gpu_preset(
     selection = r.json()
     assert selection["stt"] == {
         "connection_id": stt,
-        "settings": {"model": "parakeet-en-0.6b-v3", "language": "en"},
+        "settings": {"model": "nemotron-streaming-en", "language": "en"},
     }
     assert selection["llm"] == {
         "connection_id": llm,

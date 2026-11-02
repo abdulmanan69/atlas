@@ -19,7 +19,7 @@ before as the fallback; `stop` puts the earlier models back and removes the serv
 
 --voice also runs the expressive voice server (infra/docker/expressive-tts, Chatterbox-Turbo:
 it can laugh, sigh and gasp) and switches the organisation's voice to it. --stt also runs the
-live speech-to-text server (infra/docker/streaming-stt, Parakeet TDT 0.6B v3 on CUDA) and
+live speech-to-text server (infra/docker/streaming-stt, Nemotron Speech Streaming on CUDA) and
 points the organisation's live speech-to-text connection at it for the session; that
 connection keeps its own key, which this script never sees.
 
@@ -294,12 +294,11 @@ def stt_env():
     libs = [os.path.join(sp, d, "lib") for d in ("cuda_runtime", "cublas", "cufft", "curand", "nvjitlink", "cudnn")]
     return clean_env(VIRTUAL_ENV=venv, PATH=os.path.join(venv, "bin") + os.pathsep + os.environ.get("PATH", ""),
                      LD_LIBRARY_PATH=":".join(libs + [os.environ.get("LD_LIBRARY_PATH", "")]),
-                     STT_MODEL_DIR=os.path.join(WORK, "stt", "models"), STT_MODEL="parakeet-0.6b-v3",
-                     STT_PROVIDER="cuda", STT_MAX_SESSIONS="8", PORT=str(STT_PORT), LOG_LEVEL="INFO",
-                     # Words the model is unsure of are dropped (the image's default for this model
-                     # is 0): in test calls it heard "Yeah." in the silence after some lines, which
-                     # held the caller's turn open for seconds.
-                     STT_MIN_CONFIDENCE="0.5")
+                     # Nemotron streams for real: finals 257 ms after the caller stops against 386,
+                     # nothing heard in silence where Parakeet v3 wrote "Yeah." (held the caller's
+                     # turn open for seconds), half the CPU (docs/perf/gpu-stt-streaming.md).
+                     STT_MODEL_DIR=os.path.join(WORK, "stt", "models"), STT_MODEL="nemotron-en-560",
+                     STT_PROVIDER="cuda", STT_MAX_SESSIONS="8", PORT=str(STT_PORT), LOG_LEVEL="INFO")
 
 
 def install_stt():

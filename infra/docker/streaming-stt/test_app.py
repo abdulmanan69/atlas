@@ -384,6 +384,25 @@ class ModelSettingsTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.spec(STT_MODEL="parakeet-0.6b-v4", STT_PROVIDER="cuda")
 
+    def test_nemotron_runs_in_full_precision_on_cuda(self) -> None:
+        for key in ("nemotron-en-560", "nemotron-en-160"):
+            with self.subTest(model=key):
+                spec = self.spec(STT_MODEL=key, STT_PROVIDER="cuda")
+                packaged = fetch_model.MODELS[key]
+                self.assertEqual(spec.key, key + "-fp32")
+                self.assertEqual(spec.model_id, packaged.model_id, "the same name in results and /health")
+                self.assertEqual(spec.files["encoder"][0], "encoder.onnx")
+                self.assertEqual(spec.files["encoder_weights"][0], "encoder.data", "beside the encoder")
+                self.assertEqual(spec.files["tokens"], packaged.files["tokens"], "the same vocabulary")
+                self.assertEqual(spec.tail_pad_s, packaged.tail_pad_s)
+                self.assertTrue(all(re.fullmatch(r"[0-9a-f]{64}", sha) for _, sha in spec.files.values()))
+                self.assertEqual(self.spec(STT_MODEL=key).key, key, "the int8 export on the CPU")
+        # The two chunk sizes share everything but the encoder.
+        a, b = fetch_model.MODELS["nemotron-en-560-fp32"], fetch_model.MODELS["nemotron-en-160-fp32"]
+        self.assertNotEqual(a.files["encoder"], b.files["encoder"])
+        for role in ("encoder_weights", "decoder", "joiner", "tokens"):
+            self.assertEqual(a.files[role], b.files[role])
+
     def test_data_files_are_fetched_beside_the_model(self) -> None:
         spec = fetch_model.MODELS["parakeet-0.6b-v3-fp32"]
         fetched: list[str] = []

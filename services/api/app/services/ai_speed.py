@@ -65,11 +65,14 @@ STREAMING_STT_FINAL_MS = 440
 # One GPU (16 GB, measured on an NVIDIA Tesla T4; docs/perf/gpu-model-eval.md and its JSON
 # files): the most human calls. Together the three models need about 11 GB.
 T4 = "NVIDIA T4 GPU"
-# The same live speech server with NVIDIA Parakeet TDT 0.6B v3: 88 ms to transcribe 5 s of
-# speech (warm median); 14.5 % of words wrong on Pakistani-accented English, also on 8 kHz
-# phone audio (the 110M model on CPU: 23.4 % and 29.4 %).
-GPU_STT_MODEL = "parakeet-en-0.6b-v3"
-GPU_STT_DECODE_MS = 88
+# The same live speech server with NVIDIA Nemotron Speech Streaming EN 0.6B in full precision
+# (docs/perf/gpu-stt-streaming.md): it streams for real, so the final transcript comes 257 ms
+# after the caller stops (p90 269 ms; Parakeet TDT 0.6B v3: 386 / 450 ms), it wrote nothing
+# in silence where Parakeet wrote "Yeah." (8 of 20 clips), and four calls at once stay at
+# 259 / 303 ms. Words wrong on Pakistani-accented English: 18.4 % at 16 kHz, 18.6 % on 8 kHz
+# phone audio (Parakeet v3: 16.4 % / 20.8 %; the 110M CPU model: 23.4 % / 29.4 %).
+GPU_STT_MODEL = "nemotron-streaming-en"
+GPU_STT_FINAL_MS = 260
 # qwen3:8b with thinking off: first sentence of a reply after 118 ms (median of 30), 25 of
 # 30 replies kept to two sentences, no made-up numbers (qwen2.5:1.5b: 37 ms, phone numbers).
 GPU_LLM_MODEL = "qwen3:8b"
@@ -177,19 +180,21 @@ GUIDE: tuple[LatencyGuideProvider, ...] = (
         kind="stt",
         provider="deepgram",
         model_hint=GPU_STT_MODEL,
-        typical_ms=GPU_STT_DECODE_MS,
+        typical_ms=GPU_STT_FINAL_MS,
         measured=True,
         measured_on=T4,
         streaming=True,
         turn_aware=False,
         note=(
             "Self-hosted live speech-to-text on a GPU: the same Deepgram connection to the "
-            "local-stt server, with NVIDIA Parakeet TDT 0.6B v3 (CC BY 4.0). Measured on an "
-            f"NVIDIA T4: {GPU_STT_DECODE_MS} ms to transcribe 5 s of speech (warm median), "
-            "on top of the 0.2 s of silence that ends a turn. On accented English it misheard "
-            "far fewer words than the CPU model and Whisper large-v3: 14.5% of words wrong "
-            "for Pakistani speakers, also on phone audio (CPU model: 23.4% and 29.4%). "
-            "Tested on English."
+            "local-stt server, with NVIDIA Nemotron Speech Streaming EN 0.6B (NVIDIA Open "
+            "Model License), which recognises words as they are spoken. Measured on an NVIDIA "
+            f"T4: the final transcript {GPU_STT_FINAL_MS} ms after the caller stops (including "
+            "the 0.2 s of silence that ends a turn), nothing heard in silence, and four calls "
+            "at once without slowing down. On Pakistani-accented English 18.4% of words wrong "
+            "(18.6% on phone audio; the CPU model: 23.4% and 29.4%). Parakeet TDT 0.6B v3 "
+            "(LOCAL_STT_GPU_MODEL=parakeet-0.6b-v3) is a little more accurate on clean audio "
+            "but answers later and hears words in silence. English only."
         ),
     ),
     LatencyGuideProvider(

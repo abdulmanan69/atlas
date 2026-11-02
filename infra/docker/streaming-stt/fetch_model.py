@@ -15,8 +15,12 @@ Models (licences checked at the source, see docs/local-models.md):
   nemotron-en-560   NVIDIA Nemotron Speech Streaming EN 0.6B, cache-aware streaming
                     FastConformer RNN-T, 560 ms chunks, int8. Truly streaming, but about
                     0.8 s of CPU time per second of speech on 2 threads, and about 1 GB
-                    of memory. NVIDIA Open Model License (commercial use allowed).
-  nemotron-en-160   The same model exported with 160 ms chunks.
+                    of memory. NVIDIA Open Model License (commercial use allowed). With
+                    STT_PROVIDER=cuda the full-precision export (CUDA_VARIANTS), the GPU
+                    default: finals 257 ms after the caller stops, nothing heard in
+                    silence, steady with calls at once (docs/perf/gpu-stt-streaming.md).
+  nemotron-en-160   The same model exported with 160 ms chunks (a full-precision export
+                    on cuda too); no sooner final, three times the work.
   parakeet-tdt-v2   NVIDIA Parakeet TDT 0.6B v2, int8, used like parakeet-110m. More
                     accurate on benchmarks, about 1 s per utterance on CPU. CC BY 4.0.
   parakeet-0.6b-v3  NVIDIA Parakeet TDT 0.6B v3, used like parakeet-110m. The most
@@ -212,6 +216,77 @@ MODELS: dict[str, ModelSpec] = {
         cased=True,
         model_type="nemo_transducer",
     ),
+    "nemotron-en-560-fp32": ModelSpec(
+        key="nemotron-en-560-fp32",
+        model_id="nemotron-streaming-en",
+        kind="online",
+        arch="fastconformer-rnnt",
+        # The same model in full precision for a GPU: the int8 export's quantised layers
+        # run on the CPU there (242 ms per chunk against 30 ms; docs/perf/gpu-stt-streaming.md).
+        # The encoder's weights are a separate file ONNX Runtime reads from its directory.
+        repo="csukuangfj2/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-2026-04-25",
+        revision="d655d5f6c5e6a01525a0c905e548facbb1feba5e",
+        files={
+            "encoder": (
+                "encoder.onnx",
+                "9af6849f4f4fbd033469998e7c80bf5f1ac5800e230f20f0ca4b7482a524a7e3",
+            ),
+            "encoder_weights": (
+                "encoder.data",
+                "44f65771e1570546f61106b3d0c604a60b398d061476fda8042bb05432601bd4",
+            ),
+            "decoder": (
+                "decoder.onnx",
+                "17614cc0415d49daefd63cd91cb3415af046fa5a487c2049def68f51a667d6fe",
+            ),
+            "joiner": (
+                "joiner.onnx",
+                "d4ef2398e4b19cb166c0c12f03cb20333e4d359d63c5fd8cf965c0649c1d0d03",
+            ),
+            "tokens": (
+                "tokens.txt",
+                "dc0b4584ab2e4ddbf888425c076c61b736e7356a015250db7d307e6f1a8188ff",
+            ),
+        },
+        licence="NVIDIA Open Model License",
+        cased=True,
+        tail_pad_s=0.6,
+    ),
+    "nemotron-en-160-fp32": ModelSpec(
+        key="nemotron-en-160-fp32",
+        model_id="nemotron-streaming-en-160ms",
+        kind="online",
+        arch="fastconformer-rnnt",
+        # The 160 ms export in full precision; decoder, joiner, tokens and the weights file
+        # are the same as the 560 ms export's.
+        repo="csukuangfj2/sherpa-onnx-nemotron-speech-streaming-en-0.6b-160ms-2026-04-25",
+        revision="9660703a1289d5b5c0c6470ced80eb52096fc740",
+        files={
+            "encoder": (
+                "encoder.onnx",
+                "b46566b6deb00ad97da0c12bd119ee86e2bc89055c60bf8eba1f2dba205a50ef",
+            ),
+            "encoder_weights": (
+                "encoder.data",
+                "44f65771e1570546f61106b3d0c604a60b398d061476fda8042bb05432601bd4",
+            ),
+            "decoder": (
+                "decoder.onnx",
+                "17614cc0415d49daefd63cd91cb3415af046fa5a487c2049def68f51a667d6fe",
+            ),
+            "joiner": (
+                "joiner.onnx",
+                "d4ef2398e4b19cb166c0c12f03cb20333e4d359d63c5fd8cf965c0649c1d0d03",
+            ),
+            "tokens": (
+                "tokens.txt",
+                "dc0b4584ab2e4ddbf888425c076c61b736e7356a015250db7d307e6f1a8188ff",
+            ),
+        },
+        licence="NVIDIA Open Model License",
+        cased=True,
+        tail_pad_s=0.6,
+    ),
     "parakeet-0.6b-v3-fp32": ModelSpec(
         key="parakeet-0.6b-v3-fp32",
         model_id="parakeet-en-0.6b-v3",
@@ -336,7 +411,12 @@ _LEGACY_FILES = [name for name, _ in MODELS["zipformer-en"].files.values()]
 # Measured on a T4 (whole clips, no server): Parakeet 0.6B v3 int8 decodes 5 s in 731 ms on
 # the GPU against 61 ms in full precision, and misses more words of accented speech (EdAcc
 # South Asian 14.8 % against 12.0 %; full precision matches NVIDIA's own model).
-CUDA_VARIANTS = {"parakeet-0.6b-v3": "parakeet-0.6b-v3-fp32"}
+# On a GPU a model runs as its full-precision export (STT_MODEL names the int8 one).
+CUDA_VARIANTS = {
+    "parakeet-0.6b-v3": "parakeet-0.6b-v3-fp32",
+    "nemotron-en-560": "nemotron-en-560-fp32",
+    "nemotron-en-160": "nemotron-en-160-fp32",
+}
 
 
 def provider_from_env() -> str:

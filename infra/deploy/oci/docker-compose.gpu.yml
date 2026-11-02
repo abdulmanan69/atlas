@@ -49,7 +49,7 @@ services:
       dockerfile: Dockerfile.gpu
     image: atlas/local-stt:2-sherpa-onnx-1.13.8-cuda12.9
     environment:
-      STT_MODEL: "${LOCAL_STT_GPU_MODEL:-parakeet-0.6b-v3}"
+      STT_MODEL: "${LOCAL_STT_GPU_MODEL:-nemotron-en-560}"
       STT_PROVIDER: cuda
       # Calls transcribed at once. Each decode takes GPU memory while it runs: measured on a
       # T4 with the language model and the voice loaded (12.6 GB), 8 streams used 14.6 GB and

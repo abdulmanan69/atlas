@@ -1,0 +1,2018 @@
+{
+ "meta": {
+  "measured": "2026-10-30T15:57:07Z",
+  "gpu": "Tesla T4, 15360 MiB, 580.178.04\nTesla T4, 15360 MiB, 580.178.04",
+  "cpu": "4 x Intel(R) Xeon(R) CPU @ 2.00GHz",
+  "ram_gib": 31.3,
+  "python_server_venv": "3.12 (uv), the GPU image's requirements.gpu.txt",
+  "versions": "numpy                    2.5.3\nnvidia-cublas-cu12       12.9.1.4\nnvidia-cuda-runtime-cu12 12.9.79\nnvidia-cudnn-cu12        9.10.2.21\nnvidia-cufft-cu12        11.4.1.4\nnvidia-curand-cu12       10.3.10.19\nnvidia-nvjitlink-cu12    12.9.86\nsherpa-onnx              1.13.8+cuda12.cudnn9.onnxruntime1.28.2\nwebsockets               17.1",
+  "kernel": "abdulmananxx/atlas-gpu-stt-streaming (private Kaggle notebook), output stt-streaming.json",
+  "gpu_minutes": 22.0,
+  "steps_s": {
+   "setup": 170,
+   "test_other": 11,
+   "noise_clips": 0,
+   "model_parakeet-0.6b-v3": 371,
+   "model_nemotron-en-560": 253,
+   "model_nemotron-en-160": 433,
+   "model_nemotron-en-560-int8-on-cuda": 74
+  },
+  "errors": {},
+  "notes": [],
+  "wer_normalisation": "lower case; <tags> and IGNORE_TIME_SEGMENT removed; $N -> N dollars, % -> percent, digits/ordinals -> words (num2words, years 1100-2099 as years); hyphens -> spaces; punctuation and apostrophes removed; fillers (um uh uhm umm hmm hm mm mmm mhm er erm ah) removed; ok -> okay, alright -> all right, mr -> mister, mrs -> missus"
+ },
+ "settings": {
+  "server": "infra/docker/streaming-stt app.py as the GPU image runs it: STT_PROVIDER=cuda, STT_MAX_SESSIONS=8, defaults otherwise (2 CPU threads, STT_PAD_MS=500 for whole-utterance models on CUDA, STT_FINALIZE_PAD_MS=600 for Nemotron, STT_MIN_CONFIDENCE=0); one server process per model, on 127.0.0.1",
+  "nemotron_export": "full-precision sherpa-onnx exports (csukuangfj2/...-560ms-2026-04-25 @ d655d5f6, ...-160ms-2026-04-25 @ 9660703a) registered as CUDA variants of nemotron-en-560 / -160 for the measurement (fp32_nemotron.py); the packaged int8 exports were also run on CUDA (short pass)",
+  "parakeet_export": "parakeet-0.6b-v3-fp32 (CUDA_VARIANTS), as deployed",
+  "client": "ws_client.py: the voice service's Deepgram live-listen query (linear16, interim_results=true, endpointing=100), 20 ms frames in real time, Finalize 0.2 s after the speech ends (its VAD stop_secs), CloseStream after the final; non-realtime for the WER passes (as fast as the server takes it)",
+  "final_after_speech_ms": "last speech frame (10 ms frames above -35 dB of the peak) -> the final that answered Finalize",
+  "stable_partial_after_speech_ms": "last speech frame -> the earliest interim (live words) from which every later interim already read as the final, after normalisation; partial_had_final_words counts the clips where such an interim existed (the voice service could act on it)",
+  "concurrency": "4 real-time streams at once, 3 rounds, clips of up to 12 s from LibriSpeech test-clean and EdAcc (16 kHz and 8 kHz), each starting 0-2 s apart; nvidia-smi sampled every 250 ms",
+  "hallucination": {
+   "clips": {
+    "n_clips": 20,
+    "rates": [
+     16000,
+     8000
+    ],
+    "kinds": [
+     "breath",
+     "line",
+     "noise",
+     "silence"
+    ],
+    "what": "4 s each: white noise at -75..-46 dBFS (silence); 1/f noise at -50..-32 dBFS (noise); a -60 dBFS floor with one 0.5 s breath-like burst (300-2500 Hz, raised-cosine) at -40..-17 dBFS (breath); -50 dBFS 1/f noise, 60 Hz hum, two bursts and a click (line). 8 kHz: low-passed, decimated, G.711 mu-law round trip."
+   },
+   "through_server": "each clip sent over the protocol at 16 kHz and at 8 kHz, Finalize at the end; a clip counts when any final carried text; 'conf_ge_0_5' applies STT_MIN_CONFIDENCE=0.5 to the same finals (the server drops a final whose mean token probability is below the setting, so the count is what that setting would have left)",
+   "direct": "the same 16 kHz clips straight into the model, no voice activity detector (direct_no_server.noise_summary)"
+  },
+  "sets": {
+   "librispeech_test_clean": "40 clips, as docs/perf/gpu-stt-eval.json",
+   "librispeech_test_other": {
+    "source": "openslr/librispeech_asr (Hugging Face), other/test, shard 0000",
+    "revision": "71cacbfb7e2354c4226d01e70d77d5fca3d04ba1",
+    "licence": "CC BY 4.0",
+    "n": 40,
+    "speakers": 33,
+    "selection": "sorted by id, 4-12 s, one per speaker then a second per speaker, up to 40"
+   },
+   "edacc_south_asian": "40 clips (20 L1 Urdu, 20 L1 Hindi / Indian English), as docs/perf/gpu-stt-eval.json; :urdu and :indian are its halves",
+   "edacc_south_asian_phone8k": "the same at 8 kHz after a G.711 mu-law round trip, sent as sample_rate=8000",
+   "caller_lines_tts": "the 4 automated-caller lines (Pocket TTS, voice alba), 16 kHz and 8 kHz mu-law",
+   "data": "Kaggle notebook output abdulmananxx/atlas-stt-eval-data (public sets and synthetic caller lines only)"
+  }
+ },
+ "stats": {
+  "parakeet-0.6b-v3": {
+   "model_key": "parakeet-0.6b-v3",
+   "kind": "offline",
+   "export": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3@1a468a35",
+   "server_env": {
+    "STT_MODEL": "parakeet-0.6b-v3",
+    "STT_PROVIDER": "cuda",
+    "STT_MODEL_DIR": "/tmp/atlas/models",
+    "STT_MAX_SESSIONS": "8"
+   },
+   "ready_s": 23.0,
+   "gpu_memory_mib": {
+    "after_load": 3453,
+    "after_runs": 4939,
+    "max_4_streams": 4939
+   },
+   "cpu_memory_mib": {
+    "after_load": 1042,
+    "peak": 1446
+   },
+   "wer_pct": {
+    "caller_lines_tts": 0.0,
+    "caller_lines_tts_phone8k": 2.56,
+    "edacc_south_asian": 16.37,
+    "edacc_south_asian:urdu": 18.4,
+    "edacc_south_asian:indian": 14.37,
+    "edacc_south_asian_phone8k": 20.8,
+    "edacc_south_asian_phone8k:urdu": 23.44,
+    "edacc_south_asian_phone8k:indian": 18.18,
+    "librispeech_test_clean": 4.11,
+    "librispeech_test_other": 9.99
+   },
+   "wer_counts": {
+    "caller_lines_tts": {
+     "errors": 0,
+     "ref_words": 39,
+     "n": 4
+    },
+    "caller_lines_tts_phone8k": {
+     "errors": 1,
+     "ref_words": 39,
+     "n": 4
+    },
+    "edacc_south_asian": {
+     "errors": 111,
+     "ref_words": 678,
+     "n": 40
+    },
+    "edacc_south_asian:urdu": {
+     "errors": 62,
+     "ref_words": 337,
+     "n": 20
+    },
+    "edacc_south_asian:indian": {
+     "errors": 49,
+     "ref_words": 341,
+     "n": 20
+    },
+    "edacc_south_asian_phone8k": {
+     "errors": 141,
+     "ref_words": 678,
+     "n": 40
+    },
+    "edacc_south_asian_phone8k:urdu": {
+     "errors": 79,
+     "ref_words": 337,
+     "n": 20
+    },
+    "edacc_south_asian_phone8k:indian": {
+     "errors": 62,
+     "ref_words": 341,
+     "n": 20
+    },
+    "librispeech_test_clean": {
+     "errors": 34,
+     "ref_words": 827,
+     "n": 40
+    },
+    "librispeech_test_other": {
+     "errors": 68,
+     "ref_words": 681,
+     "n": 40
+    }
+   },
+   "wer_sets_done": [
+    "caller_lines_tts",
+    "caller_lines_tts_phone8k",
+    "edacc_south_asian",
+    "edacc_south_asian_phone8k",
+    "librispeech_test_clean",
+    "librispeech_test_other"
+   ],
+   "wer_sets_skipped": [],
+   "wer_wall_s": {
+    "caller_lines_tts": 2,
+    "caller_lines_tts_phone8k": 3,
+    "edacc_south_asian": 49,
+    "edacc_south_asian_phone8k": 59,
+    "librispeech_test_clean": 39,
+    "librispeech_test_other": 36
+   },
+   "confidence": {
+    "p10": 0.6,
+    "p50": 0.9,
+    "min": 0.1226
+   },
+   "latency": {
+    "all": {
+     "final_after_speech_ms": {
+      "n": 20,
+      "p50": 385.5,
+      "p90": 449.8,
+      "max": 471.4
+     },
+     "final_after_finalize_ms": {
+      "n": 20,
+      "p50": 175.1,
+      "p90": 232.6,
+      "max": 270.8
+     },
+     "first_interim_ms": {
+      "n": 20,
+      "p50": 656.1,
+      "p90": 1470.9,
+      "max": 1726.7
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 12,
+      "p50": 219.3,
+      "p90": 391.3,
+      "max": 394.4
+     },
+     "n": 20,
+     "partial_had_final_words": 12,
+     "all_from_finalize": true,
+     "interim_updates_mean": 4.5
+    },
+    "16k": {
+     "final_after_speech_ms": {
+      "n": 10,
+      "p50": 419.6,
+      "p90": 443.6,
+      "max": 449.8
+     },
+     "final_after_finalize_ms": {
+      "n": 10,
+      "p50": 218.7,
+      "p90": 229.0,
+      "max": 232.6
+     },
+     "first_interim_ms": {
+      "n": 10,
+      "p50": 656.1,
+      "p90": 699.3,
+      "max": 756.8
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 5,
+      "p50": 193.0,
+      "p90": 361.0,
+      "max": 361.0
+     },
+     "n": 10,
+     "partial_had_final_words": 5,
+     "all_from_finalize": true,
+     "interim_updates_mean": 4.3
+    },
+    "8k": {
+     "final_after_speech_ms": {
+      "n": 10,
+      "p50": 347.0,
+      "p90": 449.9,
+      "max": 471.4
+     },
+     "final_after_finalize_ms": {
+      "n": 10,
+      "p50": 136.3,
+      "p90": 249.2,
+      "max": 270.8
+     },
+     "first_interim_ms": {
+      "n": 10,
+      "p50": 655.6,
+      "p90": 1481.4,
+      "max": 1726.7
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 7,
+      "p50": 237.6,
+      "p90": 394.4,
+      "max": 394.4
+     },
+     "n": 10,
+     "partial_had_final_words": 7,
+     "all_from_finalize": true,
+     "interim_updates_mean": 4.7
+    },
+    "caller": {
+     "final_after_speech_ms": {
+      "n": 8,
+      "p50": 363.4,
+      "p90": 443.4,
+      "max": 443.4
+     },
+     "final_after_finalize_ms": {
+      "n": 8,
+      "p50": 153.1,
+      "p90": 222.9,
+      "max": 222.9
+     },
+     "first_interim_ms": {
+      "n": 8,
+      "p50": 669.6,
+      "p90": 1726.7,
+      "max": 1726.7
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 5,
+      "p50": 79.2,
+      "p90": 237.6,
+      "max": 237.6
+     },
+     "n": 8,
+     "partial_had_final_words": 5,
+     "all_from_finalize": true,
+     "interim_updates_mean": 2.8
+    },
+    "edacc": {
+     "final_after_speech_ms": {
+      "n": 12,
+      "p50": 422.8,
+      "p90": 449.9,
+      "max": 471.4
+     },
+     "final_after_finalize_ms": {
+      "n": 12,
+      "p50": 218.7,
+      "p90": 249.2,
+      "max": 270.8
+     },
+     "first_interim_ms": {
+      "n": 12,
+      "p50": 655.6,
+      "p90": 1293.7,
+      "max": 1457.0
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 7,
+      "p50": 266.1,
+      "p90": 394.4,
+      "max": 394.4
+     },
+     "n": 12,
+     "partial_had_final_words": 7,
+     "all_from_finalize": true,
+     "interim_updates_mean": 5.7
+    },
+    "caller_16k": {
+     "final_after_speech_ms": {
+      "n": 4,
+      "p50": 363.4,
+      "p90": 443.4,
+      "max": 443.4
+     },
+     "final_after_finalize_ms": {
+      "n": 4,
+      "p50": 153.1,
+      "p90": 222.9,
+      "max": 222.9
+     },
+     "first_interim_ms": {
+      "n": 4,
+      "p50": 642.7,
+      "p90": 699.3,
+      "max": 699.3
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 3,
+      "p50": 1.7,
+      "p90": 216.2,
+      "max": 216.2
+     },
+     "n": 4,
+     "partial_had_final_words": 3,
+     "all_from_finalize": true,
+     "interim_updates_mean": 2.8
+    },
+    "caller_8k": {
+     "final_after_speech_ms": {
+      "n": 4,
+      "p50": 301.9,
+      "p90": 442.9,
+      "max": 442.9
+     },
+     "final_after_finalize_ms": {
+      "n": 4,
+      "p50": 91.1,
+      "p90": 221.9,
+      "max": 221.9
+     },
+     "first_interim_ms": {
+      "n": 4,
+      "p50": 1470.9,
+      "p90": 1726.7,
+      "max": 1726.7
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 2,
+      "p50": 79.2,
+      "p90": 237.6,
+      "max": 237.6
+     },
+     "n": 4,
+     "partial_had_final_words": 2,
+     "all_from_finalize": true,
+     "interim_updates_mean": 2.8
+    },
+    "edacc_16k": {
+     "final_after_speech_ms": {
+      "n": 6,
+      "p50": 427.6,
+      "p90": 449.8,
+      "max": 449.8
+     },
+     "final_after_finalize_ms": {
+      "n": 6,
+      "p50": 225.5,
+      "p90": 232.6,
+      "max": 232.6
+     },
+     "first_interim_ms": {
+      "n": 6,
+      "p50": 656.1,
+      "p90": 756.8,
+      "max": 756.8
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 2,
+      "p50": 193.0,
+      "p90": 361.0,
+      "max": 361.0
+     },
+     "n": 6,
+     "partial_had_final_words": 2,
+     "all_from_finalize": true,
+     "interim_updates_mean": 5.3
+    },
+    "edacc_8k": {
+     "final_after_speech_ms": {
+      "n": 6,
+      "p50": 347.0,
+      "p90": 471.4,
+      "max": 471.4
+     },
+     "final_after_finalize_ms": {
+      "n": 6,
+      "p50": 136.3,
+      "p90": 270.8,
+      "max": 270.8
+     },
+     "first_interim_ms": {
+      "n": 6,
+      "p50": 611.6,
+      "p90": 1457.0,
+      "max": 1457.0
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 5,
+      "p50": 266.1,
+      "p90": 394.4,
+      "max": 394.4
+     },
+     "n": 6,
+     "partial_had_final_words": 5,
+     "all_from_finalize": true,
+     "interim_updates_mean": 6.0
+    },
+    "server_cpu_s": 58.6,
+    "audio_s": 100.4,
+    "server_cpu_s_per_audio_s": 0.583,
+    "wall_s": 104.6,
+    "wer_pct": {
+     "caller_lines_tts": 0.0,
+     "caller_lines_tts_phone8k": 2.56,
+     "edacc_south_asian": 21.35,
+     "edacc_south_asian:urdu": 17.65,
+     "edacc_south_asian:indian": 23.64,
+     "edacc_south_asian_phone8k": 21.35,
+     "edacc_south_asian_phone8k:urdu": 20.59,
+     "edacc_south_asian_phone8k:indian": 21.82
+    },
+    "errors": []
+   },
+   "concurrency_4_streams": {
+    "streams": 4,
+    "rounds": 3,
+    "n": 12,
+    "wall_s": 36.2,
+    "errors": 0,
+    "error_samples": [],
+    "final_after_speech_ms": {
+     "n": 12,
+     "p50": 447.8,
+     "p90": 1053.9,
+     "max": 1166.0
+    },
+    "final_after_finalize_ms": {
+     "n": 12,
+     "p50": 241.7,
+     "p90": 853.0,
+     "max": 964.4
+    },
+    "first_interim_ms": {
+     "n": 12,
+     "p50": 531.5,
+     "p90": 898.7,
+     "max": 2632.6
+    },
+    "stable_partial_after_speech_ms": {
+     "n": 3,
+     "p50": 180.9,
+     "p90": 196.5,
+     "max": 196.5
+    },
+    "partial_had_final_words": 3,
+    "all_from_finalize": true,
+    "interim_updates_mean": 4.2,
+    "cpu_busy_pct": 30.8,
+    "server_cpu_s": 39.8,
+    "server_cores_busy": 1.1,
+    "audio_s": 83.0,
+    "gpu_util_pct_mean": 8.7,
+    "gpu_util_pct_p90": 23,
+    "vram_used_mib_max": 4939,
+    "wer_pct": {
+     "edacc_south_asian_phone8k": 26.14,
+     "edacc_south_asian": 39.39,
+     "librispeech_test_clean": 21.67
+    }
+   },
+   "hallucination_through_server": {
+    "by_rate": {
+     "16000": {
+      "clips": 20,
+      "clips_with_text": 8,
+      "clips_with_text_conf_ge_0_5": 3,
+      "non_empty_finals": 10,
+      "non_empty_finals_conf_ge_0_5": 3,
+      "by_kind": {
+       "breath": 4,
+       "line": 4,
+       "noise": 0,
+       "silence": 0
+      }
+     },
+     "8000": {
+      "clips": 20,
+      "clips_with_text": 7,
+      "clips_with_text_conf_ge_0_5": 3,
+      "non_empty_finals": 10,
+      "non_empty_finals_conf_ge_0_5": 3,
+      "by_kind": {
+       "breath": 3,
+       "line": 4,
+       "noise": 0,
+       "silence": 0
+      }
+     }
+    },
+    "errors": 0,
+    "texts_written": [
+     {
+      "id": "breath2_33db",
+      "rate": 16000,
+      "finals": [
+       [
+        "Hmm.",
+        0.4078
+       ]
+      ]
+     },
+     {
+      "id": "breath3_27db",
+      "rate": 16000,
+      "finals": [
+       [
+        "Oh.",
+        0.2848
+       ],
+       [
+        "Yeah.",
+        0.611
+       ]
+      ]
+     },
+     {
+      "id": "breath3_27db",
+      "rate": 8000,
+      "finals": [
+       [
+        "Ah",
+        0.2838
+       ]
+      ]
+     },
+     {
+      "id": "breath4_22db",
+      "rate": 16000,
+      "finals": [
+       [
+        "Hmm.",
+        0.4866
+       ]
+      ]
+     },
+     {
+      "id": "breath4_22db",
+      "rate": 8000,
+      "finals": [
+       [
+        "Ah",
+        0.2415
+       ]
+      ]
+     },
+     {
+      "id": "breath5_17db",
+      "rate": 16000,
+      "finals": [
+       [
+        "Mm.",
+        0.524
+       ]
+      ]
+     },
+     {
+      "id": "breath5_17db",
+      "rate": 8000,
+      "finals": [
+       [
+        "Ah",
+        0.3234
+       ]
+      ]
+     },
+     {
+      "id": "line1_30db",
+      "rate": 8000,
+      "finals": [
+       [
+        "Hmm.",
+        0.4438
+       ],
+       [
+        "Hm.",
+        0.4925
+       ]
+      ]
+     },
+     {
+      "id": "line2_26db",
+      "rate": 16000,
+      "finals": [
+       [
+        "Hmm.",
+        0.4053
+       ]
+      ]
+     },
+     {
+      "id": "line2_26db",
+      "rate": 8000,
+      "finals": [
+       [
+        "Hm.",
+        0.4095
+       ],
+       [
+        "Hmm.",
+        0.5132
+       ]
+      ]
+     },
+     {
+      "id": "line3_22db",
+      "rate": 16000,
+      "finals": [
+       [
+        "Hm.",
+        0.4353
+       ]
+      ]
+     },
+     {
+      "id": "line4_18db",
+      "rate": 16000,
+      "finals": [
+       [
+        "Hmm.",
+        0.4308
+       ]
+      ]
+     },
+     {
+      "id": "line4_18db",
+      "rate": 8000,
+      "finals": [
+       [
+        "Mm.",
+        0.5152
+       ]
+      ]
+     },
+     {
+      "id": "line5_14db",
+      "rate": 16000,
+      "finals": [
+       [
+        "Hmm.",
+        0.5272
+       ],
+       [
+        "Hmm.",
+        0.4493
+       ]
+      ]
+     },
+     {
+      "id": "line5_14db",
+      "rate": 8000,
+      "finals": [
+       [
+        "Hm.",
+        0.4606
+       ],
+       [
+        "Hm.",
+        0.5566
+       ]
+      ]
+     }
+    ]
+   },
+   "direct_no_server": {
+    "sherpa_onnx": "1.13.8+cuda12.cudnn9.onnxruntime1.28.2",
+    "kind": "offline",
+    "provider": "cuda",
+    "load_s": 2.5,
+    "clip_5s": {
+     "text": "He hoped there would be stew for dinner, turnips and carrots and bruised potatoes,",
+     "first_ms": 607.9,
+     "p50_ms": 50.0,
+     "p90_ms": 68.1
+    },
+    "clip_long": {
+     "seconds": 14.02,
+     "first_ms": 198.7,
+     "text": "Yes, the feelings mutual. So uh the kids are going to have their summer break soon. So my husband and I were planning a vacation. So"
+    },
+    "new_lengths_3_to_7s": {
+     "p50_ms": 166.2,
+     "p90_ms": 205.3,
+     "max_ms": 223.6
+    },
+    "vram_mib": 3439,
+    "noise_summary": {
+     "n": 20,
+     "non_empty": 0,
+     "non_empty_conf_ge_0_5": 0
+    }
+   }
+  },
+  "nemotron-en-560": {
+   "model_key": "nemotron-en-560",
+   "kind": "online",
+   "export": "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-2026-04-25@d655d5f6",
+   "server_env": {
+    "STT_MODEL": "nemotron-en-560",
+    "STT_PROVIDER": "cuda",
+    "STT_MODEL_DIR": "/tmp/atlas/models",
+    "STT_MAX_SESSIONS": "8"
+   },
+   "ready_s": 12.0,
+   "gpu_memory_mib": {
+    "after_load": 3389,
+    "after_runs": 3693,
+    "max_4_streams": 3693
+   },
+   "cpu_memory_mib": {
+    "after_load": 1033,
+    "peak": 1102
+   },
+   "wer_pct": {
+    "caller_lines_tts": 0.0,
+    "caller_lines_tts_phone8k": 0.0,
+    "edacc_south_asian": 18.44,
+    "edacc_south_asian:urdu": 20.18,
+    "edacc_south_asian:indian": 16.72,
+    "edacc_south_asian_phone8k": 18.58,
+    "edacc_south_asian_phone8k:urdu": 20.47,
+    "edacc_south_asian_phone8k:indian": 16.72,
+    "librispeech_test_clean": 5.44,
+    "librispeech_test_other": 8.08
+   },
+   "wer_counts": {
+    "caller_lines_tts": {
+     "errors": 0,
+     "ref_words": 39,
+     "n": 4
+    },
+    "caller_lines_tts_phone8k": {
+     "errors": 0,
+     "ref_words": 39,
+     "n": 4
+    },
+    "edacc_south_asian": {
+     "errors": 125,
+     "ref_words": 678,
+     "n": 40
+    },
+    "edacc_south_asian:urdu": {
+     "errors": 68,
+     "ref_words": 337,
+     "n": 20
+    },
+    "edacc_south_asian:indian": {
+     "errors": 57,
+     "ref_words": 341,
+     "n": 20
+    },
+    "edacc_south_asian_phone8k": {
+     "errors": 126,
+     "ref_words": 678,
+     "n": 40
+    },
+    "edacc_south_asian_phone8k:urdu": {
+     "errors": 69,
+     "ref_words": 337,
+     "n": 20
+    },
+    "edacc_south_asian_phone8k:indian": {
+     "errors": 57,
+     "ref_words": 341,
+     "n": 20
+    },
+    "librispeech_test_clean": {
+     "errors": 45,
+     "ref_words": 827,
+     "n": 40
+    },
+    "librispeech_test_other": {
+     "errors": 55,
+     "ref_words": 681,
+     "n": 40
+    }
+   },
+   "wer_sets_done": [
+    "caller_lines_tts",
+    "caller_lines_tts_phone8k",
+    "edacc_south_asian",
+    "edacc_south_asian_phone8k",
+    "librispeech_test_clean",
+    "librispeech_test_other"
+   ],
+   "wer_sets_skipped": [],
+   "wer_wall_s": {
+    "caller_lines_tts": 1,
+    "caller_lines_tts_phone8k": 1,
+    "edacc_south_asian": 21,
+    "edacc_south_asian_phone8k": 22,
+    "librispeech_test_clean": 24,
+    "librispeech_test_other": 20
+   },
+   "confidence": {
+    "p10": 0.8,
+    "p50": 0.9,
+    "min": 0.5671
+   },
+   "latency": {
+    "all": {
+     "final_after_speech_ms": {
+      "n": 20,
+      "p50": 256.9,
+      "p90": 269.4,
+      "max": 301.7
+     },
+     "final_after_finalize_ms": {
+      "n": 20,
+      "p50": 46.0,
+      "p90": 48.4,
+      "max": 91.5
+     },
+     "first_interim_ms": {
+      "n": 20,
+      "p50": 838.8,
+      "p90": 1509.9,
+      "max": 1596.9
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 10,
+      "p50": 11.9,
+      "p90": 158.4,
+      "max": 198.3
+     },
+     "n": 20,
+     "partial_had_final_words": 10,
+     "all_from_finalize": true,
+     "interim_updates_mean": 4.4
+    },
+    "16k": {
+     "final_after_speech_ms": {
+      "n": 10,
+      "p50": 256.3,
+      "p90": 268.3,
+      "max": 301.7
+     },
+     "final_after_finalize_ms": {
+      "n": 10,
+      "p50": 45.8,
+      "p90": 48.4,
+      "max": 91.3
+     },
+     "first_interim_ms": {
+      "n": 10,
+      "p50": 848.8,
+      "p90": 1509.9,
+      "max": 1596.4
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 5,
+      "p50": 11.9,
+      "p90": 158.4,
+      "max": 158.4
+     },
+     "n": 10,
+     "partial_had_final_words": 5,
+     "all_from_finalize": true,
+     "interim_updates_mean": 4.3
+    },
+    "8k": {
+     "final_after_speech_ms": {
+      "n": 10,
+      "p50": 256.9,
+      "p90": 269.4,
+      "max": 292.4
+     },
+     "final_after_finalize_ms": {
+      "n": 10,
+      "p50": 46.0,
+      "p90": 48.4,
+      "max": 91.5
+     },
+     "first_interim_ms": {
+      "n": 10,
+      "p50": 719.6,
+      "p90": 1409.2,
+      "max": 1596.9
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 5,
+      "p50": 39.2,
+      "p90": 198.3,
+      "max": 198.3
+     },
+     "n": 10,
+     "partial_had_final_words": 5,
+     "all_from_finalize": true,
+     "interim_updates_mean": 4.5
+    },
+    "caller": {
+     "final_after_speech_ms": {
+      "n": 8,
+      "p50": 256.3,
+      "p90": 269.4,
+      "max": 269.4
+     },
+     "final_after_finalize_ms": {
+      "n": 8,
+      "p50": 45.4,
+      "p90": 48.4,
+      "max": 48.4
+     },
+     "first_interim_ms": {
+      "n": 8,
+      "p50": 719.6,
+      "p90": 889.8,
+      "max": 889.8
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 7,
+      "p50": 79.1,
+      "p90": 198.3,
+      "max": 198.3
+     },
+     "n": 8,
+     "partial_had_final_words": 7,
+     "all_from_finalize": true,
+     "interim_updates_mean": 3.9
+    },
+    "edacc": {
+     "final_after_speech_ms": {
+      "n": 12,
+      "p50": 257.4,
+      "p90": 292.4,
+      "max": 301.7
+     },
+     "final_after_finalize_ms": {
+      "n": 12,
+      "p50": 47.0,
+      "p90": 91.3,
+      "max": 91.5
+     },
+     "first_interim_ms": {
+      "n": 12,
+      "p50": 848.8,
+      "p90": 1596.4,
+      "max": 1596.9
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 3,
+      "p50": -773.1,
+      "p90": -212.3,
+      "max": -212.3
+     },
+     "n": 12,
+     "partial_had_final_words": 3,
+     "all_from_finalize": true,
+     "interim_updates_mean": 4.8
+    },
+    "caller_16k": {
+     "final_after_speech_ms": {
+      "n": 4,
+      "p50": 256.0,
+      "p90": 266.4,
+      "max": 266.4
+     },
+     "final_after_finalize_ms": {
+      "n": 4,
+      "p50": 45.4,
+      "p90": 45.8,
+      "max": 45.8
+     },
+     "first_interim_ms": {
+      "n": 4,
+      "p50": 839.2,
+      "p90": 889.8,
+      "max": 889.8
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 4,
+      "p50": 11.9,
+      "p90": 158.4,
+      "max": 158.4
+     },
+     "n": 4,
+     "partial_had_final_words": 4,
+     "all_from_finalize": true,
+     "interim_updates_mean": 3.8
+    },
+    "caller_8k": {
+     "final_after_speech_ms": {
+      "n": 4,
+      "p50": 256.9,
+      "p90": 269.4,
+      "max": 269.4
+     },
+     "final_after_finalize_ms": {
+      "n": 4,
+      "p50": 45.7,
+      "p90": 48.4,
+      "max": 48.4
+     },
+     "first_interim_ms": {
+      "n": 4,
+      "p50": 698.3,
+      "p90": 719.6,
+      "max": 719.6
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 3,
+      "p50": 79.1,
+      "p90": 198.3,
+      "max": 198.3
+     },
+     "n": 4,
+     "partial_had_final_words": 3,
+     "all_from_finalize": true,
+     "interim_updates_mean": 4.0
+    },
+    "edacc_16k": {
+     "final_after_speech_ms": {
+      "n": 6,
+      "p50": 257.4,
+      "p90": 301.7,
+      "max": 301.7
+     },
+     "final_after_finalize_ms": {
+      "n": 6,
+      "p50": 47.5,
+      "p90": 91.3,
+      "max": 91.3
+     },
+     "first_interim_ms": {
+      "n": 6,
+      "p50": 848.8,
+      "p90": 1596.4,
+      "max": 1596.4
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 1,
+      "p50": -773.6,
+      "p90": -773.6,
+      "max": -773.6
+     },
+     "n": 6,
+     "partial_had_final_words": 1,
+     "all_from_finalize": true,
+     "interim_updates_mean": 4.7
+    },
+    "edacc_8k": {
+     "final_after_speech_ms": {
+      "n": 6,
+      "p50": 255.9,
+      "p90": 292.4,
+      "max": 292.4
+     },
+     "final_after_finalize_ms": {
+      "n": 6,
+      "p50": 46.3,
+      "p90": 91.5,
+      "max": 91.5
+     },
+     "first_interim_ms": {
+      "n": 6,
+      "p50": 806.1,
+      "p90": 1596.9,
+      "max": 1596.9
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 2,
+      "p50": -773.1,
+      "p90": -212.3,
+      "max": -212.3
+     },
+     "n": 6,
+     "partial_had_final_words": 2,
+     "all_from_finalize": true,
+     "interim_updates_mean": 4.8
+    },
+    "server_cpu_s": 25.4,
+    "audio_s": 98.2,
+    "server_cpu_s_per_audio_s": 0.259,
+    "wall_s": 98.9,
+    "wer_pct": {
+     "caller_lines_tts": 5.13,
+     "caller_lines_tts_phone8k": 0.0,
+     "edacc_south_asian": 28.09,
+     "edacc_south_asian:urdu": 26.47,
+     "edacc_south_asian:indian": 29.09,
+     "edacc_south_asian_phone8k": 29.21,
+     "edacc_south_asian_phone8k:urdu": 35.29,
+     "edacc_south_asian_phone8k:indian": 25.45
+    },
+    "errors": []
+   },
+   "concurrency_4_streams": {
+    "streams": 4,
+    "rounds": 3,
+    "n": 12,
+    "wall_s": 34.9,
+    "errors": 0,
+    "error_samples": [],
+    "final_after_speech_ms": {
+     "n": 12,
+     "p50": 259.4,
+     "p90": 302.9,
+     "max": 313.6
+    },
+    "final_after_finalize_ms": {
+     "n": 12,
+     "p50": 49.2,
+     "p90": 92.4,
+     "max": 103.2
+    },
+    "first_interim_ms": {
+     "n": 12,
+     "p50": 1072.1,
+     "p90": 1590.8,
+     "max": 3784.2
+    },
+    "stable_partial_after_speech_ms": {
+     "n": 3,
+     "p50": -779.2,
+     "p90": 137.5,
+     "max": 137.5
+    },
+    "partial_had_final_words": 3,
+    "all_from_finalize": true,
+    "interim_updates_mean": 6.3,
+    "cpu_busy_pct": 17.9,
+    "server_cpu_s": 20.6,
+    "server_cores_busy": 0.59,
+    "audio_s": 79.3,
+    "gpu_util_pct_mean": 14.5,
+    "gpu_util_pct_p90": 38,
+    "vram_used_mib_max": 3693,
+    "wer_pct": {
+     "edacc_south_asian_phone8k": 20.45,
+     "edacc_south_asian": 39.39,
+     "librispeech_test_clean": 20.0
+    }
+   },
+   "hallucination_through_server": {
+    "by_rate": {
+     "16000": {
+      "clips": 20,
+      "clips_with_text": 0,
+      "clips_with_text_conf_ge_0_5": 0,
+      "non_empty_finals": 0,
+      "non_empty_finals_conf_ge_0_5": 0,
+      "by_kind": {
+       "breath": 0,
+       "line": 0,
+       "noise": 0,
+       "silence": 0
+      }
+     },
+     "8000": {
+      "clips": 20,
+      "clips_with_text": 0,
+      "clips_with_text_conf_ge_0_5": 0,
+      "non_empty_finals": 0,
+      "non_empty_finals_conf_ge_0_5": 0,
+      "by_kind": {
+       "breath": 0,
+       "line": 0,
+       "noise": 0,
+       "silence": 0
+      }
+     }
+    },
+    "errors": 0,
+    "texts_written": []
+   },
+   "direct_no_server": {
+    "sherpa_onnx": "1.13.8+cuda12.cudnn9.onnxruntime1.28.2",
+    "kind": "online",
+    "provider": "cuda",
+    "load_s": 3.1,
+    "clip_5s": {
+     "text": "He hoped there would be stew for dinner, turnips and carrots and bruised potatoes",
+     "first_run_chunk_ms_p50": 39.6,
+     "first_run_flush_ms": 31.0,
+     "chunks_per_run": 8,
+     "chunk_ms_p50": 29.6,
+     "chunk_ms_p90": 30.7,
+     "chunk_ms_max": 31.5,
+     "decode_per_audio_s": 0.047,
+     "flush_ms_p50": 31.6,
+     "flush_ms_p90": 32.4
+    },
+    "clip_long": {
+     "seconds": 14.02,
+     "chunks": 24,
+     "chunk_ms_p50": 28.3,
+     "chunk_ms_p90": 31.3,
+     "flush_ms": 33.7,
+     "text": "Yes, the feelings mutual. So uh, the kids are going to have their summer break soon. So my husband and I were planning a vacation"
+    },
+    "vram_mib": 3391,
+    "noise_summary": {
+     "n": 20,
+     "non_empty": 0,
+     "non_empty_conf_ge_0_5": 0
+    }
+   }
+  },
+  "nemotron-en-160": {
+   "model_key": "nemotron-en-160",
+   "kind": "online",
+   "export": "sherpa-onnx-nemotron-speech-streaming-en-0.6b-160ms-2026-04-25@9660703a",
+   "server_env": {
+    "STT_MODEL": "nemotron-en-160",
+    "STT_PROVIDER": "cuda",
+    "STT_MODEL_DIR": "/tmp/atlas/models",
+    "STT_MAX_SESSIONS": "8"
+   },
+   "ready_s": 12.0,
+   "gpu_memory_mib": {
+    "after_load": 3389,
+    "after_runs": 3713,
+    "max_4_streams": 3713
+   },
+   "cpu_memory_mib": {
+    "after_load": 1005,
+    "peak": 1090
+   },
+   "wer_pct": {
+    "caller_lines_tts": 0.0,
+    "caller_lines_tts_phone8k": 0.0,
+    "edacc_south_asian": 17.4,
+    "edacc_south_asian:urdu": 19.58,
+    "edacc_south_asian:indian": 15.25,
+    "edacc_south_asian_phone8k": 18.88,
+    "edacc_south_asian_phone8k:urdu": 20.18,
+    "edacc_south_asian_phone8k:indian": 17.6,
+    "librispeech_test_clean": 5.44,
+    "librispeech_test_other": 9.25
+   },
+   "wer_counts": {
+    "caller_lines_tts": {
+     "errors": 0,
+     "ref_words": 39,
+     "n": 4
+    },
+    "caller_lines_tts_phone8k": {
+     "errors": 0,
+     "ref_words": 39,
+     "n": 4
+    },
+    "edacc_south_asian": {
+     "errors": 118,
+     "ref_words": 678,
+     "n": 40
+    },
+    "edacc_south_asian:urdu": {
+     "errors": 66,
+     "ref_words": 337,
+     "n": 20
+    },
+    "edacc_south_asian:indian": {
+     "errors": 52,
+     "ref_words": 341,
+     "n": 20
+    },
+    "edacc_south_asian_phone8k": {
+     "errors": 128,
+     "ref_words": 678,
+     "n": 40
+    },
+    "edacc_south_asian_phone8k:urdu": {
+     "errors": 68,
+     "ref_words": 337,
+     "n": 20
+    },
+    "edacc_south_asian_phone8k:indian": {
+     "errors": 60,
+     "ref_words": 341,
+     "n": 20
+    },
+    "librispeech_test_clean": {
+     "errors": 45,
+     "ref_words": 827,
+     "n": 40
+    },
+    "librispeech_test_other": {
+     "errors": 63,
+     "ref_words": 681,
+     "n": 40
+    }
+   },
+   "wer_sets_done": [
+    "caller_lines_tts",
+    "caller_lines_tts_phone8k",
+    "edacc_south_asian",
+    "edacc_south_asian_phone8k",
+    "librispeech_test_clean",
+    "librispeech_test_other"
+   ],
+   "wer_sets_skipped": [],
+   "wer_wall_s": {
+    "caller_lines_tts": 3,
+    "caller_lines_tts_phone8k": 3,
+    "edacc_south_asian": 57,
+    "edacc_south_asian_phone8k": 60,
+    "librispeech_test_clean": 65,
+    "librispeech_test_other": 55
+   },
+   "confidence": {
+    "p10": 0.8,
+    "p50": 0.8,
+    "min": 0.5082
+   },
+   "latency": {
+    "all": {
+     "final_after_speech_ms": {
+      "n": 20,
+      "p50": 365.1,
+      "p90": 376.7,
+      "max": 385.4
+     },
+     "final_after_finalize_ms": {
+      "n": 20,
+      "p50": 153.4,
+      "p90": 164.9,
+      "max": 173.0
+     },
+     "first_interim_ms": {
+      "n": 20,
+      "p50": 714.1,
+      "p90": 1330.4,
+      "max": 1499.9
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 11,
+      "p50": -9.6,
+      "p90": 121.6,
+      "max": 161.5
+     },
+     "n": 20,
+     "partial_had_final_words": 11,
+     "all_from_finalize": true,
+     "interim_updates_mean": 9.6
+    },
+    "16k": {
+     "final_after_speech_ms": {
+      "n": 10,
+      "p50": 356.3,
+      "p90": 370.0,
+      "max": 385.4
+     },
+     "final_after_finalize_ms": {
+      "n": 10,
+      "p50": 145.4,
+      "p90": 159.3,
+      "max": 164.7
+     },
+     "first_interim_ms": {
+      "n": 10,
+      "p50": 714.1,
+      "p90": 1258.2,
+      "max": 1499.9
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 5,
+      "p50": -85.5,
+      "p90": 161.5,
+      "max": 161.5
+     },
+     "n": 10,
+     "partial_had_final_words": 5,
+     "all_from_finalize": true,
+     "interim_updates_mean": 9.3
+    },
+    "8k": {
+     "final_after_speech_ms": {
+      "n": 10,
+      "p50": 373.5,
+      "p90": 376.7,
+      "max": 385.2
+     },
+     "final_after_finalize_ms": {
+      "n": 10,
+      "p50": 158.3,
+      "p90": 166.0,
+      "max": 173.0
+     },
+     "first_interim_ms": {
+      "n": 10,
+      "p50": 545.7,
+      "p90": 1330.4,
+      "max": 1498.5
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 6,
+      "p50": 33.4,
+      "p90": 121.6,
+      "max": 121.6
+     },
+     "n": 10,
+     "partial_had_final_words": 6,
+     "all_from_finalize": true,
+     "interim_updates_mean": 9.8
+    },
+    "caller": {
+     "final_after_speech_ms": {
+      "n": 8,
+      "p50": 368.6,
+      "p90": 374.9,
+      "max": 374.9
+     },
+     "final_after_finalize_ms": {
+      "n": 8,
+      "p50": 156.1,
+      "p90": 163.8,
+      "max": 163.8
+     },
+     "first_interim_ms": {
+      "n": 8,
+      "p50": 513.4,
+      "p90": 714.1,
+      "max": 714.1
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 7,
+      "p50": 33.4,
+      "p90": 161.5,
+      "max": 161.5
+     },
+     "n": 8,
+     "partial_had_final_words": 7,
+     "all_from_finalize": true,
+     "interim_updates_mean": 8.8
+    },
+    "edacc": {
+     "final_after_speech_ms": {
+      "n": 12,
+      "p50": 354.4,
+      "p90": 385.2,
+      "max": 385.4
+     },
+     "final_after_finalize_ms": {
+      "n": 12,
+      "p50": 150.1,
+      "p90": 166.0,
+      "max": 173.0
+     },
+     "first_interim_ms": {
+      "n": 12,
+      "p50": 875.5,
+      "p90": 1498.5,
+      "max": 1499.9
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 4,
+      "p50": -870.1,
+      "p90": 45.2,
+      "max": 45.2
+     },
+     "n": 12,
+     "partial_had_final_words": 4,
+     "all_from_finalize": true,
+     "interim_updates_mean": 10.1
+    },
+    "caller_16k": {
+     "final_after_speech_ms": {
+      "n": 4,
+      "p50": 363.6,
+      "p90": 370.0,
+      "max": 370.0
+     },
+     "final_after_finalize_ms": {
+      "n": 4,
+      "p50": 142.5,
+      "p90": 159.3,
+      "max": 159.3
+     },
+     "first_interim_ms": {
+      "n": 4,
+      "p50": 506.8,
+      "p90": 714.1,
+      "max": 714.1
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 3,
+      "p50": -9.6,
+      "p90": 161.5,
+      "max": 161.5
+     },
+     "n": 4,
+     "partial_had_final_words": 3,
+     "all_from_finalize": true,
+     "interim_updates_mean": 8.2
+    },
+    "caller_8k": {
+     "final_after_speech_ms": {
+      "n": 4,
+      "p50": 373.7,
+      "p90": 374.9,
+      "max": 374.9
+     },
+     "final_after_finalize_ms": {
+      "n": 4,
+      "p50": 158.3,
+      "p90": 163.8,
+      "max": 163.8
+     },
+     "first_interim_ms": {
+      "n": 4,
+      "p50": 513.4,
+      "p90": 545.2,
+      "max": 545.2
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 4,
+      "p50": 33.4,
+      "p90": 121.6,
+      "max": 121.6
+     },
+     "n": 4,
+     "partial_had_final_words": 4,
+     "all_from_finalize": true,
+     "interim_updates_mean": 9.2
+    },
+    "edacc_16k": {
+     "final_after_speech_ms": {
+      "n": 6,
+      "p50": 350.5,
+      "p90": 385.4,
+      "max": 385.4
+     },
+     "final_after_finalize_ms": {
+      "n": 6,
+      "p50": 145.4,
+      "p90": 164.7,
+      "max": 164.7
+     },
+     "first_interim_ms": {
+      "n": 6,
+      "p50": 831.8,
+      "p90": 1499.9,
+      "max": 1499.9
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 2,
+      "p50": -870.1,
+      "p90": -85.5,
+      "max": -85.5
+     },
+     "n": 6,
+     "partial_had_final_words": 2,
+     "all_from_finalize": true,
+     "interim_updates_mean": 10.0
+    },
+    "edacc_8k": {
+     "final_after_speech_ms": {
+      "n": 6,
+      "p50": 354.4,
+      "p90": 385.2,
+      "max": 385.2
+     },
+     "final_after_finalize_ms": {
+      "n": 6,
+      "p50": 153.4,
+      "p90": 173.0,
+      "max": 173.0
+     },
+     "first_interim_ms": {
+      "n": 6,
+      "p50": 884.5,
+      "p90": 1498.5,
+      "max": 1498.5
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 2,
+      "p50": -871.5,
+      "p90": 45.2,
+      "max": 45.2
+     },
+     "n": 6,
+     "partial_had_final_words": 2,
+     "all_from_finalize": true,
+     "interim_updates_mean": 10.2
+    },
+    "server_cpu_s": 70.0,
+    "audio_s": 100.1,
+    "server_cpu_s_per_audio_s": 0.699,
+    "wall_s": 101.5,
+    "wer_pct": {
+     "caller_lines_tts": 5.13,
+     "caller_lines_tts_phone8k": 0.0,
+     "edacc_south_asian": 28.09,
+     "edacc_south_asian:urdu": 29.41,
+     "edacc_south_asian:indian": 27.27,
+     "edacc_south_asian_phone8k": 24.72,
+     "edacc_south_asian_phone8k:urdu": 29.41,
+     "edacc_south_asian_phone8k:indian": 21.82
+    },
+    "errors": []
+   },
+   "concurrency_4_streams": {
+    "streams": 4,
+    "rounds": 3,
+    "n": 12,
+    "wall_s": 35.2,
+    "errors": 0,
+    "error_samples": [],
+    "final_after_speech_ms": {
+     "n": 12,
+     "p50": 345.1,
+     "p90": 404.7,
+     "max": 442.2
+    },
+    "final_after_finalize_ms": {
+     "n": 12,
+     "p50": 134.7,
+     "p90": 193.7,
+     "max": 240.2
+    },
+    "first_interim_ms": {
+     "n": 12,
+     "p50": 751.0,
+     "p90": 1500.6,
+     "max": 3433.6
+    },
+    "stable_partial_after_speech_ms": {
+     "n": 4,
+     "p50": -703.4,
+     "p90": 129.9,
+     "max": 129.9
+    },
+    "partial_had_final_words": 4,
+    "all_from_finalize": true,
+    "interim_updates_mean": 13.7,
+    "cpu_busy_pct": 34.9,
+    "server_cpu_s": 44.6,
+    "server_cores_busy": 1.27,
+    "audio_s": 80.3,
+    "gpu_util_pct_mean": 34.2,
+    "gpu_util_pct_p90": 65,
+    "vram_used_mib_max": 3713,
+    "wer_pct": {
+     "edacc_south_asian_phone8k": 19.32,
+     "edacc_south_asian": 42.42,
+     "librispeech_test_clean": 18.33
+    }
+   },
+   "hallucination_through_server": {
+    "by_rate": {
+     "16000": {
+      "clips": 20,
+      "clips_with_text": 0,
+      "clips_with_text_conf_ge_0_5": 0,
+      "non_empty_finals": 0,
+      "non_empty_finals_conf_ge_0_5": 0,
+      "by_kind": {
+       "breath": 0,
+       "line": 0,
+       "noise": 0,
+       "silence": 0
+      }
+     },
+     "8000": {
+      "clips": 20,
+      "clips_with_text": 0,
+      "clips_with_text_conf_ge_0_5": 0,
+      "non_empty_finals": 0,
+      "non_empty_finals_conf_ge_0_5": 0,
+      "by_kind": {
+       "breath": 0,
+       "line": 0,
+       "noise": 0,
+       "silence": 0
+      }
+     }
+    },
+    "errors": 0,
+    "texts_written": []
+   },
+   "direct_no_server": {
+    "sherpa_onnx": "1.13.8+cuda12.cudnn9.onnxruntime1.28.2",
+    "kind": "online",
+    "provider": "cuda",
+    "load_s": 3.2,
+    "clip_5s": {
+     "text": "He hoped there would be stew for dinner, turnips and carrots and bruised potatoes",
+     "first_run_chunk_ms_p50": 27.3,
+     "first_run_flush_ms": 105.8,
+     "chunks_per_run": 30,
+     "chunk_ms_p50": 26.6,
+     "chunk_ms_p90": 27.8,
+     "chunk_ms_max": 33.6,
+     "decode_per_audio_s": 0.159,
+     "flush_ms_p50": 105.7,
+     "flush_ms_p90": 107.8
+    },
+    "clip_long": {
+     "seconds": 14.02,
+     "chunks": 86,
+     "chunk_ms_p50": 26.5,
+     "chunk_ms_p90": 27.9,
+     "flush_ms": 107.8,
+     "text": "Yes, the feelings mutual. So the kids are going to have their summer break soon. So my husband and I were planning a vacation"
+    },
+    "vram_mib": 3391,
+    "noise_summary": {
+     "n": 20,
+     "non_empty": 0,
+     "non_empty_conf_ge_0_5": 0
+    }
+   }
+  },
+  "nemotron-en-560-int8-on-cuda": {
+   "model_key": "nemotron-en-560",
+   "kind": "online",
+   "export": "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25@52056fdc",
+   "server_env": {
+    "STT_MODEL": "nemotron-en-560",
+    "STT_PROVIDER": "cuda",
+    "STT_MODEL_DIR": "/tmp/atlas/models",
+    "STT_MAX_SESSIONS": "8"
+   },
+   "ready_s": 9.0,
+   "gpu_memory_mib": {
+    "after_load": 303,
+    "after_runs": 693,
+    "max_4_streams": null
+   },
+   "cpu_memory_mib": {
+    "after_load": 1809,
+    "peak": 1830
+   },
+   "wer_pct": {
+    "caller_lines_tts": 0.0
+   },
+   "wer_counts": {
+    "caller_lines_tts": {
+     "errors": 0,
+     "ref_words": 39,
+     "n": 4
+    }
+   },
+   "wer_sets_done": [
+    "caller_lines_tts"
+   ],
+   "wer_sets_skipped": [],
+   "wer_wall_s": {
+    "caller_lines_tts": 7
+   },
+   "confidence": {
+    "p10": 0.9,
+    "p50": 0.9,
+    "min": 0.9149
+   },
+   "latency": {
+    "all": {
+     "final_after_speech_ms": {
+      "n": 8,
+      "p50": 529.3,
+      "p90": 632.7,
+      "max": 632.7
+     },
+     "final_after_finalize_ms": {
+      "n": 8,
+      "p50": 318.3,
+      "p90": 422.3,
+      "max": 422.3
+     },
+     "first_interim_ms": {
+      "n": 8,
+      "p50": 920.8,
+      "p90": 1120.1,
+      "max": 1120.1
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 7,
+      "p50": 265.5,
+      "p90": 388.6,
+      "max": 388.6
+     },
+     "n": 8,
+     "partial_had_final_words": 7,
+     "all_from_finalize": true,
+     "interim_updates_mean": 3.9
+    },
+    "16k": {
+     "final_after_speech_ms": {
+      "n": 4,
+      "p50": 556.4,
+      "p90": 611.3,
+      "max": 611.3
+     },
+     "final_after_finalize_ms": {
+      "n": 4,
+      "p50": 345.1,
+      "p90": 400.5,
+      "max": 400.5
+     },
+     "first_interim_ms": {
+      "n": 4,
+      "p50": 1042.6,
+      "p90": 1120.1,
+      "max": 1120.1
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 4,
+      "p50": 210.1,
+      "p90": 347.0,
+      "max": 347.0
+     },
+     "n": 4,
+     "partial_had_final_words": 4,
+     "all_from_finalize": true,
+     "interim_updates_mean": 3.8
+    },
+    "8k": {
+     "final_after_speech_ms": {
+      "n": 4,
+      "p50": 484.2,
+      "p90": 632.7,
+      "max": 632.7
+     },
+     "final_after_finalize_ms": {
+      "n": 4,
+      "p50": 273.3,
+      "p90": 422.3,
+      "max": 422.3
+     },
+     "first_interim_ms": {
+      "n": 4,
+      "p50": 882.9,
+      "p90": 920.8,
+      "max": 920.8
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 3,
+      "p50": 265.5,
+      "p90": 388.6,
+      "max": 388.6
+     },
+     "n": 4,
+     "partial_had_final_words": 3,
+     "all_from_finalize": true,
+     "interim_updates_mean": 4.0
+    },
+    "caller": {
+     "final_after_speech_ms": {
+      "n": 8,
+      "p50": 529.3,
+      "p90": 632.7,
+      "max": 632.7
+     },
+     "final_after_finalize_ms": {
+      "n": 8,
+      "p50": 318.3,
+      "p90": 422.3,
+      "max": 422.3
+     },
+     "first_interim_ms": {
+      "n": 8,
+      "p50": 920.8,
+      "p90": 1120.1,
+      "max": 1120.1
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 7,
+      "p50": 265.5,
+      "p90": 388.6,
+      "max": 388.6
+     },
+     "n": 8,
+     "partial_had_final_words": 7,
+     "all_from_finalize": true,
+     "interim_updates_mean": 3.9
+    },
+    "caller_16k": {
+     "final_after_speech_ms": {
+      "n": 4,
+      "p50": 556.4,
+      "p90": 611.3,
+      "max": 611.3
+     },
+     "final_after_finalize_ms": {
+      "n": 4,
+      "p50": 345.1,
+      "p90": 400.5,
+      "max": 400.5
+     },
+     "first_interim_ms": {
+      "n": 4,
+      "p50": 1042.6,
+      "p90": 1120.1,
+      "max": 1120.1
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 4,
+      "p50": 210.1,
+      "p90": 347.0,
+      "max": 347.0
+     },
+     "n": 4,
+     "partial_had_final_words": 4,
+     "all_from_finalize": true,
+     "interim_updates_mean": 3.8
+    },
+    "caller_8k": {
+     "final_after_speech_ms": {
+      "n": 4,
+      "p50": 484.2,
+      "p90": 632.7,
+      "max": 632.7
+     },
+     "final_after_finalize_ms": {
+      "n": 4,
+      "p50": 273.3,
+      "p90": 422.3,
+      "max": 422.3
+     },
+     "first_interim_ms": {
+      "n": 4,
+      "p50": 882.9,
+      "p90": 920.8,
+      "max": 920.8
+     },
+     "stable_partial_after_speech_ms": {
+      "n": 3,
+      "p50": 265.5,
+      "p90": 388.6,
+      "max": 388.6
+     },
+     "n": 4,
+     "partial_had_final_words": 3,
+     "all_from_finalize": true,
+     "interim_updates_mean": 4.0
+    },
+    "server_cpu_s": 36.7,
+    "audio_s": 31.9,
+    "server_cpu_s_per_audio_s": 1.151,
+    "wall_s": 32.4,
+    "wer_pct": {
+     "caller_lines_tts": 5.13,
+     "caller_lines_tts_phone8k": 0.0
+    },
+    "errors": []
+   },
+   "concurrency_4_streams": null,
+   "hallucination_through_server": null,
+   "direct_no_server": {
+    "sherpa_onnx": "1.13.8+cuda12.cudnn9.onnxruntime1.28.2",
+    "kind": "online",
+    "provider": "cuda",
+    "load_s": 4.8,
+    "clip_5s": {
+     "text": "He hoped there would be stew for dinner, turnips and carrots and bruised potatoes",
+     "first_run_chunk_ms_p50": 243.5,
+     "first_run_flush_ms": 249.8,
+     "chunks_per_run": 8,
+     "chunk_ms_p50": 242.4,
+     "chunk_ms_p90": 250.2,
+     "chunk_ms_max": 271.7,
+     "decode_per_audio_s": 0.389,
+     "flush_ms_p50": 245.3,
+     "flush_ms_p90": 275.7
+    },
+    "clip_long": {
+     "seconds": 14.02,
+     "chunks": 24,
+     "chunk_ms_p50": 239.3,
+     "chunk_ms_p90": 252.4,
+     "flush_ms": 236.7,
+     "text": "Yes, the feelings mutual. So uh, the kids are going to have their summer break soon. So my husband and I were planning a vacation"
+    },
+    "vram_mib": 303,
+    "noise_summary": {
+     "n": 0,
+     "non_empty": 0,
+     "non_empty_conf_ge_0_5": 0
+    }
+   }
+  }
+ }
+}

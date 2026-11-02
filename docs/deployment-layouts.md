@@ -310,7 +310,7 @@ One NVIDIA GPU runs the three models that make calls sound human and answer quic
 | Server | On the GPU | Without a GPU |
 |---|---|---|
 | language model (`local-llm`) | `qwen3:8b-nothink`: Qwen3 8B with its thinking turned off ([below](#why-qwen38b-nothink)) | `qwen2.5:1.5b` (still downloaded, for existing connections) |
-| live speech-to-text (`local-stt`) | NVIDIA Parakeet TDT 0.6B v3, full precision, on the sherpa-onnx CUDA build (`Dockerfile.gpu`) | Parakeet TDT-CTC 110M, int8, on the CPU |
+| live speech-to-text (`local-stt`) | NVIDIA Nemotron Speech Streaming EN 0.6B (560 ms chunks), full precision, on the sherpa-onnx CUDA build (`Dockerfile.gpu`); Parakeet TDT 0.6B v3 with `LOCAL_STT_GPU_MODEL=parakeet-0.6b-v3` | Parakeet TDT-CTC 110M, int8, on the CPU |
 | expressive voice (`expressive-tts`, new) | Resemble AI Chatterbox-Turbo: sighs, laughs, gasps where a reply carries `[sigh]`, `[laugh]`, ... | none (Pocket TTS) |
 
 Whisper and Pocket TTS stay as they are, on the CPU. Without `--gpu` nothing of this
@@ -413,8 +413,13 @@ identical (the fourth differed in its opener word only). First token 83 ms p50 o
 voice 3.0 GB: 12.6 GB loaded, 12.7 GB during the turns, 14.6 GB with 8 calls transcribed
 at once. CPU memory: voice 2.8 GB, language model 1.2 GB, speech-to-text 1.1 GB.
 
-**Live speech-to-text with Parakeet 0.6B v3 on the GPU** (the 110M CPU model in brackets,
-measured on the same 4 vCPUs):
+**Live speech-to-text on the GPU.** The default is Nemotron Speech Streaming EN 0.6B: on the
+same T4 its final transcript comes 257 ms after the caller stops (p90 269 ms; after Finalize
+46 ms), it heard nothing in 20 clips of silence and breath where Parakeet v3 wrote "Yeah." in
+8, four calls at once stay at 259 / 303 ms, and it uses half the CPU; Parakeet v3 is 1-2 points
+more accurate on clean 16 kHz speech and 2 points less accurate on phone-rate audio
+([perf/gpu-stt-streaming.md](perf/gpu-stt-streaming.md)). Parakeet 0.6B v3, the earlier
+default, measured the same way (the 110M CPU model in brackets, measured on the same 4 vCPUs):
 
 | | Parakeet 0.6B v3, T4 | Parakeet 110M, CPU |
 |---|---:|---:|
@@ -450,7 +455,7 @@ In `.env`, then run `deploy.sh`:
 | `ATLAS_GPU_DEVICE` | `0` | which GPU, on a server with several |
 | `LOCAL_LLM_GPU_PARALLEL` | `3` | the language model's slots: replies written at once, plus one that keeps the agents' prompt cached across a call's end-of-call requests (each slot about 0.3 GB of GPU memory) |
 | `LOCAL_STT_GPU_SESSIONS` | `8` | live speech-to-text connections at once (calls); more are refused with HTTP 503. 8 is what a 16 GB GPU holds next to the other two models ([measured](#measured-on-one-t4)) |
-| `LOCAL_STT_GPU_MODEL` | `parakeet-0.6b-v3` | the live speech-to-text model on the GPU |
+| `LOCAL_STT_GPU_MODEL` | `nemotron-en-560` | the live speech-to-text model on the GPU (`parakeet-0.6b-v3` for the earlier default) |
 
 ### Back to the CPU
 
