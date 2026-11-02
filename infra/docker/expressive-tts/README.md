@@ -37,6 +37,7 @@ All but `/health` need `Authorization: Bearer <EXPRESSIVE_TTS_API_KEY>` when tha
 | `GET /v1/models` | the model id `chatterbox-turbo`, its sample rate, voices and sound tags |
 | `GET /v1/audio/voices` | the built-in voice: `[{"id": "default", "license": "MIT", "default": true}]` |
 | `GET /v1/audio/sound-tags` | `{"tags": ["[laugh]", "[chuckle]", ...]}`: the sounds this voice performs |
+| `GET /v1/capabilities` | what this server can do, in the shape every voice server answers: `{"model": "chatterbox-turbo", "cloning": true, "design": false, "instruct": false, "sound_tags": [...], "languages": ["english"], "streaming": "sentence", "reference_seconds": {"min": 5, "max": 30}}` |
 | `POST /v1/audio/speech` | `{model, input, voice, response_format: "pcm" or "wav", speed?}`: raw 24 kHz 16-bit mono PCM (`audio/pcm`) or the same with a streaming WAV header (`audio/wav`), sent sentence by sentence; header `X-Phrase-Cache: hit`, `opener` or `miss` |
 | `GET /v1/audio/phrase-cache` | phrase cache counts (never the texts) |
 | `GET /v1/voices` | built-in and cloned voices |

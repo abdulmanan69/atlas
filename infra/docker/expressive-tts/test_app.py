@@ -724,6 +724,18 @@ class VoicesTest(ServerTest):
             "id": "default", "name": "default", "type": "builtin", "license": "MIT", "default": True,
         }])
 
+    def test_capabilities_say_what_this_server_can_do(self) -> None:
+        caps = self.client.get("/v1/capabilities").json()
+        self.assertEqual(caps, {
+            "model": MODEL, "cloning": True, "design": False, "instruct": False,
+            "sound_tags": self.client.get("/v1/audio/sound-tags").json()["tags"],
+            "languages": ["english"], "streaming": "sentence",
+            "reference_seconds": {"min": 5, "max": 30},
+        })
+        self.assertEqual(caps["sound_tags"][:2], ["[laugh]", "[chuckle]"])
+        server.MAX_CUSTOM_VOICES = 0
+        self.assertIs(self.client.get("/v1/capabilities").json()["cloning"], False)
+
     def test_consent_is_required(self) -> None:
         for value in ("", "false", "yes please"):
             r = self.create(wav_bytes(6), consent=value)
@@ -889,7 +901,8 @@ class VoicesTest(ServerTest):
         server.API_KEY = "secret"
         calls = [
             ("GET", "/v1/models"), ("GET", "/v1/audio/voices"), ("GET", "/v1/audio/sound-tags"),
-            ("GET", "/v1/audio/phrase-cache"), ("GET", "/v1/voices"), ("GET", "/v1/cloning"),
+            ("GET", "/v1/capabilities"), ("GET", "/v1/audio/phrase-cache"), ("GET", "/v1/voices"),
+            ("GET", "/v1/cloning"),
             ("PUT", "/v1/cloning"), ("DELETE", "/v1/cloning"),
             ("DELETE", "/v1/voices/custom-x-0123456789abcdef"),
         ]

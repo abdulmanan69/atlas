@@ -62,6 +62,11 @@ VOICE = {
         {"id": "default", "license": "MIT", "default": True}]}),
     "/v1/audio/sound-tags": (200, {"tags": ["[laugh]", "[sigh]", "[gasp]", "[chuckle]"]}),
     "/v1/cloning": (200, {"state": "on", "message": None}),
+    "/v1/capabilities": (200, {
+        "model": "chatterbox-turbo", "cloning": True, "design": False, "instruct": False,
+        "sound_tags": ["[laugh]", "[sigh]", "[gasp]", "[chuckle]"], "languages": ["english"],
+        "streaming": "sentence", "reference_seconds": {"min": 5, "max": 30},
+    }),
     "/openapi.json": (200, {"info": {"title": "Chatterbox-Turbo (OpenAI-compatible)", "version": "1.0.0"}}),
 }
 GPU_LLM = {
@@ -321,9 +326,52 @@ class HealthTest(unittest.TestCase):
         self.assertEqual((v["voices"], v["default_voice"], v["cloning"]), (1, "default", "on"))
         self.assertEqual(v["sound_tags"], ["[laugh]", "[sigh]", "[gasp]", "[chuckle]"])
         self.assertEqual(v["version"], "1.0.0")
+        self.assertEqual(v["capabilities"], VOICE["/v1/capabilities"][1])
+        self.assertNotIn("capabilities", s["tts"])  # the Pocket adapter here is an older one
         asked = {path for path, _ in self.servers["voice"].requests}
         self.assertEqual(asked, set(VOICE))
         self.assertNotIn("http", json.dumps(v))
+
+    def test_capabilities_are_reported_when_offered_and_bounded(self) -> None:
+        """A voice design server states design and instructions; odd values are dropped."""
+        design = {
+            **VOICE,
+            "/v1/models": (200, {"object": "list", "data": [{"id": "qwen3-tts", "object": "model"}]}),
+            "/v1/audio/sound-tags": (200, {"tags": []}),
+            "/v1/capabilities": (200, {
+                "model": "qwen3-tts", "cloning": True, "design": True, "instruct": False,
+                "sound_tags": [], "languages": ["English", "Chinese"], "streaming": "sentence",
+                "reference_seconds": {"min": 3, "max": 30}, "extra": {"never": "reported"},
+            }),
+        }
+        cfg = self.config(tts=self.serve("tts", {**TTS, "/v1/capabilities": design["/v1/capabilities"]}),
+                          voice=self.serve("voice", design))
+        cfg.services = ["tts", "voice"]
+        s = app.health(cfg, self.pool)[1]["services"]
+        for name in ("tts", "voice"):
+            caps = s[name]["capabilities"]
+            self.assertEqual((caps["design"], caps["instruct"], caps["languages"]), (True, False, ["English", "Chinese"]))
+            self.assertEqual(caps["reference_seconds"], {"min": 3, "max": 30})
+            self.assertNotIn("extra", caps)
+        odd = {**VOICE, "/v1/capabilities": (200, {
+            "model": 7, "cloning": "yes", "design": True, "instruct": None,
+            "sound_tags": "laugh", "languages": ["x" * 500, 3] + ["en"] * 300, "streaming": "fast",
+            "reference_seconds": {"min": "3", "max": 30},
+        })}
+        cfg = self.config(voice=self.serve("odd", odd))
+        cfg.services = ["voice"]
+        caps = app.health(cfg, self.pool)[1]["services"]["voice"]["capabilities"]
+        self.assertEqual(caps, {
+            "model": None, "cloning": None, "design": True, "instruct": None, "sound_tags": None,
+            "languages": ["x" * app.MAX_TEXT] + ["en"] * (app.MAX_ITEMS - 1), "streaming": None,
+            "reference_seconds": None,
+        })
+        for bad in ({"/v1/capabilities": (200, [1, 2])}, {"/v1/capabilities": (500, {})}):
+            cfg = self.config(voice=self.serve("bad", {**VOICE, **bad}))
+            cfg.services = ["voice"]
+            v = app.health(cfg, self.pool)[1]["services"]["voice"]
+            self.assertNotIn("capabilities", v)
+            self.assertIs(v["up"], True)
 
     def test_voice_loading_down_and_odd_answers(self) -> None:
         cfg = self.config(voice=self.serve("voice", {"/health": (200, {"status": "loading"})}))

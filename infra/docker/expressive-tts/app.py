@@ -1263,6 +1263,24 @@ async def list_sound_tags(authorization: str | None = Header(default=None)) -> d
     return {"tags": [f"[{t}]" for t in SOUND_TAGS]}
 
 
+@app.get("/v1/capabilities")
+async def get_capabilities(authorization: str | None = Header(default=None)) -> dict:
+    """What this server can do, for ATLAS (the same shape on every voice server): cloning
+    unless the operator turned it off, no voice design, no delivery instructions, the sound
+    tags, English only, audio sent sentence by sentence."""
+    _check_auth(authorization)
+    return {
+        "model": MODEL_ID,
+        "cloning": cloning_on(),
+        "design": False,
+        "instruct": False,
+        "sound_tags": [f"[{t}]" for t in SOUND_TAGS],
+        "languages": [LANGUAGE],
+        "streaming": "sentence",
+        "reference_seconds": {"min": int(MIN_SAMPLE_SECONDS), "max": int(MAX_SAMPLE_SECONDS)},
+    }
+
+
 # ------------------------------------------------------------------ voice cloning endpoints
 
 

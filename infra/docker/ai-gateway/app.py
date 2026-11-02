@@ -7,11 +7,16 @@ time budget, whether it answers and what it offers, all at once:
   llm       language model (Ollama): /api/version, /v1/models, /api/ps (models in memory)
   whisper   Whisper speech-to-text (speaches): /health, /v1/models, /openapi.json (version)
   tts       Pocket TTS adapter: /health, /v1/models, /v1/audio/voices, /v1/cloning,
-            /openapi.json (version)
+            /v1/capabilities, /openapi.json (version)
   live_stt  live speech-to-text, Deepgram protocol: /health
-  voice     expressive voice on a GPU (Chatterbox-Turbo, infra/docker/expressive-tts; only
-            on GPU hosts): /health, /v1/models, /v1/audio/voices, /v1/audio/sound-tags,
-            /v1/cloning, /openapi.json (version)
+  voice     expressive voice on a GPU (Chatterbox-Turbo, infra/docker/expressive-tts, or the
+            voice design server, infra/docker/voice-design; only on GPU hosts): /health,
+            /v1/models, /v1/audio/voices, /v1/audio/sound-tags, /v1/cloning, /v1/capabilities,
+            /openapi.json (version)
+
+A voice server that offers GET /v1/capabilities (what it can do: cloning, design,
+instructions, sound tags, languages, streaming, the sample length cloning accepts) has it
+in its report as `capabilities`; one from before that endpoint has no such key.
 
 Answer (200 when at least one service is up, 503 when none is):
 
@@ -250,7 +255,41 @@ def speech_server(base: str, budget: Budget) -> tuple[dict[str, Any], Any]:
         default_voice=text(default),
         cloning=optional(lambda: cloning_state(base, budget)),
     )
+    caps = optional(lambda: capabilities(base, budget))
+    if caps is not None:  # only servers that offer the endpoint
+        out["capabilities"] = caps
     return out, health
+
+
+def words(items: Any) -> list[str] | None:
+    if not isinstance(items, list):
+        return None
+    return [t[:MAX_TEXT] for t in items if isinstance(t, str)][:MAX_ITEMS]
+
+
+def capabilities(base: str, budget: Budget) -> dict[str, Any]:
+    """What a voice server states at GET /v1/capabilities, with only the known fields, each
+    bounded; CheckError for a server without the endpoint (a 404) or an answer that is not
+    one."""
+    body = get_ok(base, "/v1/capabilities", budget)
+    if not isinstance(body, dict):
+        raise CheckError("invalid response")
+    out: dict[str, Any] = {"model": text(body.get("model"))}
+    for key in ("cloning", "design", "instruct"):
+        value = body.get(key)
+        out[key] = value if isinstance(value, bool) else None
+    out["sound_tags"] = words(body.get("sound_tags"))
+    out["languages"] = words(body.get("languages"))
+    streaming = body.get("streaming")
+    out["streaming"] = streaming if streaming in ("sentence", "chunk", "none") else None
+    ref = body.get("reference_seconds")
+    out["reference_seconds"] = (
+        {k: ref[k] for k in ("min", "max")}
+        if isinstance(ref, dict)
+        and all(isinstance(ref.get(k), int) and not isinstance(ref.get(k), bool) for k in ("min", "max"))
+        else None
+    )
+    return out
 
 
 def check_live_stt(base: str, budget: Budget) -> dict[str, Any]:

@@ -124,6 +124,21 @@ class CloningTest(unittest.TestCase):
             "/v1/voices", data=data, files={"audio": ("sample.wav", audio, "audio/wav")}
         )
 
+    # ---------------------------------------------------------------- capabilities
+
+    def test_capabilities_say_what_this_server_can_do(self) -> None:
+        self.assertEqual(self.client.get("/v1/capabilities").json(), {
+            "model": "pocket-tts", "cloning": True, "design": False, "instruct": False,
+            "sound_tags": [], "languages": ["english"], "streaming": "chunk",
+            "reference_seconds": {"min": 5, "max": 30},
+        })
+        server._cloning_enabled = False
+        self.assertIs(self.client.get("/v1/capabilities").json()["cloning"], False)
+        server.API_KEY = "secret"
+        self.assertEqual(self.client.get("/v1/capabilities").status_code, 401)
+        ok = self.client.get("/v1/capabilities", headers={"Authorization": "Bearer secret"})
+        self.assertEqual(ok.status_code, 200)
+
     # ---------------------------------------------------------------- cloning off
 
     def test_endpoints_answer_501_with_setup_steps_when_cloning_is_off(self) -> None:

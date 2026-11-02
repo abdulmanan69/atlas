@@ -1197,6 +1197,24 @@ async def list_voices(authorization: str | None = Header(default=None)) -> dict:
     }
 
 
+@app.get("/v1/capabilities")
+async def get_capabilities(authorization: str | None = Header(default=None)) -> dict:
+    """What this server can do, for ATLAS (the same shape on every voice server): cloning
+    when it is on, no voice design, no delivery instructions, no sounds (cues are removed,
+    see strip_sound_cues), one language, audio streamed in chunks as it is made."""
+    _check_auth(authorization)
+    return {
+        "model": MODEL_ID,
+        "cloning": _cloning_enabled,
+        "design": False,
+        "instruct": False,
+        "sound_tags": [],
+        "languages": [LANGUAGE],
+        "streaming": "chunk",
+        "reference_seconds": {"min": int(MIN_SAMPLE_SECONDS), "max": int(MAX_SAMPLE_SECONDS)},
+    }
+
+
 # ------------------------------------------------------------------ voice cloning endpoints
 
 
