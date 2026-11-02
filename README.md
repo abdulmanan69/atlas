@@ -87,6 +87,7 @@ bash infra/scripts/remote_api_tests.sh tests/test_campaigns.py
 
 Brand assets (wordmark and mark as SVG and PNG, light and dark) live in `docs/brand/`. The web app renders the same geometry inline from `apps/web/src/components/brand.tsx`, filled with the current text colour.
 
+* [Where the work stands and how to resume](docs/handoff.md)
 * [Architecture](docs/architecture.md)
 * [Implementation plan](docs/implementation-plan.md)
 * Decisions: [0001 runtime adapter](docs/decisions/0001-modular-monolith-and-runtime-adapter.md) ·
